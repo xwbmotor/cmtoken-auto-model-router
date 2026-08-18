@@ -272,7 +272,11 @@ async function proxyCompletion(req, res) {
   if (shutdownManager.draining) return errorJson(res, 503, '服务正在下线，请稍后重试', 'server_draining');
   if (!authorized(req, 'ROUTER_ACCESS_KEY')) return errorJson(res, 401, 'Router API Key 无效', 'authentication_error');
   if (config.rateLimit?.enabled !== false) {
-    const verdict = rateLimiter.check(req.headers.authorization || 'anonymous');
+    // 桶 key 用 SHA-256 摘要而非原始 Authorization 头：避免完整凭证滞留内存（heap dump/日志误打暴露面）
+    const authKey = req.headers.authorization
+      ? createHash('sha256').update(req.headers.authorization).digest('hex').slice(0, 16)
+      : 'anonymous';
+    const verdict = rateLimiter.check(authKey);
     if (!verdict.allowed) {
       return json(res, 429, { error: { message: '请求过于频繁，请稍后重试', type: 'rate_limit_exceeded', code: 429 } }, { 'retry-after': String(Math.ceil(verdict.retryAfterMs / 1000)) });
     }
@@ -338,7 +342,10 @@ async function proxyCompletion(req, res) {
       };
       res.writeHead(200, headers);
       if (!upstream.body) return res.end();
-      for await (const chunk of upstream.body) res.write(chunk);
+      // 背压处理：慢客户端时 res.write 返回 false，必须等 drain 再续写，否则内存无限堆积
+      for await (const chunk of upstream.body) {
+        if (!res.write(chunk)) await new Promise((resolve) => res.once('drain', resolve));
+      }
       clearTimeout(timer); return res.end();
     } catch (error) {
       lastError = error;

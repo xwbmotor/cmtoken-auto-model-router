@@ -1,0 +1,24 @@
+# 语义分类器：自训练小模型（TF-IDF + LogReg/Ridge），独立于主路由进程
+# 依赖 sklearn/joblib/numpy，单独成层避免污染零依赖的 Node 主镜像
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+# sklearn 1.9 + joblib：与 data/training/model/*.joblib 工件配套（清华镜像仅构建期使用）
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    "scikit-learn==1.9.0" "joblib" "numpy"
+
+COPY --chown=nobody:nogroup scripts/classifier_common.py scripts/serve_classifier.py ./scripts/
+COPY --chown=nobody:nogroup data/training/model/ ./data/training/model/
+
+USER nobody
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8788/health',timeout=3).status==200 else 1)"
+
+EXPOSE 8788
+
+CMD ["python", "scripts/serve_classifier.py", "--host", "0.0.0.0", "--port", "8788"]

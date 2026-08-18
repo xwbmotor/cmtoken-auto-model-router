@@ -1,6 +1,8 @@
 services:
   auto-router:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     ports:
       - "127.0.0.1:8787:8787"
@@ -11,8 +13,27 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8787
+      # 语义分类器端点：compose 网络内用服务名（覆盖 config/router.json 里的 127.0.0.1）
+      SEMANTIC_CLASSIFIER_URL: http://classifier:8788/classify
     # 必须大于应用内 SHUTDOWN_TIMEOUT_MS（默认 20000ms），否则排空未完成就被 SIGKILL
     stop_grace_period: 30s
+    depends_on:
+      classifier:
+        condition: service_healthy
     volumes:
       - ./config:/app/config
       - ./data:/app/data
+
+  # 语义分类器：自训练小模型（http-json provider 的后端）
+  # shadow 模式下挂掉不影响主路由（错误被吞、只计数）；active 模式下失败自动回退规则层决策
+  classifier:
+    build:
+      context: .
+      dockerfile: Dockerfile.classifier
+    restart: unless-stopped
+    # 不对宿主机暴露端口（仅 compose 内网可达）；如需本机调试再取消注释
+    # ports:
+    #   - "127.0.0.1:8788:8788"
+    expose:
+      - "8788"
+    stop_grace_period: 10s

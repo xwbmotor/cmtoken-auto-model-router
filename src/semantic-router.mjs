@@ -81,17 +81,19 @@ async function classifyViaOpenAIChat(body, config, options) {
 
 // —— provider: http-json（自训练小模型端点） ——
 // 端点契约：POST {text} → 200 {task,tier,complexity,confidence,reason}
+// url 优先级：SEMANTIC_CLASSIFIER_URL 环境变量（compose 服务名）> config.semanticRouter.httpJson.url
 async function classifyViaHttpJson(body, config, options) {
   const policy = config.semanticRouter;
   const endpoint = policy.httpJson || {};
-  if (!endpoint.url) throw new Error('http-json 评估器缺少 url 配置');
+  const url = process.env.SEMANTIC_CLASSIFIER_URL || endpoint.url;
+  if (!url) throw new Error('http-json 评估器缺少 url 配置');
   const text = requestText(body).slice(-Number(policy.maxInputCharacters || 6000));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('语义分类器超时')), Number(endpoint.timeoutMs || policy.timeoutMs || 2000));
   const started = Date.now();
   const headers = { 'content-type': 'application/json', ...(endpoint.token ? { authorization: `Bearer ${endpoint.token}` } : {}) };
   try {
-    const response = await (options.fetchImpl || fetch)(endpoint.url, {
+    const response = await (options.fetchImpl || fetch)(url, {
       method: 'POST', signal: controller.signal, headers,
       body: JSON.stringify({ text })
     });

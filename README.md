@@ -159,6 +159,8 @@ npm run eval:gate -- --baseline data\eval-gate\<上次报告>.json   # 对比基
 docker compose up --build -d
 ```
 
+Compose 含两个服务：`auto-router`（主路由 :8787）+ `classifier`（语义分类器，仅 compose 内网可达，`depends_on` 健康检查后启动主路由）。主路由通过 `SEMANTIC_CLASSIFIER_URL=http://classifier:8788/classify` 环境变量指向分类器服务名（优先级高于 config/router.json 里的 127.0.0.1）。
+
 Compose 仅把端口发布到宿主机 `127.0.0.1`。如果通过反向代理对外服务，请同时配置 TLS、访问控制、请求体限制和管理路径隔离。
 
 使用 LiteLLM 作为网关底座（可选）：
@@ -166,6 +168,23 @@ Compose 仅把端口发布到宿主机 `127.0.0.1`。如果通过反向代理对
 ```powershell
 docker compose -f compose.litellm.yaml up --build -d
 ```
+
+## 语义分类器（自训练小模型）
+
+`semanticRouter.provider=http-json` 时，语义复核由本地小模型服务承担（约 2ms/次，替代 LLM 的 ~1.4s）。模型工件在 `data/training/model/`，随仓库交付。
+
+**Linux 裸机部署**（不经 Docker）：
+
+```bash
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple scikit-learn==1.9.0 joblib numpy
+./scripts/serve_classifier.sh --port 8788   # 前台运行；日志 data/training/serve.log
+```
+
+**Windows**：双击或执行 `scripts\serve_classifier.bat`。
+
+健康检查 `GET /health`；Prometheus 指标 `GET /metrics`（请求量/错误数/推理耗时/低置信占比）。
+
+分类器不可用时的降级：shadow 模式下错误只计数不阻塞请求；active 模式下自动回退规则层决策（`semanticReview.status=error`），主路由永不因分类器故障 5xx。
 
 ## 重要行为
 
