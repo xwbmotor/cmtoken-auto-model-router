@@ -38,10 +38,14 @@
     "maxOutputTokens": 180,
     "timeoutMs": 3500,
     "useJsonMode": false,
-    "provider": "openai-chat",
+    "provider": "http-json",
     "openaiChat": {
       "model": "deepseekv4-flash",
       "timeoutMs": 3500
+    },
+    "httpJson": {
+      "url": "http://127.0.0.1:8788/classify",
+      "timeoutMs": 500
     }
   },
   "reasoningControl": {

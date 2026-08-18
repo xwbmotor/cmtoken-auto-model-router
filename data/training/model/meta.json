@@ -1,0 +1,9 @@
+{
+ "trainedAt": "2026-08-18T19:46:18",
+ "samples": 2270,
+ "features": "tfidf-char_wb-2-4gram + length-feats",
+ "taskAcc": 0.9537444933920705,
+ "tierAcc": 0.9405286343612335,
+ "complexityMae": 0.09267353111540712,
+ "latencyMs": 2.3
+}

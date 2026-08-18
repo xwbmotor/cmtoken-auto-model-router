@@ -5,6 +5,17 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import net from 'node:net';
+
+// 动态申请空闲端口，避免与常驻服务（如分类器 :8788）撞车
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+  });
+}
 
 async function waitForHealth(port, maxMs = 5000) {
   for (let i = 0; i < maxMs / 200; i += 1) {
@@ -27,7 +38,7 @@ function spawnServer(port, extraEnv = {}) {
 }
 
 test('real server: 健康检查 + 大请求体上限 + /metrics 鉴权 + /health/ready', async () => {
-  const port = 8788;
+  const port = await freePort();
   const child = spawnServer(port);
   let exited = false;
   child.once('exit', () => { exited = true; });
@@ -80,7 +91,7 @@ test('real server: rate limit 超限返回 429', async () => {
   cfg.decisionLog = { ...cfg.decisionLog, enabled: false };
   writeFileSync(tempCfg, JSON.stringify(cfg));
 
-  const port = 8789;
+  const port = await freePort();
   const child = spawnServer(port, { CONFIG_PATH: tempCfg });
   let exited = false;
   child.once('exit', () => { exited = true; });

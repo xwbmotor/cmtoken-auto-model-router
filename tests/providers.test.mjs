@@ -89,6 +89,7 @@ test('config validation accepts provider forms and rejects invalid ones', () => 
   assert.throws(() => validateConfig(badProvider), /provider 无效/);
   const missingUrl = structuredClone(config);
   missingUrl.semanticRouter = { ...missingUrl.semanticRouter, provider: 'http-json' };
+  delete missingUrl.semanticRouter.httpJson;  // 基础配置可能已带 url，显式移除以构造"缺 url"用例
   assert.throws(() => validateConfig(missingUrl), /httpJson\.url/);
   const withLog = structuredClone(config);
   withLog.decisionLog = { enabled: true, dirPath: './data/decisions', maxFiles: 7 };

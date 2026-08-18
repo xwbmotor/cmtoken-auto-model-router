@@ -3,6 +3,12 @@
 .env.local
 state/
 benchmark-results/
-data/
+data/*
+!data/training/
+data/training/*.log
+data/training/raw-v2-mislabeled.jsonl
 node_modules/
+.venv/
+__pycache__/
+*.pyc
 *.log
