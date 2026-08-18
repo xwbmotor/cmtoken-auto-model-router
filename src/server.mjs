@@ -26,7 +26,7 @@ const health = {};
 const sessions = new Map();
 const recent = [];
 const semanticReviews = [];
-const counters = { startedAt: new Date().toISOString(), total: 0, auto: 0, explicit: 0, success: 0, errors: 0, fallback: 0, selected: {}, suggested: {}, task: {}, outcome: { auto: { success: 0, error: 0 }, explicit: { success: 0, error: 0 } }, semantic: { eligible: 0, attempted: 0, succeeded: 0, disagreed: 0, errors: 0, applied: 0 } };
+const counters = { startedAt: new Date().toISOString(), total: 0, auto: 0, explicit: 0, success: 0, errors: 0, fallback: 0, selected: {}, selectedBy: {}, suggested: {}, task: {}, outcome: { auto: { success: 0, error: 0 }, explicit: { success: 0, error: 0 } }, semantic: { eligible: 0, attempted: 0, succeeded: 0, disagreed: 0, errors: 0, applied: 0 } };
 const SIMULATION_SAMPLES = [
   { id: 'weekday', label: '直接事实', body: { messages: [{ role: 'user', content: '今天星期几？' }], max_tokens: 64 } },
   { id: 'classification', label: '工单分类', body: { messages: [{ role: 'user', content: '把“商品破损申请退款”分类为售前、售后或咨询，只返回标签。' }], max_tokens: 64 } },
@@ -325,6 +325,11 @@ async function proxyCompletion(req, res) {
       counters.success += 1;
       counters.outcome[auto ? 'auto' : 'explicit'].success += 1;
       counters.selected[model] = (counters.selected[model] || 0) + 1;
+      // 按请求来源细分：显式点名 vs auto 调度（auto 里再分容差分流），负荷均衡观测的核心
+      const selectedBy = counters.selectedBy[model] ||= { explicit: 0, auto: 0, autoPreference: 0 };
+      if (!auto) selectedBy.explicit += 1;
+      else if (decision.preference?.model === model) { selectedBy.autoPreference += 1; selectedBy.auto += 1; }
+      else selectedBy.auto += 1;
       const selectedConfig = config.models.find((item) => item.id === model);
       const estimatedCostYuan = estimateCostYuan(body, decision.analysis, selectedConfig, config, decision.reasoningLevel);
       budgetTracker.consume(estimatedCostYuan).catch(() => {});

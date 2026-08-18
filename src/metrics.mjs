@@ -29,6 +29,11 @@ export function renderPrometheusMetrics(snapshot) {
 
   const selectedRows = Object.entries(counters.selected || {}).map(([model, n]) => `router_selected_total{model="${esc(model)}"} ${n}`);
   metric(lines, 'router_selected_total', 'counter', '实际选中各模型的次数', selectedRows);
+  // 来源细分：显式点名 / auto 调度 / auto 容差分流（负荷均衡观测：auto 分流占 qwen 承载的比例）
+  const selectedByRows = Object.entries(counters.selectedBy || {}).flatMap(([model, by]) => Object.entries(by)
+    .filter(([, n]) => n > 0)
+    .map(([source, n]) => `router_selected_by_source_total{model="${esc(model)}",source="${source}"} ${n}`));
+  metric(lines, 'router_selected_by_source_total', 'counter', '各模型按请求来源的选中次数（explicit=用户点名, auto=路由调度, auto_preference=容差分流）', selectedByRows);
 
   const taskRows = Object.entries(counters.task || {}).map(([task, n]) => `router_task_total{task="${esc(task)}"} ${n}`);
   metric(lines, 'router_task_total', 'counter', '任务类型分布', taskRows);

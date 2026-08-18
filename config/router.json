@@ -30,11 +30,15 @@
     "taskPreferences": {
       "extraction": {
         "model": "qwen36-35b",
-        "tolerance": 0.035
+        "tolerance": 0.05
       },
       "creative": {
         "model": "qwen36-35b",
-        "tolerance": 0.035
+        "tolerance": 0.05
+      },
+      "simple": {
+        "model": "qwen36-35b",
+        "tolerance": 0.05
       }
     }
   },
@@ -71,7 +75,7 @@
     "timeZone": "Asia/Shanghai",
     "ledgerPath": "./data/budget-ledger.json",
     "beansPerYuan": 70,
-    "cacheHitRatio": 0.0
+    "cacheHitRatio": 0
   },
   "calibration": {
     "enabled": true,
@@ -91,7 +95,7 @@
       "enabled": false,
       "contextWindow": 131072,
       "minimumCompletionTokensForReliableAnswer": 2048,
-      "costIndex": 0.25,
+      "costIndex": 0.278,
       "latencyIndex": 1,
       "avgLatencyMs": 43787,
       "pricingYuanPerMillionTokens": {
@@ -143,14 +147,14 @@
       "ownership": "self_hosted",
       "enabled": true,
       "contextWindow": 131072,
-      "costIndex": 0.22,
+      "costIndex": 0.265,
       "latencyIndex": 0.63,
       "avgLatencyMs": 27504,
       "pricingYuanPerMillionTokens": {
-        "input": 1.0,
+        "input": 1,
         "inputCached": 0.4,
-        "output": 4.0,
-        "reasoning": 4.0
+        "output": 4,
+        "reasoning": 4
       },
       "performance": {
         "ttftP50Ms": null,
@@ -207,14 +211,14 @@
       "ownership": "self_hosted",
       "enabled": true,
       "contextWindow": 131072,
-      "costIndex": 0.12,
+      "costIndex": 0.113,
       "latencyIndex": 0.21,
       "avgLatencyMs": 9099,
       "pricingYuanPerMillionTokens": {
         "input": 0.5,
         "inputCached": 0.1,
-        "output": 1.0,
-        "reasoning": 1.0
+        "output": 1,
+        "reasoning": 1
       },
       "performance": {
         "ttftP50Ms": 956,
@@ -263,7 +267,7 @@
         "deviceType": "910B2",
         "machines": 1,
         "cardsPerMachine": 8,
-        "tps": 412.0
+        "tps": 412
       }
     },
     {
@@ -272,7 +276,7 @@
       "ownership": "self_hosted",
       "enabled": true,
       "contextWindow": 131072,
-      "costIndex": 0.2,
+      "costIndex": 0.272,
       "latencyIndex": 0.4,
       "avgLatencyMs": 17282,
       "pricingYuanPerMillionTokens": {
@@ -394,7 +398,7 @@
       "output": 1
     },
     "cardPrice": {
-      "910B2": 1.0,
+      "910B2": 1,
       "910B4": 1.5
     },
     "note": "costIndex 优先按真实结算价归一（加权单价=输入占比×输入价+输出占比×输出价，构成见 pricingMix，当前 10:1）；deployment 资源估算法保留为备选（source=deployment）。价格口径：厂商目录价5折，以实际结算为准；算力豆口径见 budget.beansPerYuan。部署数据（2026-08 录入，表值均为单实例口径）：dsf=单机8卡 单实例吞吐412、hy3=双机16卡 单实例吞吐262.93、均为910B；Qwen3.8-27B（单机4卡）待上线后录入，M2.5 将下线不录。"
