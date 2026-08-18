@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { analyzeRequest, mergeSemanticAssessment, recommendReasoningLevel, routeRequest } from '../src/router.mjs';
 import { parseSemanticAssessment, shouldUseSemanticRouter } from '../src/semantic-router.mjs';
-import { estimateCostYuan } from '../src/budget.mjs';
+import { estimateCostYuan, yuanToBeans } from '../src/budget.mjs';
 
 const config = JSON.parse(await readFile(new URL('../config/router.json', import.meta.url), 'utf8'));
 
@@ -94,8 +94,27 @@ test('keeps semantic shadow result without changing the rule decision', () => {
 test('estimates real-unit cost only after model pricing is configured', () => {
   const model = structuredClone(config.models[0]);
   const analysis = { estimatedInputTokens: 1000 };
+  model.pricingYuanPerMillionTokens = null; // 模拟未录价模型
   assert.equal(estimateCostYuan({ max_tokens: 1000 }, analysis, model, config, 'off'), null);
   model.pricingYuanPerMillionTokens = { input: 2, output: 8, reasoning: 8 };
   assert.equal(estimateCostYuan({ max_tokens: 1000 }, analysis, model, config, 'off'), 0.01);
   assert.ok(estimateCostYuan({ max_tokens: 1000 }, analysis, model, config, 'high') > 0.01);
+});
+
+test('缓存命中价降低成本估算，命中率可配置', () => {
+  const model = structuredClone(config.models[0]);
+  model.pricingYuanPerMillionTokens = { input: 1.05, inputCached: 0.21, output: 4.2, reasoning: 4.2 };
+  const analysis = { estimatedInputTokens: 1_000_000 };
+  // 输入 1M tokens：全价 1.05 元；命中50%时有效输入价 0.63 → 输入部分 0.63 元
+  const full = estimateCostYuan({ max_tokens: 1_000_000 }, analysis, model, config, 'off');
+  const withCache = estimateCostYuan({ max_tokens: 1_000_000 }, analysis, model, { ...config, budget: { ...config.budget, cacheHitRatio: 0.5 } }, 'off');
+  // full = 1.05(输入) + 4.2(输出) = 5.25；withCache = 0.63 + 4.2 = 4.83
+  assert.ok(Math.abs(full - 5.25) < 0.001, `full=${full}`);
+  assert.ok(Math.abs(withCache - 4.83) < 0.001, `withCache=${withCache}`);
+});
+
+test('yuanToBeans 按 beansPerYuan 换算算力豆', () => {
+  assert.equal(yuanToBeans(1, { budget: { beansPerYuan: 70 } }), 70);
+  assert.equal(yuanToBeans(0.015, { budget: { beansPerYuan: 70 } }), 1.05);
+  assert.equal(yuanToBeans(1, {}), null); // 未配置汇率返回 null
 });

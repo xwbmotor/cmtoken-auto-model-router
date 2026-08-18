@@ -41,6 +41,11 @@ export function renderPrometheusMetrics(snapshot) {
   metric(lines, 'router_budget_estimated_spend_yuan', 'gauge', '当日估算花费（元，estimateOnly）', [
     `router_budget_estimated_spend_yuan ${Number(budget.estimatedSpendYuan || 0)}`,
   ]);
+  if (budget.estimatedSpendBeans != null) {
+    metric(lines, 'router_budget_estimated_spend_beans', 'gauge', '当日估算消耗算力豆（estimateOnly）', [
+      `router_budget_estimated_spend_beans ${Number(budget.estimatedSpendBeans || 0)}`,
+    ]);
+  }
   metric(lines, 'router_budget_pressure', 'gauge', '预算压力 0-1', [
     `router_budget_pressure ${Number(budget.pressure || 0)}`,
   ]);

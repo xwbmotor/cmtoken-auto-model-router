@@ -93,6 +93,14 @@ export function validateConfig(config) {
   if (config.costModel !== undefined) {
     if (typeof config.costModel !== 'object' || Array.isArray(config.costModel)) throw new Error('costModel 必须是对象');
     if (config.costModel.enabled !== undefined && typeof config.costModel.enabled !== 'boolean') throw new Error('costModel.enabled 必须是布尔值');
+    if (config.costModel.source !== undefined && !['pricing', 'deployment'].includes(config.costModel.source)) throw new Error('costModel.source 必须是 pricing 或 deployment');
+    if (config.costModel.pricingMix !== undefined) {
+      if (typeof config.costModel.pricingMix !== 'object' || Array.isArray(config.costModel.pricingMix)) throw new Error('costModel.pricingMix 必须是对象');
+      for (const key of ['input', 'output']) {
+        const v = Number(config.costModel.pricingMix[key]);
+        if (config.costModel.pricingMix[key] !== undefined && (!Number.isFinite(v) || v < 0)) throw new Error(`costModel.pricingMix.${key} 必须是非负数`);
+      }
+    }
     if (config.costModel.cardPrice !== undefined) {
       if (typeof config.costModel.cardPrice !== 'object' || Array.isArray(config.costModel.cardPrice)) throw new Error('costModel.cardPrice 必须是对象');
       for (const [key, value] of Object.entries(config.costModel.cardPrice)) {
@@ -100,7 +108,47 @@ export function validateConfig(config) {
       }
     }
   }
+  if (config.budget) {
+    if (config.budget.beansPerYuan !== undefined && (!Number.isFinite(Number(config.budget.beansPerYuan)) || Number(config.budget.beansPerYuan) <= 0)) throw new Error('budget.beansPerYuan 必须是正数');
+    if (config.budget.dailyBudgetBeans !== undefined && Number(config.budget.dailyBudgetBeans) < 0) throw new Error('budget.dailyBudgetBeans 不能小于 0');
+    if (Number(config.budget.dailyBudgetYuan) < 0) throw new Error('budget.dailyBudgetYuan 不能小于 0');
+    const degrade = Number(config.budget.degradeThreshold);
+    if (!Number.isFinite(degrade) || degrade <= 0 || degrade > 1) throw new Error('budget.degradeThreshold 必须大于 0 且不超过 1');
+  }
+  for (const model of config.models) {
+    const p = model.pricingYuanPerMillionTokens;
+    if (p === undefined || p === null) continue;
+    if (typeof p !== 'object' || Array.isArray(p)) throw new Error(`模型 ${model.id} pricingYuanPerMillionTokens 必须是对象`);
+    for (const key of ['input', 'inputCached', 'output', 'reasoning']) {
+      if (p[key] === undefined || p[key] === null) continue;
+      if (!Number.isFinite(Number(p[key])) || Number(p[key]) < 0) throw new Error(`模型 ${model.id} pricing.${key} 必须是非负数`);
+    }
+    if (p.inputCached !== undefined && p.inputCached !== null && (p.input == null || Number(p.inputCached) > Number(p.input))) throw new Error(`模型 ${model.id} pricing.inputCached 不能高于 input`);
+  }
   return config;
+}
+
+// 按定价归一化成本指数：加权单价 = (输入占比 × 输入价 + 输出占比 × 输出价)，归一化到 0~1（最贵的 = 1）。
+// 输入输出流量构成由 costModel.pricingMix 配置（如 10:1）。
+export function computeCostIndexFromPricing(models, costModel) {
+  const mix = costModel?.pricingMix || { input: 10, output: 1 };
+  const totalMix = Number(mix.input) + Number(mix.output);
+  if (!(totalMix > 0)) return null;
+  const inputShare = Number(mix.input) / totalMix;
+  const outputShare = Number(mix.output) / totalMix;
+  const costs = [];
+  for (const model of models) {
+    const p = model.pricingYuanPerMillionTokens;
+    if (p?.input == null || p?.output == null) continue;
+    const weighted = inputShare * Number(p.input) + outputShare * Number(p.output);
+    if (!(weighted > 0)) continue;
+    costs.push({ id: model.id, unitCost: weighted });
+  }
+  if (costs.length < 2) return null;
+  const max = Math.max(...costs.map((c) => c.unitCost));
+  const result = {};
+  for (const c of costs) result[c.id] = Number((c.unitCost / max).toFixed(3));
+  return result;
 }
 
 // 由部署资源估算相对成本指数：costIndex ∝ (设备数 × 单机卡数 × 卡型单价权重) / 吞吐，归一化到 0~1（最贵的 = 1）。
@@ -127,7 +175,10 @@ export async function loadConfig() {
   const raw = await readFile(configPath(), 'utf8');
   const config = validateConfig(JSON.parse(raw));
   if (config.costModel?.enabled) {
-    const computed = computeCostIndex(config.models, config.costModel);
+    const source = config.costModel.source || 'deployment';
+    const computed = source === 'pricing'
+      ? computeCostIndexFromPricing(config.models, config.costModel)
+      : computeCostIndex(config.models, config.costModel);
     if (computed) {
       for (const model of config.models) {
         if (computed[model.id] != null) model.costIndex = computed[model.id];
