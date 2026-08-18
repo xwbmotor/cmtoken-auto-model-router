@@ -26,7 +26,17 @@
     "circuitBreakerFailures": 3,
     "circuitBreakerCooldownMs": 30000,
     "sessionStickinessTtlMs": 1800000,
-    "shadowModel": "qwen36-35b"
+    "shadowModel": "qwen36-35b",
+    "taskPreferences": {
+      "extraction": {
+        "model": "qwen36-35b",
+        "tolerance": 0.035
+      },
+      "creative": {
+        "model": "qwen36-35b",
+        "tolerance": 0.035
+      }
+    }
   },
   "semanticRouter": {
     "enabled": true,

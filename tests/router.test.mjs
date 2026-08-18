@@ -118,3 +118,27 @@ test('yuanToBeans 按 beansPerYuan 换算算力豆', () => {
   assert.equal(yuanToBeans(0.015, { budget: { beansPerYuan: 70 } }), 1.05);
   assert.equal(yuanToBeans(1, {}), null); // 未配置汇率返回 null
 });
+
+// —— taskPreferences 容差分流（v0.4.14）——
+test('taskPreferences 容差内分流到指定模型（extraction→qwen）', () => {
+  const decision = routeRequest({ model: 'auto', messages: [{ role: 'user', content: '从下面材料提取关键信息并输出结构化 JSON：文章标题、作者、发表日期' }] }, config);
+  assert.equal(decision.analysis.task, 'extraction');
+  assert.equal(decision.suggestedModel, 'qwen36-35b');
+  assert.ok(decision.preference, 'preference 字段应非空');
+  assert.match(decision.preference.note, /taskPreferences\[extraction\]/);
+});
+
+test('taskPreferences 分差不超容差时不分流（coding 维持最优）', () => {
+  const decision = routeRequest({ model: 'auto', messages: [{ role: 'user', content: '用 Go 实现并发安全的计数器并解释锁的作用' }] }, config);
+  assert.equal(decision.analysis.task, 'coding');
+  assert.equal(decision.suggestedModel, 'deepseekv4-flash');
+  assert.equal(decision.preference, null);
+});
+
+test('预算压力拉高成本权重后容差分流自然失效回落最优模型', () => {
+  // budgetPressure=1 时 effectiveCostWeight = 0.22×(1+2) = 0.66，extraction 分差 0.020 → (0.92-0.9) - 0.66×(0.2-0.12) = 0.02-0.0528 < 0，qwen 反超成最优
+  const calm = routeRequest({ model: 'auto', messages: [{ role: 'user', content: '从下面材料提取关键信息并输出结构化 JSON：文章标题、作者、发表日期' }] }, config);
+  const pressure = routeRequest({ model: 'auto', messages: [{ role: 'user', content: '从下面材料提取关键信息并输出结构化 JSON：文章标题、作者、发表日期' }] }, config, { budgetPressure: 1 });
+  assert.equal(calm.suggestedModel, 'qwen36-35b');
+  assert.equal(pressure.suggestedModel, 'deepseekv4-flash');
+});

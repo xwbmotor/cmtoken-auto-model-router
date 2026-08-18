@@ -38,6 +38,7 @@
 - 校准判定：模型累计真实样本达标且失败率低于阈值时，`calibrationStatus` 从 pilot/unverified 自动翻 verified，`uncertaintyPenalty` 归零（benchmark 先验让位给实时后验）
 - 生产就绪：结构化 JSON 日志、Prometheus `/metrics`（含决策日志磁盘监控）、优雅关停排空 in-flight、令牌桶限流（防成本失控）、`/health` 存活 + `/health/ready` 上游连通性就绪探针
 - 反向代理集成：详见 [docs/反代集成.md](docs/反代集成.md)（Nginx/Caddy/HAProxy 示例，含流式超时与 TLS 终结）
+- 路由设计说明：详见 [docs/路由设计说明.md](docs/路由设计说明.md)（为何默认 DeepSeek、容差分流机制、shadow→active 量化切换条件——部署团队必读）
 - 模型选择与推理强度建议分离；只有标记为已验证的模型才会收到推理参数
 - 真实输入/输出单价与 P95 注册、每日预算软保护
 - `CLOSED → OPEN → HALF_OPEN` 受控熔断恢复

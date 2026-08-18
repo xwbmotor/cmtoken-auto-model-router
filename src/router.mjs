@@ -188,6 +188,22 @@ export function routeRequest(body, config, runtime = {}) {
   const pool = qualified.length ? qualified : candidates;
   pool.sort((a, b) => b.score - a.score || a.costIndex - b.costIndex);
   const ordered = [...pool, ...candidates.filter((x) => !pool.includes(x)).sort((a, b) => b.score - a.score)];
+  // 任务偏好分流：指定模型与最优模型的分差 ≤ 容差时选指定模型（quality 不受损前提下的定向分流，
+  // 如并发余量大的模型接 extraction/creative；预算压力拉高成本权重时分差扩大，自然回落最优模型）
+  const prefs = config.routing?.taskPreferences || {};
+  const pref = prefs[analysis.task];
+  let preferenceApplied = false;
+  let preferenceNote = null;
+  if (pref?.model && ordered.length > 1) {
+    const best = ordered[0];
+    const target = ordered.find((x) => x.model === pref.model);
+    if (target && best.model !== pref.model && best.score - target.score <= Number(pref.tolerance ?? 0.02)) {
+      ordered.splice(ordered.indexOf(target), 1);
+      ordered.unshift(target);
+      preferenceApplied = true;
+      preferenceNote = `taskPreferences[${analysis.task}]: ${target.model} 与最优 ${best.model} 分差 ${(best.score - target.score).toFixed(3)} ≤ 容差 ${pref.tolerance}`;
+    }
+  }
   const suggestedModel = ordered[0].model;
   const activeTrafficPercent = Math.max(0, Math.min(100, Number(config.routing.activeTrafficPercent ?? 100)));
   const trafficBucket = Number(runtime.trafficBucket ?? Math.random() * 100);
@@ -200,6 +216,7 @@ export function routeRequest(body, config, runtime = {}) {
   return {
     requestedModel: body.model || 'auto', selectedModel, suggestedModel,
     shadow: !rolloutApplied, rollout: { activeTrafficPercent, trafficBucket: Number(trafficBucket.toFixed(2)), rolloutApplied }, analysis, candidates: candidates.sort((a, b) => b.score - a.score),
+    preference: preferenceApplied ? { task: analysis.task, model: pref.model, note: preferenceNote } : null,
     reasoningLevel, rejected, fallbackOrder: ordered.map((x) => x.model), configVersion: config.version
   };
 }
