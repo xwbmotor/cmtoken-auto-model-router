@@ -1,0 +1,34 @@
+{
+  "source": "official-model-cards + public leaderboards (2026-08-18 查证)",
+  "updatedAt": "2026-08-18",
+  "scaleFactor": 0.95,
+  "_note": "分数为各模型官方公布值（0~1），非内网 MaaS 实例实测，内网实例因量化/部署差异可能有偏差；真实流量跑够量后由校准判定覆盖。AA 私有基准（CritPt/AA-Omniscience/GDPval-AA v2）公开渠道查不到，已省略。模型身份：deepseekv4-flash=DeepSeek-V4-Flash-0731；qwen36-35b=Qwen3.6-35B-A3B；hy3-preview=Hunyuan 3 Preview；minimax-m25=MiniMax-M2.5；MiniMax-M3=MiniMax-M3。",
+  "mapping": {
+    "coding": ["swe_bench", "scicode", "livecodebench"],
+    "reasoning": ["gpqa_diamond"]
+  },
+  "models": {
+    "deepseekv4-flash": {
+      "gpqa_diamond": 0.881,
+      "swe_bench": 0.526
+    },
+    "qwen36-35b": {
+      "gpqa_diamond": 0.86,
+      "swe_bench": 0.734,
+      "livecodebench": 0.804
+    },
+    "hy3-preview": {
+      "swe_bench": 0.46
+    },
+    "minimax-m25": {
+      "gpqa_diamond": 0.852,
+      "hle": 0.194,
+      "scicode": 0.444,
+      "aa_lcr": 0.695,
+      "swe_bench": 0.802
+    },
+    "MiniMax-M3": {
+      "swe_bench": 0.59
+    }
+  }
+}

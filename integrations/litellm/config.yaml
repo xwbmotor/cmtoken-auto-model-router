@@ -1,0 +1,37 @@
+model_list:
+  - model_name: minimax-m25
+    litellm_params:
+      model: openai/minimax-m25
+      api_base: os.environ/MAAS_BASE_URL
+      api_key: os.environ/MAAS_API_KEY
+
+  - model_name: hy3-preview
+    litellm_params:
+      model: openai/hy3-preview
+      api_base: os.environ/MAAS_BASE_URL
+      api_key: os.environ/MAAS_API_KEY
+
+  - model_name: deepseekv4-flash
+    litellm_params:
+      model: openai/deepseekv4-flash
+      api_base: os.environ/MAAS_BASE_URL
+      api_key: os.environ/MAAS_API_KEY
+
+  - model_name: qwen36-35b
+    litellm_params:
+      model: openai/qwen36-35b
+      api_base: os.environ/MAAS_BASE_URL
+      api_key: os.environ/MAAS_API_KEY
+
+  - model_name: Minimax-M3
+    litellm_params:
+      model: openai/Minimax-M3
+      api_base: os.environ/MAAS_BASE_URL
+      api_key: os.environ/MAAS_API_KEY
+
+litellm_settings:
+  drop_params: false
+  set_verbose: false
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

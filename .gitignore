@@ -1,0 +1,8 @@
+.env
+.env - 副本.example
+.env.local
+state/
+benchmark-results/
+data/
+node_modules/
+*.log

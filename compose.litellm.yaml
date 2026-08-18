@@ -1,0 +1,28 @@
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      MAAS_BASE_URL: https://maas.gd.chinamobile.com:36007/ai/uifm/open/v1
+      MAAS_API_KEY: ${MAAS_API_KEY:?set rotated MAAS_API_KEY in local .env}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in local .env}
+    volumes:
+      - ./integrations/litellm/config.yaml:/app/config.yaml:ro
+
+  auto-router:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - litellm
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      UPSTREAM_BASE_URL: http://litellm:4000/v1
+      UPSTREAM_API_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in local .env}
+      ROUTER_ACCESS_KEY: ${ROUTER_ACCESS_KEY:?set ROUTER_ACCESS_KEY in local .env}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in local .env}
+    volumes:
+      - ./config:/app/config

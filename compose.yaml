@@ -1,0 +1,18 @@
+services:
+  auto-router:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    # 全部变量从 .env 注入（MAAS_BASE_URL/MAAS_API_KEY/ROUTER_ACCESS_KEY/ADMIN_TOKEN/METRICS_TOKEN/LOG_LEVEL 等），
+    # 不再在 compose 里展开变量，避免 `docker compose ps` 泄露密钥值
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+    # 必须大于应用内 SHUTDOWN_TIMEOUT_MS（默认 20000ms），否则排空未完成就被 SIGKILL
+    stop_grace_period: 30s
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data

@@ -1,0 +1,18 @@
+{
+  "name": "cmt-auto-model-router",
+  "version": "0.4.10",
+  "private": true,
+  "type": "module",
+  "description": "OpenAI-compatible, self-hosted-first model auto router for China Mobile MaaS",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.mjs",
+    "dev": "node --env-file-if-exists=.env --watch src/server.mjs",
+    "test": "node --test",
+    "benchmark": "node --env-file-if-exists=.env scripts/benchmark.mjs",
+    "benchmark:stream": "node --env-file-if-exists=.env scripts/stream-performance.mjs",
+    "eval:gate": "node --env-file-if-exists=.env scripts/eval-gate.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

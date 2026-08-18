@@ -1,0 +1,32 @@
+{
+  "_说明": "这是 benchmark 数据格式模板。真实分数已填在 config/benchmark-data.json（来源：各模型官方 model card / 公开榜单）。注意 AA 私有基准（CritPt/AA-Omniscience/GDPval-AA v2）公开渠道查不到，mapping 只用公开可查基准。",
+  "source": "artificial-analysis",
+  "updatedAt": "2026-08-18",
+  "scaleFactor": 0.95,
+  "_mapping说明": "mapping 定义每个 task 维度由哪些 benchmark 分数折算。key 是路由的 task 名（coding/reasoning/creative/extraction/default），value 是对应 benchmark 的 key 列表（key 需在下方 models 里出现）。",
+  "mapping": {
+    "coding": ["swe_bench", "scicode", "livecodebench"],
+    "reasoning": ["gpqa_diamond"]
+  },
+  "_models说明": "key 必须是 config/router.json 里的模型 id；value 是各 benchmark 的分数（0~1）。缺某个 benchmark 就省略该 key，该维度会自动跳过。",
+  "models": {
+    "qwen36-35b": {
+      "terminal_bench": 0.42,
+      "scicode": 0.38,
+      "critpt": 0.55,
+      "gpqa_diamond": 0.55,
+      "hle": 0.21,
+      "aa_omniscience": 0.6,
+      "gdpval_aa_v2": 0.58
+    },
+    "deepseekv4-flash": {
+      "terminal_bench": 0.3,
+      "scicode": 0.28,
+      "critpt": 0.42,
+      "gpqa_diamond": 0.4,
+      "hle": 0.12,
+      "aa_omniscience": 0.45,
+      "gdpval_aa_v2": 0.4
+    }
+  }
+}
