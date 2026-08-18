@@ -1,60 +1,306 @@
 {
-  "updatedAt": "2026-08-18",
-  "note": "上线前评估门（eval gate）用例集。每条用例经路由决策后调用模型生成，再由裁判模型按 rubric 打分（0~1）。覆盖 task 分布：coding / reasoning / creative / extraction / default 各 10 条。",
-  "cases": [
-    { "id": "coding-01", "task": "coding", "prompt": "分析 Java 中 int 变量 n++ 在多线程下的并发安全问题，给出最小修复方案和一段单元测试。", "rubric": "正确指出非原子性导致竞态；给出 AtomicInteger 或 synchronized 修复；附可运行的单测。" },
-    { "id": "coding-02", "task": "coding", "prompt": "写一段 PostgreSQL 查询，统计最近 30 天每个用户的订单金额并按金额降序排列。", "rubric": "SQL 语法正确；用日期过滤（如 current_date - interval）；group by 用户；order by 金额降序。" },
-    { "id": "coding-03", "task": "coding", "prompt": "用 Python 写一个装饰器，记录函数每次调用的耗时并打印。", "rubric": "正确使用 functools.wraps 保留元信息；计时逻辑正确；代码可直接运行。" },
-    { "id": "coding-04", "task": "coding", "prompt": "写正则表达式，从「订单号：20260818001，金额：128.5 元」中提取订单号和金额。", "rubric": "正则能准确提取订单号和金额；注意中文字符和冒号的匹配。" },
-    { "id": "coding-05", "task": "coding", "prompt": "用 Go 实现一个并发安全的计数器，说明为什么需要加锁。", "rubric": "指出数据竞争；用 mutex 或 atomic；代码正确。" },
-    { "id": "coding-06", "task": "coding", "prompt": "排查 Java 服务内存持续增长的问题，列出最常见的三类原因和对应排查命令。", "rubric": "覆盖堆泄漏、GC 配置、缓存无上限三类；给出 jmap/jstat 等真实命令。" },
-    { "id": "coding-07", "task": "coding", "prompt": "解释 HTTP 状态码 200、301、401、429、502 的含义和典型使用场景。", "rubric": "五个状态码含义准确；场景举例合理。" },
-    { "id": "coding-08", "task": "coding", "prompt": "设计一个幂等的支付回调接口，说明去重、事务和重试的处理方式。", "rubric": "有唯一请求 ID 去重；说明事务边界；重试策略明确。" },
-    { "id": "coding-09", "task": "coding", "prompt": "用 Python 解析一个 JSON 字符串并安全地读取嵌套字段，字段缺失时返回默认值。", "rubric": "用 try/except 或 get 链式安全读取；缺失返回默认值；代码可运行。" },
-    { "id": "coding-10", "task": "coding", "prompt": "说明快速排序的时间复杂度，最坏情况什么时候出现，如何避免。", "rubric": "平均 O(n log n)、最坏 O(n²) 正确；指出已排序数组触发最坏；给出随机化或三数取中。" },
-
-    { "id": "reasoning-01", "task": "reasoning", "prompt": "比较 Saga、TCC 和本地消息表三种分布式事务方案，从一致性、成本、复杂度和恢复能力给出取舍建议。", "rubric": "三方案原理正确；四个维度逐一对比；给出场景化取舍结论。" },
-    { "id": "reasoning-02", "task": "reasoning", "prompt": "解释缓存穿透、缓存击穿、缓存雪崩的区别，各给出一种解决方案。", "rubric": "三概念区分清晰；解决方案一一对应且正确。" },
-    { "id": "reasoning-03", "task": "reasoning", "prompt": "一个单体服务要拆成微服务，从团队规模、数据一致性、运维成本三个角度分析是否值得拆。", "rubric": "多维权衡而非一刀切；指出单体优先的适用场景；结论有依据。" },
-    { "id": "reasoning-04", "task": "reasoning", "prompt": "数据库查询变慢，说明如何通过执行计划定位问题，以及加索引的常见误区。", "rubric": "提到 EXPLAIN 分析；指出隐式类型转换、函数包裹列等索引失效误区。" },
-    { "id": "reasoning-05", "task": "reasoning", "prompt": "对比固定窗口、滑动窗口、令牌桶、漏桶四种限流算法的优缺点和适用场景。", "rubric": "四算法原理正确；指出令牌桶对突发流量的友好；场景建议合理。" },
-    { "id": "reasoning-06", "task": "reasoning", "prompt": "设计一个每秒一万请求的幂等支付回调系统，说明去重、事务、重试、监控和扩容方案。", "rubric": "覆盖题目要求的五个方面；方案可落地；有量化考虑。" },
-    { "id": "reasoning-07", "task": "reasoning", "prompt": "用 CAP 定理解释为什么分布式系统在分区故障时必须在一致性和可用性之间取舍。", "rubric": "CAP 含义正确；举例说明 P 必然存在；给出 CP/AP 选择。" },
-    { "id": "reasoning-08", "task": "reasoning", "prompt": "设计一个日志系统，说明如何保证日志采集不丢失、低成本存储和快速检索。", "rubric": "覆盖采集、存储、检索三环节；给出具体组件或机制；有取舍。" },
-    { "id": "reasoning-09", "task": "reasoning", "prompt": "一个新功能要灰度发布，说明从 5% 到 100% 的放量节奏、回滚策略和监控指标。", "rubric": "放量节奏合理；有自动回滚触发条件；监控指标具体。" },
-    { "id": "reasoning-10", "task": "reasoning", "prompt": "线上故障复盘应该遵循什么流程，如何避免复盘流于形式。", "rubric": "覆盖时间线还原、根因分析、改进项、定责；提出对事不对人的机制。" },
-
-    { "id": "creative-01", "task": "creative", "prompt": "为企业内部 AI 助手写三条简洁宣传语，每条不超过 18 字。", "rubric": "三条宣传语，每条 ≤18 字；朗朗上口，突出 AI 助手价值。" },
-    { "id": "creative-02", "task": "creative", "prompt": "给一款面向运营人员的智能路由工具起五个产品名，并说明各自寓意。", "rubric": "五个名字有创意；每个名字附一句寓意说明。" },
-    { "id": "creative-03", "task": "creative", "prompt": "为「Token 专项工作组」的月度成果写一段朋友圈文案，语气专业但不刻板。", "rubric": "文案有温度；体现专业成果；适合朋友圈传播。" },
-    { "id": "creative-04", "task": "creative", "prompt": "写一个活动口号，主题是「让每个请求都花对钱」，要求对仗工整。", "rubric": "口号对仗工整；紧扣成本优化主题；有记忆点。" },
-    { "id": "creative-05", "task": "creative", "prompt": "用第一人称写一个 AI 路由器「上岗第一天」的短故事开头，200 字以内。", "rubric": "有拟人化视角；情节有画面感；控制在 200 字内。" },
-    { "id": "creative-06", "task": "creative", "prompt": "为一封系统故障致歉通知写开头，语气诚恳，不推卸责任。", "rubric": "语气诚恳；主动担责；不堆砌套话。" },
-    { "id": "creative-07", "task": "creative", "prompt": "写一句形容「模型调度」的比喻句，要形象易懂。", "rubric": "比喻贴切形象；能让外行秒懂模型调度的含义。" },
-    { "id": "creative-08", "task": "creative", "prompt": "为一篇技术分享文章拟五个标题，主题是「大模型路由如何省钱」。", "rubric": "五个标题吸引眼球；准确概括主题；不标题党。" },
-    { "id": "creative-09", "task": "creative", "prompt": "给「智能路由平台」设计一句品牌 slogan，中英文各一句。", "rubric": "中英文各一句；简洁有力；体现智能与效率。" },
-    { "id": "creative-10", "task": "creative", "prompt": "写一封给合作团队的中秋感谢信开头，真诚不客套。", "rubric": "有具体感谢对象和缘由；真诚自然；不写空话套话。" },
-
-    { "id": "extraction-01", "task": "extraction", "prompt": "抽取姓名和城市并严格输出 JSON：张晓明居住在广州。", "rubric": "输出合法 JSON；包含 name=张晓明、city=广州两个字段。" },
-    { "id": "extraction-02", "task": "extraction", "prompt": "把「商品破损申请退款」分类为售前、售后或咨询，只返回标签。", "rubric": "只返回一个标签；正确归类为售后。" },
-    { "id": "extraction-03", "task": "extraction", "prompt": "从下面会议纪要提取三条行动项，标注负责人和截止时间：讨论了路由灰度计划，小辛负责 8 月 20 日前提交评测方案，Bin 负责 8 月 25 日前完成压测，李工负责月底前上线监控。", "rubric": "提取三条行动项；负责人和截止时间一一对应；无遗漏。" },
-    { "id": "extraction-04", "task": "extraction", "prompt": "从合同文本提取违约条款的关键信息：如乙方逾期交付，每逾期一日按合同总额的 0.5% 支付违约金。", "rubric": "提取出触发条件、违约方、违约金比例三个要素。" },
-    { "id": "extraction-05", "task": "extraction", "prompt": "从简历文本提取姓名、工作年限、核心技术栈：王强，8 年 Java 开发经验，熟悉 Spring、Kafka、Redis。", "rubric": "三个字段提取准确；技术栈完整列出。" },
-    { "id": "extraction-06", "task": "extraction", "prompt": "从下面日志提取错误码和错误信息：2026-08-18 10:00:01 ERROR [code=500] upstream timeout。", "rubric": "提取错误码 500 和错误信息 upstream timeout。" },
-    { "id": "extraction-07", "task": "extraction", "prompt": "从「本月节省成本 3.2 万元，请求量 128 万次」中提取两个数字并说明含义。", "rubric": "提取 3.2 万（成本）和 128 万（请求量），含义对应正确。" },
-    { "id": "extraction-08", "task": "extraction", "prompt": "把「张三，25 岁，杭州」转成 JSON 对象。", "rubric": "输出合法 JSON；字段为姓名/年龄/城市，值正确。" },
-    { "id": "extraction-09", "task": "extraction", "prompt": "把地址「广东省广州市天河区珠江新城 1 号」结构化输出省市区。", "rubric": "省=广东、市=广州、区=天河，层级正确。" },
-    { "id": "extraction-10", "task": "extraction", "prompt": "判断「这个服务真是垃圾，天天超时」的情感倾向，只返回正面或负面。", "rubric": "只返回一个词；正确判断为负面。" },
-
-    { "id": "default-01", "task": "default", "prompt": "今天星期几？", "rubric": "简单事实查询，直接给出答案即可。" },
-    { "id": "default-02", "task": "default", "prompt": "用一句话解释什么是大模型路由。", "rubric": "一句话说清「按任务和成本自动选择最合适的模型」，通俗易懂。" },
-    { "id": "default-03", "task": "default", "prompt": "把「智能模型路由」翻译成英文。", "rubric": "翻译准确，如 intelligent model routing。" },
-    { "id": "default-04", "task": "default", "prompt": "把下面一段话总结成一句话：智能路由会根据请求的复杂度、成本和时延自动选择最合适的模型，从而在保证质量的前提下降低整体成本。", "rubric": "一句话概括核心；不丢失关键信息。" },
-    { "id": "default-05", "task": "default", "prompt": "把「这个方案很好」改写成更正式的表达。", "rubric": "改写后语气正式得体；保留原意。" },
-    { "id": "default-06", "task": "default", "prompt": "什么是 Token？用通俗的语言解释。", "rubric": "通俗解释 token 含义；能联系到大模型计费。" },
-    { "id": "default-07", "task": "default", "prompt": "给刚接手运营工作的新人三条建议。", "rubric": "建议具体可执行；有针对性而非空泛。" },
-    { "id": "default-08", "task": "default", "prompt": "分三步说明如何登录管理后台查看今日成本。", "rubric": "步骤清晰可执行；顺序合理。" },
-    { "id": "default-09", "task": "default", "prompt": "解释「质量门槛」这个术语在模型路由中的含义。", "rubric": "解释准确；说明低于门槛的模型会被淘汰。" },
-    { "id": "default-10", "task": "default", "prompt": "比较「自建模型」和「生态模型」在成本结构上的区别。", "rubric": "指出自建是固定算力成本、生态按 token 计费；比较合理。" }
-  ]
+ "updatedAt": "2026-08-18",
+ "note": "上线前评估门（eval gate）用例集。每条用例经路由决策后调用模型生成，再由裁判模型按 rubric 打分（0~1）。覆盖 task 分布：coding / reasoning / creative / extraction / default 各 10 条。",
+ "cases": [
+  {
+   "id": "coding-01",
+   "task": "coding",
+   "prompt": "分析 Java 中 int 变量 n++ 在多线程下的并发安全问题，给出最小修复方案和一段单元测试。",
+   "rubric": "正确指出非原子性导致竞态；给出 AtomicInteger 或 synchronized 修复；附可运行的单测。"
+  },
+  {
+   "id": "coding-02",
+   "task": "coding",
+   "prompt": "写一段 PostgreSQL 查询，统计最近 30 天每个用户的订单金额并按金额降序排列。",
+   "rubric": "SQL 语法正确；用日期过滤（如 current_date - interval）；group by 用户；order by 金额降序。"
+  },
+  {
+   "id": "coding-03",
+   "task": "coding",
+   "prompt": "用 Python 写一个装饰器，记录函数每次调用的耗时并打印。",
+   "rubric": "正确使用 functools.wraps 保留元信息；计时逻辑正确；代码可直接运行。"
+  },
+  {
+   "id": "coding-04",
+   "task": "coding",
+   "prompt": "写正则表达式，从「订单号：20260818001，金额：128.5 元」中提取订单号和金额。",
+   "rubric": "正则能准确提取订单号和金额；注意中文字符和冒号的匹配。"
+  },
+  {
+   "id": "coding-05",
+   "task": "coding",
+   "prompt": "用 Go 实现一个并发安全的计数器（只给代码，不用解释）。",
+   "rubric": "代码使用 mutex 或 atomic 保证并发安全；Inc 方法逻辑正确；无数据竞争写法。"
+  },
+  {
+   "id": "coding-06",
+   "task": "coding",
+   "prompt": "排查 Java 服务内存持续增长的问题，列出最常见的三类原因和对应排查命令。",
+   "rubric": "覆盖堆泄漏、GC 配置、缓存无上限三类；给出 jmap/jstat 等真实命令。"
+  },
+  {
+   "id": "coding-07",
+   "task": "coding",
+   "prompt": "解释 HTTP 状态码 200、301、401、429、502 的含义和典型使用场景。",
+   "rubric": "五个状态码含义准确；场景举例合理。"
+  },
+  {
+   "id": "coding-08",
+   "task": "coding",
+   "prompt": "设计一个幂等的支付回调接口，说明去重、事务和重试的处理方式。",
+   "rubric": "有唯一请求 ID 去重；说明事务边界；重试策略明确。"
+  },
+  {
+   "id": "coding-09",
+   "task": "coding",
+   "prompt": "用 Python 解析一个 JSON 字符串并安全地读取嵌套字段，字段缺失时返回默认值。",
+   "rubric": "用 try/except 或 get 链式安全读取；缺失返回默认值；代码可运行。"
+  },
+  {
+   "id": "coding-10",
+   "task": "coding",
+   "prompt": "说明快速排序的时间复杂度，最坏情况什么时候出现，如何避免。",
+   "rubric": "平均 O(n log n)、最坏 O(n²) 正确；指出已排序数组触发最坏；给出随机化或三数取中。"
+  },
+  {
+   "id": "reasoning-01",
+   "task": "reasoning",
+   "prompt": "比较 Saga、TCC 和本地消息表三种分布式事务方案，从一致性、成本、复杂度和恢复能力给出取舍建议。",
+   "rubric": "三方案原理正确；四个维度逐一对比；给出场景化取舍结论。"
+  },
+  {
+   "id": "reasoning-02",
+   "task": "reasoning",
+   "prompt": "解释缓存穿透、缓存击穿、缓存雪崩的区别，各给出一种解决方案。",
+   "rubric": "三概念区分清晰；解决方案一一对应且正确。"
+  },
+  {
+   "id": "reasoning-03",
+   "task": "reasoning",
+   "prompt": "一个单体服务要拆成微服务，从团队规模、数据一致性、运维成本三个角度分析是否值得拆。",
+   "rubric": "多维权衡而非一刀切；指出单体优先的适用场景；结论有依据。"
+  },
+  {
+   "id": "reasoning-04",
+   "task": "reasoning",
+   "prompt": "数据库查询变慢，说明如何通过执行计划定位问题，以及加索引的常见误区。",
+   "rubric": "提到 EXPLAIN 分析；指出隐式类型转换、函数包裹列等索引失效误区。"
+  },
+  {
+   "id": "reasoning-05",
+   "task": "reasoning",
+   "prompt": "对比固定窗口、滑动窗口、令牌桶、漏桶四种限流算法的优缺点和适用场景。",
+   "rubric": "四算法原理正确；指出令牌桶对突发流量的友好；场景建议合理。"
+  },
+  {
+   "id": "reasoning-06",
+   "task": "reasoning",
+   "prompt": "设计一个每秒一万请求的幂等支付回调系统，说明去重、事务、重试、监控和扩容方案。",
+   "rubric": "覆盖题目要求的五个方面；方案可落地；有量化考虑。"
+  },
+  {
+   "id": "reasoning-07",
+   "task": "reasoning",
+   "prompt": "用 CAP 定理解释为什么分布式系统在分区故障时必须在一致性和可用性之间取舍。",
+   "rubric": "CAP 含义正确；举例说明 P 必然存在；给出 CP/AP 选择。"
+  },
+  {
+   "id": "reasoning-08",
+   "task": "reasoning",
+   "prompt": "设计一个日志系统，说明如何保证日志采集不丢失、低成本存储和快速检索。",
+   "rubric": "覆盖采集、存储、检索三环节；给出具体组件或机制；有取舍。"
+  },
+  {
+   "id": "reasoning-09",
+   "task": "reasoning",
+   "prompt": "一个新功能要灰度发布，说明从 5% 到 100% 的放量节奏、回滚策略和监控指标。",
+   "rubric": "放量节奏合理；有自动回滚触发条件；监控指标具体。"
+  },
+  {
+   "id": "reasoning-10",
+   "task": "reasoning",
+   "prompt": "线上故障复盘应该遵循什么流程，如何避免复盘流于形式。",
+   "rubric": "覆盖时间线还原、根因分析、改进项、定责；提出对事不对人的机制。"
+  },
+  {
+   "id": "creative-01",
+   "task": "creative",
+   "prompt": "为企业内部 AI 助手写三条简洁宣传语，每条不超过 18 字。",
+   "rubric": "三条宣传语，每条 ≤18 字；朗朗上口，突出 AI 助手价值。"
+  },
+  {
+   "id": "creative-02",
+   "task": "creative",
+   "prompt": "给一款面向运营人员的智能路由工具起五个产品名，并说明各自寓意。",
+   "rubric": "五个名字有创意；每个名字附一句寓意说明。"
+  },
+  {
+   "id": "creative-03",
+   "task": "creative",
+   "prompt": "为「Token 专项工作组」的月度成果写一段朋友圈文案，语气专业但不刻板。",
+   "rubric": "文案有温度；体现专业成果；适合朋友圈传播。"
+  },
+  {
+   "id": "creative-04",
+   "task": "creative",
+   "prompt": "写一个活动口号，主题是「让每个请求都花对钱」，要求对仗工整。",
+   "rubric": "口号对仗工整；紧扣成本优化主题；有记忆点。"
+  },
+  {
+   "id": "creative-05",
+   "task": "creative",
+   "prompt": "用第一人称写一个 AI 路由器「上岗第一天」的短故事开头，200 字以内。",
+   "rubric": "有拟人化视角；情节有画面感；控制在 200 字内。"
+  },
+  {
+   "id": "creative-06",
+   "task": "creative",
+   "prompt": "为一封系统故障致歉通知写开头，语气诚恳，不推卸责任。",
+   "rubric": "语气诚恳；主动担责；不堆砌套话。"
+  },
+  {
+   "id": "creative-07",
+   "task": "creative",
+   "prompt": "写一句形容「模型调度」的比喻句，要形象易懂。",
+   "rubric": "比喻贴切形象；能让外行秒懂模型调度的含义。"
+  },
+  {
+   "id": "creative-08",
+   "task": "creative",
+   "prompt": "为一篇技术分享文章拟五个标题，主题是「大模型路由如何省钱」。",
+   "rubric": "五个标题吸引眼球；准确概括主题；不标题党。"
+  },
+  {
+   "id": "creative-09",
+   "task": "creative",
+   "prompt": "给「智能路由平台」设计一句品牌 slogan，中英文各一句。",
+   "rubric": "中英文各一句；简洁有力；体现智能与效率。"
+  },
+  {
+   "id": "creative-10",
+   "task": "creative",
+   "prompt": "写一封给合作团队的中秋感谢信开头，真诚不客套。",
+   "rubric": "有具体感谢对象和缘由；真诚自然；不写空话套话。"
+  },
+  {
+   "id": "extraction-01",
+   "task": "extraction",
+   "prompt": "抽取姓名和城市并严格输出 JSON，字段名用 name 和 city：张晓明居住在广州。",
+   "rubric": "输出为合法 JSON 且只含 name=\"张晓明\"、city=\"广州\" 两个字段（英文键，无多余内容）。"
+  },
+  {
+   "id": "extraction-02",
+   "task": "extraction",
+   "prompt": "把「商品破损申请退款」分类为售前、售后或咨询，只返回标签。",
+   "rubric": "只返回一个标签；正确归类为售后。"
+  },
+  {
+   "id": "extraction-03",
+   "task": "extraction",
+   "prompt": "从下面会议纪要提取三条行动项，标注负责人和截止时间：讨论了路由灰度计划，小辛负责 8 月 20 日前提交评测方案，Bin 负责 8 月 25 日前完成压测，李工负责月底前上线监控。",
+   "rubric": "提取三条行动项；负责人和截止时间一一对应；无遗漏。"
+  },
+  {
+   "id": "extraction-04",
+   "task": "extraction",
+   "prompt": "从合同文本提取违约条款的关键信息：如乙方逾期交付，每逾期一日按合同总额的 0.5% 支付违约金。",
+   "rubric": "提取出触发条件、违约方、违约金比例三个要素。"
+  },
+  {
+   "id": "extraction-05",
+   "task": "extraction",
+   "prompt": "从简历文本提取姓名、工作年限、核心技术栈：王强，8 年 Java 开发经验，熟悉 Spring、Kafka、Redis。",
+   "rubric": "三个字段提取准确；技术栈完整列出。"
+  },
+  {
+   "id": "extraction-06",
+   "task": "extraction",
+   "prompt": "从下面日志提取错误码和错误信息：2026-08-18 10:00:01 ERROR [code=500] upstream timeout。",
+   "rubric": "提取错误码 500 和错误信息 upstream timeout。"
+  },
+  {
+   "id": "extraction-07",
+   "task": "extraction",
+   "prompt": "从「本月节省成本 3.2 万元，请求量 128 万次」中提取两个数字并说明含义。",
+   "rubric": "提取 3.2 万（成本）和 128 万（请求量），含义对应正确。"
+  },
+  {
+   "id": "extraction-08",
+   "task": "extraction",
+   "prompt": "把「张三，25 岁，杭州」转成 JSON 对象。",
+   "rubric": "输出合法 JSON；字段为姓名/年龄/城市，值正确。"
+  },
+  {
+   "id": "extraction-09",
+   "task": "extraction",
+   "prompt": "把地址「广东省广州市天河区珠江新城 1 号」结构化输出省市区。",
+   "rubric": "省=广东、市=广州、区=天河，层级正确。"
+  },
+  {
+   "id": "extraction-10",
+   "task": "extraction",
+   "prompt": "判断「这个服务真是垃圾，天天超时」的情感倾向，只返回正面或负面。",
+   "rubric": "输出包含\"负面\"（或 negative）；不出现\"正面\"作为最终答案。"
+  },
+  {
+   "id": "default-01",
+   "task": "default",
+   "prompt": "大模型场景中，1 个 token 通常大约等于多少个中文字？只回答数字。",
+   "rubric": "回答在 0.5~1.5 字/token 范围（不同 tokenizer 有差异，约 1 或 1.5 均算正确）；只给出数字或极简表述。"
+  },
+  {
+   "id": "default-02",
+   "task": "default",
+   "prompt": "用一句话解释什么是大模型路由。",
+   "rubric": "一句话说清「按任务和成本自动选择最合适的模型」，通俗易懂。"
+  },
+  {
+   "id": "default-03",
+   "task": "default",
+   "prompt": "把「智能模型路由」翻译成英文。",
+   "rubric": "翻译准确，如 intelligent model routing。"
+  },
+  {
+   "id": "default-04",
+   "task": "default",
+   "prompt": "把下面一段话总结成一句话：智能路由会根据请求的复杂度、成本和时延自动选择最合适的模型，从而在保证质量的前提下降低整体成本。",
+   "rubric": "一句话概括核心；不丢失关键信息。"
+  },
+  {
+   "id": "default-05",
+   "task": "default",
+   "prompt": "把「这个方案很好」改写成更正式的表达。",
+   "rubric": "改写后语气正式得体；保留原意。"
+  },
+  {
+   "id": "default-06",
+   "task": "default",
+   "prompt": "什么是 Token？用通俗的语言解释。",
+   "rubric": "通俗解释 token 含义；能联系到大模型计费。"
+  },
+  {
+   "id": "default-07",
+   "task": "default",
+   "prompt": "给刚接手运营工作的新人三条建议。",
+   "rubric": "建议具体可执行；有针对性而非空泛。"
+  },
+  {
+   "id": "default-08",
+   "task": "default",
+   "prompt": "分三步说明如何登录管理后台查看今日成本。",
+   "rubric": "步骤清晰可执行；顺序合理。"
+  },
+  {
+   "id": "default-09",
+   "task": "default",
+   "prompt": "解释「质量门槛」这个术语在模型路由中的含义。",
+   "rubric": "解释准确；说明低于门槛的模型会被淘汰。"
+  },
+  {
+   "id": "default-10",
+   "task": "default",
+   "prompt": "比较「自建模型」和「生态模型」在成本结构上的区别。",
+   "rubric": "指出自建是固定算力成本、生态按 token 计费；比较合理。"
+  }
+ ]
 }
