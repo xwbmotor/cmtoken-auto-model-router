@@ -108,7 +108,7 @@ export class DecisionLog {
       },
       outcome
     };
-    // 注意：request 里已按 redact 规则脱敏；outcome 由调用方在响应完成后补充
+    // 注意：request 里已按 redact 规则脱敏；outcome 由调用方在响应完成后补充（含 usage/actualCostYuan 飞轮字段）
   }
 
   write(requestContext, decision, outcome) {

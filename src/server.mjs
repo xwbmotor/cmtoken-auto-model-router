@@ -7,6 +7,7 @@ import { loadConfig, projectRoot, saveConfig, validateConfig } from './config.mj
 import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice } from './router.mjs';
 import { classifySemantically, shouldUseSemanticRouter } from './semantic-router.mjs';
 import { BudgetTracker, estimateCostYuan } from './budget.mjs';
+import { FeedbackLog } from './feedback.mjs';
 import { DecisionLog } from './decision-log.mjs';
 import { logger } from './logger.mjs';
 import { renderPrometheusMetrics } from './metrics.mjs';
@@ -23,6 +24,7 @@ const serverHeadersTimeoutMs = Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 310
 let config = await loadConfig();
 const budgetTracker = await BudgetTracker.create(projectRoot, config);
 const decisionLog = await DecisionLog.create(projectRoot, config);
+const feedbackLog = await FeedbackLog.create(projectRoot, config);
 const rateLimiter = createRateLimiter({ rpm: Number(config.rateLimit?.rpm ?? 120), burst: Number(config.rateLimit?.burst ?? config.rateLimit?.rpm ?? 120) });
 // 管理端鉴权失败专用限流桶：比业务限流严得多（10次/分钟），封暴力破解
 const adminAuthLimiter = createRateLimiter({ rpm: 10, burst: 10 });
@@ -268,6 +270,37 @@ function upstreamRequestBody(body, model, reasoningLevel) {
 // strict（默认）: 客户端持 ROUTER_ACCESS_KEY，路由器用服务端 MAAS_API_KEY 调上游。
 // passthrough: 客户端的 Authorization 头原样转发 MaaS——供 MaaS 网关分流 model=auto 场景：
 //   同一 URL 同一租户 key 调 auto 与直连模型完全一致，计费/配额自然落到调用方租户。
+// —— 飞轮：上游回包 usage 捕获（流式需解析 SSE chunk）：返回 {prompt,completion,cached} 或 null ——
+function extractUsage(contentType, body) {
+  try {
+    if (!contentType?.includes('text/event-stream')) {
+      const parsed = JSON.parse(body);
+      const u = parsed?.usage;
+      return u ? { prompt: u.prompt_tokens ?? null, completion: u.completion_tokens ?? null, reasoning: u.completion_tokens_details?.reasoning_tokens ?? null, cached: u.prompt_tokens_details?.cached_tokens ?? null } : null;
+    }
+    // 流式：OpenAI 协议最后一块 chunk 带 usage（需请求带 stream_options.include_usage 或网关默认附加）
+    const lines = String(body).split('\n').filter((l) => l.startsWith('data:'));
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const payload = lines[i].slice(5).trim();
+      if (payload === '[DONE]') continue;
+      const parsed = JSON.parse(payload);
+      if (parsed?.usage) return { prompt: parsed.usage.prompt_tokens ?? null, completion: parsed.usage.completion_tokens ?? null, reasoning: parsed.usage.completion_tokens_details?.reasoning_tokens ?? null, cached: parsed.usage.prompt_tokens_details?.cached_tokens ?? null };
+    }
+    return null;
+  } catch { return null; }
+}
+
+// 实际成本（对账口径）：按上游 usage 真实 token 结算，元/百万token 定价
+function computeActualCostFromUsage(usage, modelConfig) {
+  const p = modelConfig?.pricingYuanPerMillionTokens;
+  if (!p || usage?.prompt == null || usage?.completion == null) return null;
+  const cached = usage.cached || 0;
+  const inputPrice = p.input ?? 0;
+  const cachedPrice = p.inputCached ?? p.input ?? 0;
+  const cost = ((usage.prompt - cached) * inputPrice + cached * cachedPrice + usage.completion * (p.output ?? 0)) / 1_000_000;
+  return Number.isFinite(cost) ? Number(cost.toFixed(6)) : null;
+}
+
 async function callUpstream(body, model, signal, reasoningLevel = 'off', clientAuthHeader = null) {
   const base = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl).replace(/\/$/, '');
   const passthrough = process.env.ROUTER_KEY_MODE === 'passthrough';
@@ -419,6 +452,8 @@ async function proxyCompletion(req, res) {
     if (!claimCircuitAttempt(model)) continue;
     const started = Date.now();
     try {
+      // 飞轮：流式请求带上 stream_options.include_usage，上游会在最后一个 chunk 附带 usage
+      if (body.stream === true) body.stream_options = { ...(body.stream_options || {}), include_usage: true };
       const upstream = await callUpstream(body, model, controller.signal, decision.reasoningLevel, req.headers.authorization);
       const latency = Date.now() - started;
       if (!upstream.ok) {
@@ -428,6 +463,9 @@ async function proxyCompletion(req, res) {
         lastError.retryable = [408, 429, 500, 502, 503, 504].includes(upstream.status);
         throw lastError;
       }
+      // 飞轮：转发前先判定是否流式——流式不缓冲整个响应（内存安全），usage 从 SSE 尾块解析
+      const isStream = body.stream === true;
+      let usage = null;
       updateHealth(model, true, latency);
       maybePromoteVerified(model);
       counters.success += 1;
@@ -441,8 +479,19 @@ async function proxyCompletion(req, res) {
       const selectedConfig = config.models.find((item) => item.id === model);
       const estimatedCostYuan = estimateCostYuan(body, decision.analysis, selectedConfig, config, decision.reasoningLevel);
       budgetTracker.consume(estimatedCostYuan).catch(() => {});
-      record({ at: new Date().toISOString(), requested: decision.requestedModel, selected: model, suggested: decision.suggestedModel, task: decision.analysis.task, complexity: decision.analysis.complexity, routeMethod: decision.analysis.routeMethod, reasoningLevel: decision.reasoningLevel, estimatedCostYuan, latencyMs: latency, fallbackAttempt: i, ok: true });
-      decisionLog.write({ sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, redactedBody: decisionLog.redact(body) }, decision, { ok: true, model, latencyMs: latency, fallbackAttempt: i, estimatedCostYuan });
+      // 飞轮：非流式在此整体缓冲解析 usage（拿到实际 token 数）；流式在转发循环中从尾块提取
+      let responseText = null;
+      if (!isStream && upstream.body) {
+        responseText = await upstream.text();
+        usage = extractUsage(upstream.headers.get('content-type'), responseText);
+      }
+      // 实际成本：有 usage 时按真实 token 结算（对账口径），否则保留预估值
+      const actualCostYuan = usage ? computeActualCostFromUsage(usage, selectedConfig) : null;
+      if (actualCostYuan != null) { counters.tokens ??= {}; counters.tokens.prompt = (counters.tokens.prompt || 0) + usage.prompt; counters.tokens.completion = (counters.tokens.completion || 0) + usage.completion; }
+      // 日志先组装不落盘（流式的 usage 在流尾才知道）——转发完成后统一 write
+      const logEntry = { sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, redactedBody: decisionLog.redact(body) };
+      const logOutcome = { ok: true, model, latencyMs: latency, fallbackAttempt: i, estimatedCostYuan, actualCostYuan, usage };
+      record({ at: new Date().toISOString(), requested: decision.requestedModel, selected: model, suggested: decision.suggestedModel, task: decision.analysis.task, complexity: decision.analysis.complexity, routeMethod: decision.analysis.routeMethod, reasoningLevel: decision.reasoningLevel, estimatedCostYuan, actualCostYuan, latencyMs: latency, fallbackAttempt: i, ok: true });
       const headers = {
         'content-type': upstream.headers.get('content-type') || (body.stream ? 'text/event-stream' : 'application/json'),
         'cache-control': 'no-cache',
@@ -455,9 +504,27 @@ async function proxyCompletion(req, res) {
       };
       res.writeHead(200, headers);
       if (!upstream.body) return res.end();
-      // 背压处理：慢客户端时 res.write 返回 false，必须等 drain 再续写，否则内存无限堆积
+      if (responseText !== null) {
+        // 非流式：body 已被 text() 消费，这里一次性写回客户端；usage/actualCostYuan 已解析完毕，落日志
+        if (!res.write(responseText)) await new Promise((resolve) => res.once('drain', resolve));
+        decisionLog.write(logEntry, decision, logOutcome);
+        clearTimeout(timer); return res.end();
+      }
+      // 流式：逐块转发（背压安全），并从 SSE 尾块提取 usage（飞轮：实际 token 消耗）
+      // 注意：undici 的 chunk 是 Uint8Array，toString('utf8') 不生效（会输出字节数字）——必须 Buffer 化
+      const tailChunks = []; let tailBytes = 0;
+      const trimTail = () => { if (tailBytes > 8192) { const merged = Buffer.concat(tailChunks).subarray(-4096); tailChunks.length = 0; tailChunks.push(merged); tailBytes = merged.length; } };
       for await (const chunk of upstream.body) {
         if (!res.write(chunk)) await new Promise((resolve) => res.once('drain', resolve));
+        tailChunks.push(Buffer.from(chunk)); tailBytes += chunk.length; trimTail();
+      }
+      const sseTail = Buffer.concat(tailChunks).toString('utf8');
+      if (isStream && !usage) usage = extractUsage('text/event-stream', sseTail);
+      decisionLog.write(logEntry, decision, { ...logOutcome, usage, actualCostYuan: usage && usage.prompt != null && usage.completion != null ? computeActualCostFromUsage(usage, selectedConfig) : logOutcome.actualCostYuan });
+      // 流式尾块拿到 usage 后补算实际成本并更新 token 计数器
+      if (usage && selectedConfig?.pricingYuanPerMillionTokens && usage.prompt != null && usage.completion != null) {
+        const actual = computeActualCostFromUsage(usage, selectedConfig);
+        if (actual != null) { counters.tokens ??= {}; counters.tokens.prompt = (counters.tokens.prompt || 0) + usage.prompt; counters.tokens.completion = (counters.tokens.completion || 0) + usage.completion; }
       }
       clearTimeout(timer); return res.end();
     } catch (error) {
@@ -547,7 +614,16 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { sampleCount: SIMULATION_SAMPLES.length, changed, changedRate: Number((changed / SIMULATION_SAMPLES.length).toFixed(3)), current, proposed });
     } catch (error) { return errorJson(res, 400, error.message, 'invalid_simulation'); }
   }
-  if (req.method === 'GET' && url.pathname === '/admin/api/metrics') return json(res, 200, { counters, health, recent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), sessions: sessions.size });
+  if (req.method === 'POST' && url.pathname === '/admin/api/feedback') {
+    // 显式质量反馈（飞轮）：requestId 关联决策日志，rating ∈ good|bad。业务方可选接入。
+    try {
+      const body = await readJson(req);
+      const result = feedbackLog.write({ requestId: body.requestId, rating: body.rating, comment: body.comment, source: body.source });
+      if (!result.ok) return errorJson(res, 400, result.error, 'invalid_feedback');
+      return json(res, 200, { ok: true });
+    } catch (error) { return errorJson(res, 400, error.message, 'invalid_feedback'); }
+  }
+  if (req.method === 'GET' && url.pathname === '/admin/api/metrics') return json(res, 200, { counters, health, recent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: sessions.size });
   // 分类器标准评测：spawn Python 脚本跑 heldout 集，输出三方（gold/小模型/规则层）准确率与混淆矩阵。
   // 回答"换分类器后准了多少"——换端点前后各点一次即可对比。评测只读模型文件，不影响线上。
   if (req.method === 'POST' && url.pathname === '/admin/api/classifier/evaluate') {

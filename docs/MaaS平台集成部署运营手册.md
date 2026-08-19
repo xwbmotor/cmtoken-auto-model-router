@@ -170,3 +170,50 @@ systemctl daemon-reload && systemctl enable --now auto-router
 | P2 | 反代 TLS | docs/反代集成.md 有现成 Nginx 配置 |
 | P3 | eval gate 与模型演进同步 | Qwen3.8-27B 上线、M2.5 退网时按 SOP 更新 |
 | P3 | 公开前脱敏 | router.json 内网端点等，公开仓库前必做 |
+
+## 七、持续迭代飞轮（v0.4.22+）
+
+路由效果不是一次调好的。三个质量信号源已就位，形成闭环：
+
+```
+真实流量 ──→ 决策日志 data/decisions/*.jsonl（每次路由的完整决策+usage+实际成本）
+              │
+              ├─ 周度：python scripts/mine-decisions.py
+              │    ├─ 模型×任务×档位画像（ok率/P50延迟/成本合计）→ 调参建议
+              │    ├─ 隐式负信号（同会话短间隔重试）→ 定位差模型
+              │    └─ 高置信训练样本候选 → 人工审核并入 data/training/raw.jsonl
+              │
+              ├─ 业务方可选：POST /admin/api/feedback {requestId, rating: good|bad}
+              │    └─ data/feedback/*.jsonl（显式质量评价，与决策日志按 requestId 关联）
+              │
+              └─ 训练管线（已有）：train_classifier.py → eval gate → replay 预估 → shadow → active
+```
+
+### 周度运营节奏（30 分钟）
+
+1. `python scripts/mine-decisions.py --days 7` 看画像
+2. 三个判断（对照脚本尾部的调参建议表）：
+   - 某 ok 率 <0.9 且 n≥20 → 管理端下调该模型 quality 或调大 livePenalty
+   - 某 task 的 tier 判定集中出错 → 第 3 部分候选样本审核后并入训练集
+   - 重试集中某模型 → 查 /metrics 熔断记录
+3. 变更走标准链：管理端改 → 切换影响预估 → 发布（自动备份）→ 观察一周
+4. 训练集更新后：`train_classifier.py` 重训 → eval gate 过门槛 → replay 灰度预估 → shadow → active
+
+### 为什么不用数据库
+
+状态就两类：配置（config/router.json，发布自动备份）与日志（按天 JSONL，可 grep 可 scp）。
+量级（日万条 ≈10MB）远未到需要数据库的程度；日志格式与训练管线同构，零转换。
+将来日百万条或需在线 SQL 时，SQLite/ClickHouse 起步——schema 是超集，只换介质。
+
+## 八、部署核对清单（交付另一台服务器前逐项打勾）
+
+- [ ] `node --check src/server.mjs` 通过（语法）
+- [ ] `npm test` 全绿（当前 80+ 用例）
+- [ ] `.env` 不在包内（tarball 用 git archive 生成，天然排除）
+- [ ] 内网端点/IP 已确认可保留（私有仓库交付）或已脱敏（公开交付）
+- [ ] `config/router.json` 的 models 定价与 MaaS 实际结算价一致
+- [ ] 首次部署机器：Node ≥20 / Docker 二选一；Python 3.10+（分类器，可选）
+- [ ] `.env.example` 已按目标环境补全（ROUTER_KEY_MODE 按场景选 strict/passthrough）
+- [ ] compose 部署：`docker compose up -d` 后 `curl :8787/health` 返回 ok
+- [ ] 管理端首次登录：ADMIN_TOKEN 设置且非弱值
+- [ ] 上线一周后：跑 mine-decisions.py 建立基线画像
