@@ -9,7 +9,7 @@ const PRESETS = {
 };
 function headers(json = false) { const token = $('token').value.trim(); return { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(json ? { 'content-type': 'application/json' } : {}) }; }
 async function api(path, options = {}) { const response = await fetch(path, { ...options, headers: { ...headers(Boolean(options.body)), ...(options.headers || {}) } }); const value = await response.json(); if (!response.ok) throw new Error(value.error?.message || `HTTP ${response.status}`); return value; }
-function toast(message, bad = false) { const node = $('toast'); node.textContent = message; node.style.background = bad ? '#ff7c79' : '#edf8f4'; node.classList.add('show'); setTimeout(() => node.classList.remove('show'), 3000); }
+function toast(message, bad = false) { const node = $('toast'); node.textContent = message; node.style.background = bad ? '#b42318' : '#101828'; node.classList.add('show'); setTimeout(() => node.classList.remove('show'), 3000); }
 const percentValue = (value) => `${Math.round(Number(value) * 100)}%`;
 const sensitivity = (value) => Number(value) < .15 ? '低' : Number(value) < .3 ? '中' : Number(value) < .45 ? '高' : '很高';
 function updateRangeLabels() { $('trafficValue').textContent = `${$('activeTrafficPercent').value}%`; $('qualityFloorValue').textContent = percentValue($('qualityFloor').value); $('costWeightValue').textContent = sensitivity($('costWeight').value); $('latencyWeightValue').textContent = sensitivity($('latencyWeight').value); $('selfBonusValue').textContent = sensitivity($('selfBonus').value); $('presetHelp').textContent = PRESETS[$('preset').value]?.label || ''; }
@@ -120,7 +120,7 @@ $('evalClassifier').onclick = async () => {
         <article><span>两者分歧率</span><strong>${fmtAcc(r.disagreementRate)}</strong><small>标准评测集 ${r.heldoutSize} 条（与训练切分同源）</small></article>
       </div>
       <details class="advanced"><summary>混淆矩阵（换分类器前后对比用）</summary><div class="matrix-wrap"><div><h4>小模型</h4>${matrix(r.classifier.confusion, r.labels)}</div><div><h4>规则层</h4>${matrix(r.rules.confusion, r.labels)}</div></div></details>`;
-  } catch (e) { box.innerHTML = `<p class="empty" style="color:#ff7c79">${e.message}</p>`; }
+  } catch (e) { box.innerHTML = `<p class="empty" style="color:var(--danger)">${e.message}</p>`; }
 };
 
 // —— 切换影响预估：heldout 全量回放（判准率/成本/质量/误判方向）——
@@ -141,5 +141,5 @@ $('replaySwitch').onclick = async () => {
         ${row('③ 全量采纳小模型', r.full, `<br>分布 ${dist(r.full)}`)}
       </div>
       <p class="hint">判准率：预测任务标签与真值一致的比例。漏判难任务=把 coding/reasoning 判成更轻的类（质量风险）；多判=反向（成本浪费）。切换到 active（含采纳门槛）≈ ②，全量采纳 ≈ ③。<br>模型迁移（①→②）：${shifts}。质量/成本为按 gold 任务的真实 quality/costIndex 加权平均。</p>`;
-  } catch (e) { box.innerHTML = `<p class="empty" style="color:#ff7c79">${e.message}</p>`; }
+  } catch (e) { box.innerHTML = `<p class="empty" style="color:var(--danger)">${e.message}</p>`; }
 };
