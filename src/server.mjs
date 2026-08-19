@@ -1,8 +1,10 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { extname, join, normalize } from 'node:path';
 import { loadConfig, projectRoot, saveConfig, validateConfig } from './config.mjs';
-import { analyzeRequest, mergeSemanticAssessment, routeRequest } from './router.mjs';
+import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice } from './router.mjs';
 import { classifySemantically, shouldUseSemanticRouter } from './semantic-router.mjs';
 import { BudgetTracker, estimateCostYuan } from './budget.mjs';
 import { DecisionLog } from './decision-log.mjs';
@@ -110,7 +112,29 @@ function simulatePolicy(policyConfig) {
     return Number((values.reduce((sum, value) => sum + Number(value), 0) / values.length).toFixed(3));
   };
   const selfIds = new Set(policyConfig.models.filter((model) => model.ownership === 'self_hosted').map((model) => model.id));
-  return { rows, distribution, averageQuality: average('quality'), averageCostIndex: average('costIndex'), averageLatencyIndex: average('latencyIndex'), averageCostYuan: average('costYuan'), averageLatencyMs: average('latencyMs'), selfHostedRate: Number((rows.filter((row) => selfIds.has(row.model)).length / rows.length).toFixed(3)) };
+  // 论文标准锚点：Zero-Router（Pareto 前沿哈希分发）与 Oracle（逐请求事后最优）。
+  // 同一批样本上聚合质量/成本/时延，回答"当前路由距随机基线和理论上界各差多少"。
+  const baselines = { zeroRouter: { label: '随机基线（Pareto 前沿）' }, oracle: { label: '事后最优上界' } };
+  for (const [key, chooser] of [['zeroRouter', (body, cfg) => zeroRouterChoice(body, cfg)], ['oracle', (body, cfg) => oracleChoice(body, cfg)]]) {
+    const picks = [];
+    let fallbackCount = 0;
+    SIMULATION_SAMPLES.forEach((sample, index) => {
+      const analysis = analyzeRequest(sample.body, policyConfig);
+      const chosen = chooser(sample.body, policyConfig, { analysis });
+      const modelId = chosen?.id ?? rows[index].model; // 选择器放弃时退回当前路由决策，计数标注
+      if (!chosen) fallbackCount += 1;
+      const model = policyConfig.models.find((m) => m.id === modelId);
+      picks.push({
+        model: modelId,
+        quality: Number(model?.quality?.[analysis.task] ?? model?.quality?.default ?? 0),
+        costIndex: Number(model?.costIndex || 0),
+        latencyIndex: Number(model?.latencyIndex || 0)
+      });
+    });
+    const avg = (f) => Number((picks.reduce((s, p) => s + p[f], 0) / picks.length).toFixed(3));
+    baselines[key] = { label: baselines[key].label, modelDistribution: picks.reduce((acc, p) => ({ ...acc, [p.model]: (acc[p.model] || 0) + 1 }), {}), averageQuality: avg('quality'), averageCostIndex: avg('costIndex'), averageLatencyIndex: avg('latencyIndex'), fallbackCount };
+  }
+  return { rows, distribution, averageQuality: average('quality'), averageCostIndex: average('costIndex'), averageLatencyIndex: average('latencyIndex'), averageCostYuan: average('costYuan'), averageLatencyMs: average('latencyMs'), selfHostedRate: Number((rows.filter((row) => selfIds.has(row.model)).length / rows.length).toFixed(3)), paretoFrontier: paretoFrontier(policyConfig.models).map((m) => m.id), baselines };
 }
 
 function updateHealth(model, ok, latencyMs) {
@@ -425,6 +449,27 @@ const server = http.createServer(async (req, res) => {
     } catch (error) { return errorJson(res, 400, error.message, 'invalid_simulation'); }
   }
   if (req.method === 'GET' && url.pathname === '/admin/api/metrics') return json(res, 200, { counters, health, recent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), sessions: sessions.size });
+  // 分类器标准评测：spawn Python 脚本跑 heldout 集，输出三方（gold/小模型/规则层）准确率与混淆矩阵。
+  // 回答"换分类器后准了多少"——换端点前后各点一次即可对比。评测只读模型文件，不影响线上。
+  if (req.method === 'POST' && url.pathname === '/admin/api/classifier/evaluate') {
+    const script = join(projectRoot, 'scripts', 'evaluate_classifier.py');
+    const venvPython = join(projectRoot, '.venv', 'Scripts', 'python.exe');
+    const pythonCmd = process.env.CLASSIFIER_PYTHON || (existsSync(venvPython) ? venvPython : 'python');
+    const child = spawn(pythonCmd, [script], { cwd: projectRoot, windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => child.kill(), 120000);
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('error', (error) => { clearTimeout(timer); return errorJson(res, 500, `评测脚本启动失败: ${error.message}（检查 CLASSIFIER_PYTHON 环境变量）`, 'classifier_eval_error'); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) return errorJson(res, 500, `评测脚本退出码 ${code}: ${stderr.slice(0, 500)}`, 'classifier_eval_error');
+      try { return json(res, 200, JSON.parse(stdout)); }
+      catch { return errorJson(res, 500, `评测输出不是合法 JSON: ${stdout.slice(0, 300)}`, 'classifier_eval_error'); }
+    });
+    return undefined;
+  }
   if (req.method === 'GET' && url.pathname === '/admin/api/decisions') {
     try {
       const count = Math.max(1, Math.min(2000, Number(url.searchParams.get('count') || 200)));

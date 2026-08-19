@@ -45,7 +45,7 @@ function renderSimulation(result) {
   $('impactSummary').innerHTML = `<article class="impact ${risk}"><span>模型切换</span><strong>${result.changed}/${result.sampleCount}</strong><small>${percentValue(result.changedRate)} 代表任务改变</small></article><article><span>预计质量</span>${metricDelta(c.averageQuality,p.averageQuality)}</article>${(c.averageCostYuan!=null&&p.averageCostYuan!=null)?`<article><span>成本/请求</span>${metricDeltaCost(c.averageCostYuan,p.averageCostYuan,true)}</article>`:`<article><span>成本指数</span>${metricDelta(c.averageCostIndex,p.averageCostIndex,true)}</article>`}${(c.averageLatencyMs!=null&&p.averageLatencyMs!=null)?`<article><span>平均时延</span>${metricDeltaMs(c.averageLatencyMs,p.averageLatencyMs,true)}</article>`:`<article><span>时延指数</span>${metricDelta(c.averageLatencyIndex,p.averageLatencyIndex,true)}</article>`}<article><span>自建比例</span><strong>${percentValue(p.selfHostedRate)}</strong><small>当前 ${percentValue(c.selfHostedRate)}</small></article>`;
   $('impactRows').innerHTML = p.rows.map((row,i) => { const before=c.rows[i], changed=before.model!==row.model; return `<tr><td><strong>${row.label}</strong><br><small>${row.task}</small></td><td>${Math.round(row.complexity*100)} · ${row.tier}</td><td>${before.model}</td><td>${row.model}</td><td><span class="pill ${changed?'bad':'good'}">${changed?'切换':'不变'}</span></td></tr>`; }).join('');
 }
-async function simulate() { if (!config) return; readForm(); const result = await api('/admin/api/simulate',{method:'POST',body:JSON.stringify({proposedConfig:config})}); renderSimulation(result); return result; }
+async function simulate() { if (!config) return; readForm(); const result = await api('/admin/api/simulate',{method:'POST',body:JSON.stringify({proposedConfig:config})}); renderSimulation(result); renderBaselines(); return result; }
 function scheduleSimulation(){ clearTimeout(simulateTimer); simulateTimer=setTimeout(()=>simulate().catch(()=>{}),350); }
 function percent(n,d){ return d ? `${(n/d*100).toFixed(1)}%` : '0.0%'; }
 function renderMetrics(){ const c=metrics.counters; $('total').textContent=c.total; $('autoRate').textContent=percent(c.auto,c.total); const selfIds=new Set(config.models.filter(m=>m.ownership==='self_hosted').map(m=>m.id)); const self=Object.entries(c.selected).filter(([id])=>selfIds.has(id)).reduce((s,[,n])=>s+n,0); $('selfRate').textContent=percent(self,c.success); $('semanticRate').textContent=percent(c.semantic?.disagreed||0,c.semantic?.succeeded||0); $('budgetRate').textContent=metrics.budget?.enabled?percentValue(metrics.budget.pressure):'未启用'; $('fallback').textContent=c.fallback; $('errorRate').textContent=percent(c.errors,c.total); document.querySelectorAll('#models tr').forEach(row=>{const m=config.models[Number(row.dataset.index)],h=metrics.health[m.id],cell=row.querySelector('.health'); cell.innerHTML=!h?'<span class="pill muted">无数据</span>':h.circuitState==='half_open'?'<span class="pill muted">恢复探测</span>':h.circuitOpenUntil>Date.now()?'<span class="pill bad">熔断</span>':`<span class="pill good">${h.ewmaLatencyMs}ms · ${h.failures}错</span>`}); $('recent').innerHTML=metrics.recent.length?metrics.recent.map(x=>`<div class="recent-item"><time>${new Date(x.at).toLocaleTimeString()}</time><div><b>${x.selected}</b> <small>← ${x.requested} · ${x.task} · ${x.routeMethod||'rules'} · 推理${x.reasoningLevel||'off'}${x.fallbackAttempt?` · fallback ${x.fallbackAttempt}`:''}</small></div><span class="pill ${x.ok?'good':'bad'}">${x.ok?`${x.latencyMs}ms`:'失败'}</span></div>`).join(''):'<p class="empty">暂无请求</p>'; }
@@ -78,3 +78,47 @@ function showHelp(help) {
 }
 document.addEventListener('mouseover', (e) => { const help = e.target.closest('.help'); if (help) showHelp(help); });
 document.addEventListener('mouseout', (e) => { if (e.target.closest('.help')) helpTooltip.classList.remove('show'); });
+
+// —— 简单/专家双模式 ——
+// 简单模式隐藏专家区（高级参数折叠区、语义复核细项、模型参数/部署成本表格、单题解释、决策日志开关），
+// 只留预设、运行状态、灰度、预算和影响模拟。专家模式=全量视图。选择存 localStorage。
+const EXPERT_SECTIONS = ['advanced', 'safety-grid', 'model-registry-panel', 'deployment-panel', 'route-preview-panel'];
+function applyView(mode) {
+  const simple = mode === 'simple';
+  document.body.classList.toggle('simple-view', simple);
+  $('btnSimple').classList.toggle('active', simple);
+  $('btnExpert').classList.toggle('active', !simple);
+  localStorage.setItem('routerAdminView', mode);
+}
+$('btnSimple').onclick = () => applyView('simple');
+$('btnExpert').onclick = () => applyView('expert');
+if ($('gotoExpert')) $('gotoExpert').onclick = () => applyView('expert');
+applyView(localStorage.getItem('routerAdminView') || 'expert');
+
+// —— 基线对照渲染（随机基线 / 事后最优，来自 simulate 响应的 baselines 字段）——
+function renderBaselines() {
+  const box = $('baselineRows');
+  if (!box || !lastSimulation?.proposed?.baselines) return;
+  const b = lastSimulation.proposed.baselines;
+  const cur = lastSimulation.proposed;
+  const row = (name, data) => `<article><span>${name}</span><strong>质量 ${data.averageQuality?.toFixed(3) ?? '—'}</strong><small>成本 ${data.averageCostIndex?.toFixed(3) ?? '—'} · 时延 ${data.averageLatencyIndex?.toFixed(3) ?? '—'}</small><small class="muted">${Object.entries(data.modelDistribution || {}).map(([m, n]) => `${m}×${n}`).join(' ')}</small></article>`;
+  box.innerHTML = `<article><span>当前路由</span><strong>质量 ${cur.averageQuality?.toFixed(3) ?? '—'}</strong><small>成本 ${cur.averageCostIndex?.toFixed(3) ?? '—'} · 时延 ${cur.averageLatencyIndex?.toFixed(3) ?? '—'}</small><small class="muted">应落在两个基线之间</small></article>` + row(b.zeroRouter?.label || '随机基线', b.zeroRouter || {}) + row(b.oracle?.label || '事后最优', b.oracle || {}) + `<p class="hint">Pareto 前沿：${(lastSimulation.proposed.paretoFrontier || []).join('、') || '—'}。当前路由质量低于随机基线时，说明任务区分度不足或评分权重失衡，应先调分类/权重而不是加模型。</p>`;
+}
+
+// —— 组件体检：分类器标准评测 ——
+$('evalClassifier').onclick = async () => {
+  const box = $('classifierReport');
+  box.innerHTML = '<p class="empty">评测中（heldout 集 454 条，约几秒）…</p>';
+  try {
+    const r = await api('/admin/api/classifier/evaluate', { method: 'POST' });
+    const matrix = (confusion, labels) => `<table class="mini-matrix"><thead><tr><th>真实＼预测</th>${labels.map((l) => `<th>${l}</th>`).join('')}</tr></thead><tbody>${labels.map((a) => `<tr><th>${a}</th>${labels.map((b) => `<td class="${a === b && confusion[a][b] > 0 ? 'diag' : ''} ${a !== b && confusion[a][b] > 0 ? 'off' : ''}">${confusion[a][b]}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+    const fmtAcc = (v) => `${(v * 100).toFixed(1)}%`;
+    box.innerHTML = `
+      <div class="checkup-grid">
+        <article><span>小模型分类器</span><strong>${fmtAcc(r.classifier.accuracy)}</strong><small>宏F1 ${r.classifier.macroF1.toFixed(4)} · 平均 ${r.classifier.avgInferMs}ms · 训练于 ${r.modelTrainedAt || '—'}</small></article>
+        <article><span>规则层（关键词）</span><strong>${fmtAcc(r.rules.accuracy)}</strong><small>宏F1 ${r.rules.macroF1.toFixed(4)} · 未触发率 ${fmtAcc(r.rules.unmatchedRate)}（落到 default）</small></article>
+        <article><span>两者分歧率</span><strong>${fmtAcc(r.disagreementRate)}</strong><small>标准评测集 ${r.heldoutSize} 条（与训练切分同源）</small></article>
+      </div>
+      <details class="advanced"><summary>混淆矩阵（换分类器前后对比用）</summary><div class="matrix-wrap"><div><h4>小模型</h4>${matrix(r.classifier.confusion, r.labels)}</div><div><h4>规则层</h4>${matrix(r.rules.confusion, r.labels)}</div></div></details>`;
+  } catch (e) { box.innerHTML = `<p class="empty" style="color:#ff7c79">${e.message}</p>`; }
+};

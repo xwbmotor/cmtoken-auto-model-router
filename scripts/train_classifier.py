@@ -30,6 +30,15 @@ X_tr, X_te, t_tr, t_te, tier_tr, tier_te, c_tr, c_te = train_test_split(
     texts, y_task, y_tier, y_cplx, test_size=0.2, random_state=42,
     stratify=[f'{a}|{b}' for a, b in zip(y_task, y_tier)])
 
+# heldout 索引落盘：管理端"评测分类器"用同一 seed 复现切分，保证评测集与训练时完全一致
+import numpy as np
+_idx = np.arange(len(rows))
+_tr_idx, _te_idx = train_test_split(_idx, test_size=0.2, random_state=42,
+                                    stratify=[f'{a}|{b}' for a, b in zip(y_task, y_tier)])
+heldout = [{'index': int(i), 'text': texts[i], 'task': y_task[i], 'tier': y_tier[i], 'complexity': y_cplx[i]} for i in _te_idx]
+(MODEL_DIR / 'heldout.jsonl').write_text('\n'.join(json.dumps(h, ensure_ascii=False) for h in heldout) + '\n', encoding='utf-8')
+print(f'heldout 评测集已落盘 → {MODEL_DIR / "heldout.jsonl"} ({len(heldout)} 条)')
+
 
 def make_featurizer():
     return FeatureUnion([

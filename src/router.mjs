@@ -142,6 +142,47 @@ export function resolveScoreStrategy(config) {
   return { name, fn };
 }
 
+// —— 路由基线（论文标准锚点，用于"换组件值不值"的量化对比）——
+// Zero-Router：把请求随机分给 Pareto 前沿上的模型（CARROT 的必备 sanity check——
+// 路由器打不过它说明评测集缺乏路由信号，而非路由器差）。
+// Pareto 前沿：没有任何模型在成本与时延上同时不劣于它的模型集合。
+export function paretoFrontier(models) {
+  const usable = models.filter((m) => m.enabled !== false && Number.isFinite(Number(m.costIndex)) && Number.isFinite(Number(m.latencyIndex)));
+  return usable.filter((m) => !usable.some((o) => o !== m
+    && Number(o.costIndex) <= Number(m.costIndex) && Number(o.latencyIndex) <= Number(m.latencyIndex)
+    && (Number(o.costIndex) < Number(m.costIndex) || Number(o.latencyIndex) < Number(m.latencyIndex))));
+}
+
+// Oracle：事后最优——逐请求选"满足质量线的最低成本模型"（GraphRouter/MixLLM 评估协议的上界参照）。
+export function oracleChoice(body, config, runtime = {}) {
+  const analysis = runtime.analysisOverride || { ...analyzeRequest(body, config), routeMethod: 'rules' };
+  const eligible = config.models.filter((m) => {
+    if (m.enabled === false) return false;
+    if (m.contextWindow && analysis.estimatedInputTokens > m.contextWindow) return false;
+    return !capabilityEligible(m, analysis.requirements).length;
+  });
+  if (!eligible.length) return null;
+  const qualityOf = (m) => Number(m.quality?.[analysis.task] ?? m.quality.default);
+  const floor = Number(config.routing?.qualityFloor || 0.72);
+  const qualified = eligible.filter((m) => qualityOf(m) >= floor);
+  const pool = qualified.length ? qualified : eligible;
+  pool.sort((a, b) => qualityOf(b) - qualityOf(a) || Number(a.costIndex) - Number(b.costIndex));
+  return pool[0];
+}
+
+// Zero-Router 决策：确定性哈希把同一请求始终分给同一前沿模型（可复现，避免随机抖动干扰对比）
+export function zeroRouterChoice(body, config, runtime = {}) {
+  const front = paretoFrontier(config.models);
+  if (!front.length) return null;
+  const text = requestText(body);
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
+  const model = front[h % front.length];
+  const reasons = [];
+  if (model.capabilities && capabilityEligible(model, runtime.analysis?.requirements || {}).length) return null;
+  return model;
+}
+
 export function routeRequest(body, config, runtime = {}) {
   const analysis = runtime.analysisOverride || { ...analyzeRequest(body, config), routeMethod: 'rules' };
   const now = runtime.now || Date.now();
