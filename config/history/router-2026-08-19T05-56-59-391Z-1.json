@@ -1,0 +1,406 @@
+{
+  "upstreamBaseUrl": "https://maas.gd.chinamobile.com:36007/ai/uifm/open/v1",
+  "routing": {
+    "mode": "active",
+    "activeTrafficPercent": 100,
+    "defaultExplicitModel": "qwen36-35b",
+    "allowExplicitModel": true,
+    "preferSelfHosted": true,
+    "selfHostedBonus": 0.2,
+    "qualityFloor": 0.72,
+    "qualityWeight": 1,
+    "costWeight": 0.22,
+    "latencyWeight": 0.12,
+    "uncertaintyPenalty": 0.08,
+    "complexQualityMargin": 0.04,
+    "scoreStrategy": "weighted",
+    "livePenalty": {
+      "latencyScaleMs": 300000,
+      "latencyMax": 0.2,
+      "errorStep": 0.08,
+      "errorMax": 0.3
+    },
+    "budgetCostMultiplier": 2,
+    "maxAttempts": 3,
+    "requestTimeoutMs": 120000,
+    "circuitBreakerFailures": 3,
+    "circuitBreakerCooldownMs": 30000,
+    "sessionStickinessTtlMs": 1800000,
+    "shadowModel": "qwen36-35b",
+    "taskPreferences": {
+      "extraction": {
+        "model": "qwen36-35b",
+        "tolerance": 0.05
+      },
+      "creative": {
+        "model": "qwen36-35b",
+        "tolerance": 0.05
+      },
+      "simple": {
+        "model": "qwen36-35b",
+        "tolerance": 0.05
+      }
+    }
+  },
+  "semanticRouter": {
+    "enabled": true,
+    "mode": "shadow",
+    "model": "deepseekv4-flash",
+    "confidenceThreshold": 0.7,
+    "minCharacters": 12,
+    "maxInputCharacters": 6000,
+    "maxOutputTokens": 180,
+    "timeoutMs": 3500,
+    "useJsonMode": false,
+    "provider": "http-json",
+    "openaiChat": {
+      "model": "deepseekv4-flash",
+      "timeoutMs": 3500
+    },
+    "httpJson": {
+      "url": "http://127.0.0.1:8788/classify",
+      "timeoutMs": 500
+    }
+  },
+  "reasoningControl": {
+    "enabled": false,
+    "offMaxComplexity": 0.3,
+    "highMinComplexity": 0.78
+  },
+  "budget": {
+    "enabled": false,
+    "dailyBudgetYuan": 0,
+    "degradeThreshold": 0.9,
+    "defaultEstimatedOutputTokens": 800,
+    "timeZone": "Asia/Shanghai",
+    "ledgerPath": "./data/budget-ledger.json",
+    "beansPerYuan": 70,
+    "cacheHitRatio": 0
+  },
+  "calibration": {
+    "enabled": true,
+    "minSamples": 200,
+    "maxFailureRate": 0.05
+  },
+  "taskRules": {
+    "simpleMaxComplexity": 0.34,
+    "complexMinComplexity": 0.7,
+    "longPromptCharacters": 12000
+  },
+  "models": [
+    {
+      "id": "minimax-m25",
+      "displayName": "MiniMax M2.5（自建）",
+      "ownership": "self_hosted",
+      "enabled": false,
+      "contextWindow": 131072,
+      "minimumCompletionTokensForReliableAnswer": 2048,
+      "costIndex": 0.278,
+      "latencyIndex": 1,
+      "avgLatencyMs": 43787,
+      "pricingYuanPerMillionTokens": {
+        "input": 1.05,
+        "inputCached": 0.21,
+        "output": 4.2,
+        "reasoning": 4.2
+      },
+      "performance": {
+        "ttftP50Ms": null,
+        "totalP95Ms": null,
+        "tokensPerSecond": null
+      },
+      "reasoningControl": {
+        "verified": false,
+        "parameter": "reasoning_effort"
+      },
+      "capabilities": {
+        "chat": true,
+        "stream": true,
+        "tools": null,
+        "json": null,
+        "vision": null
+      },
+      "quality": {
+        "default": 0.88,
+        "simple": 0.9,
+        "coding": 0.9,
+        "reasoning": 0.85,
+        "creative": 0.88,
+        "extraction": 0.9
+      },
+      "benchmarkScores": {
+        "scores": {
+          "gpqa_diamond": 0.852,
+          "hle": 0.194,
+          "scicode": 0.444,
+          "aa_lcr": 0.695,
+          "swe_bench": 0.802
+        },
+        "source": "official-model-cards + public leaderboards",
+        "updatedAt": "2026-08-18"
+      },
+      "calibrationStatus": "pilot"
+    },
+    {
+      "id": "hy3-preview",
+      "displayName": "HY3 Preview（自建）",
+      "ownership": "self_hosted",
+      "enabled": true,
+      "contextWindow": 131072,
+      "costIndex": 0.265,
+      "latencyIndex": 0.63,
+      "avgLatencyMs": 27504,
+      "pricingYuanPerMillionTokens": {
+        "input": 1,
+        "inputCached": 0.4,
+        "output": 4,
+        "reasoning": 4
+      },
+      "performance": {
+        "ttftP50Ms": null,
+        "totalP95Ms": null,
+        "tokensPerSecond": null,
+        "ttftMs": 2620
+      },
+      "reasoningControl": {
+        "verified": false,
+        "parameter": "reasoning_effort"
+      },
+      "capabilities": {
+        "chat": true,
+        "stream": true,
+        "tools": null,
+        "json": null,
+        "vision": null
+      },
+      "quality": {
+        "default": 0.81,
+        "simple": 0.88,
+        "coding": 0.92,
+        "reasoning": 0.86,
+        "creative": 0.89,
+        "extraction": 0.9
+      },
+      "benchmarkScores": {
+        "scores": {
+          "swe_bench": 0.46
+        },
+        "evalGate": {
+          "at": "2026-08-18",
+          "judge": "qwen36-35b",
+          "coding": 0.915,
+          "reasoning": 0.864,
+          "creative": 0.892,
+          "extraction": 0.9,
+          "default": 0.805
+        },
+        "source": "official-model-cards + public leaderboards",
+        "updatedAt": "2026-08-18"
+      },
+      "calibrationStatus": "pilot",
+      "deployment": {
+        "deviceType": "910B2",
+        "machines": 2,
+        "cardsPerMachine": 8,
+        "tps": 262.93
+      }
+    },
+    {
+      "id": "deepseekv4-flash",
+      "displayName": "DeepSeek V4 Flash（自建）",
+      "ownership": "self_hosted",
+      "enabled": true,
+      "contextWindow": 131072,
+      "costIndex": 0.113,
+      "latencyIndex": 0.21,
+      "avgLatencyMs": 9099,
+      "pricingYuanPerMillionTokens": {
+        "input": 0.5,
+        "inputCached": 0.1,
+        "output": 1,
+        "reasoning": 1
+      },
+      "performance": {
+        "ttftP50Ms": 956,
+        "totalP95Ms": 3100,
+        "tokensPerSecond": null,
+        "ttftMs": 3790
+      },
+      "reasoningControl": {
+        "verified": false,
+        "parameter": "reasoning_effort"
+      },
+      "capabilities": {
+        "chat": true,
+        "stream": true,
+        "tools": null,
+        "json": null,
+        "vision": null
+      },
+      "quality": {
+        "default": 0.89,
+        "simple": 0.92,
+        "coding": 0.93,
+        "reasoning": 0.84,
+        "creative": 0.88,
+        "extraction": 0.9
+      },
+      "benchmarkScores": {
+        "scores": {
+          "gpqa_diamond": 0.881,
+          "swe_bench": 0.526
+        },
+        "evalGate": {
+          "at": "2026-08-18",
+          "judge": "qwen36-35b",
+          "coding": 0.925,
+          "reasoning": 0.84,
+          "creative": 0.882,
+          "extraction": 0.895,
+          "default": 0.89
+        },
+        "source": "official-model-cards + public leaderboards",
+        "updatedAt": "2026-08-18"
+      },
+      "calibrationStatus": "pilot",
+      "deployment": {
+        "deviceType": "910B2",
+        "machines": 1,
+        "cardsPerMachine": 8,
+        "tps": 412
+      }
+    },
+    {
+      "id": "qwen36-35b",
+      "displayName": "Qwen 36 35B（自建）",
+      "ownership": "self_hosted",
+      "enabled": true,
+      "contextWindow": 131072,
+      "costIndex": 0.272,
+      "latencyIndex": 0.4,
+      "avgLatencyMs": 17282,
+      "pricingYuanPerMillionTokens": {
+        "input": 0.9,
+        "inputCached": 0.9,
+        "output": 5.4,
+        "reasoning": 5.4
+      },
+      "performance": {
+        "ttftP50Ms": null,
+        "totalP95Ms": null,
+        "tokensPerSecond": null
+      },
+      "reasoningControl": {
+        "verified": false,
+        "parameter": "reasoning_effort"
+      },
+      "capabilities": {
+        "chat": true,
+        "stream": true,
+        "tools": null,
+        "json": null,
+        "vision": null
+      },
+      "quality": {
+        "default": 0.86,
+        "simple": 0.91,
+        "coding": 0.77,
+        "reasoning": 0.8,
+        "creative": 0.89,
+        "extraction": 0.92
+      },
+      "benchmarkScores": {
+        "scores": {
+          "gpqa_diamond": 0.86,
+          "swe_bench": 0.734,
+          "livecodebench": 0.804
+        },
+        "evalGate": {
+          "at": "2026-08-18",
+          "judge": "qwen36-35b",
+          "coding": 0.772,
+          "reasoning": 0.8,
+          "creative": 0.89,
+          "extraction": 0.92,
+          "default": 0.855
+        },
+        "source": "official-model-cards + public leaderboards",
+        "updatedAt": "2026-08-18"
+      },
+      "calibrationStatus": "pilot"
+    },
+    {
+      "id": "MiniMax-M3",
+      "displayName": "MiniMax M3（生态）",
+      "ownership": "ecosystem",
+      "enabled": false,
+      "contextWindow": 131072,
+      "costIndex": 1,
+      "latencyIndex": 0.65,
+      "avgLatencyMs": 28462,
+      "pricingYuanPerMillionTokens": {
+        "input": 3.78,
+        "inputCached": 0.756,
+        "output": 15.12,
+        "reasoning": 15.12
+      },
+      "performance": {
+        "ttftP50Ms": null,
+        "totalP95Ms": null,
+        "tokensPerSecond": null
+      },
+      "reasoningControl": {
+        "verified": false,
+        "parameter": "reasoning_effort"
+      },
+      "capabilities": {
+        "chat": true,
+        "stream": true,
+        "tools": null,
+        "json": null,
+        "vision": null
+      },
+      "quality": {
+        "default": 0.9,
+        "simple": 0.9,
+        "coding": 0.88,
+        "reasoning": 0.92,
+        "creative": 0.92,
+        "extraction": 0.88
+      },
+      "benchmarkScores": {
+        "scores": {
+          "swe_bench": 0.59
+        },
+        "source": "official-model-cards + public leaderboards",
+        "updatedAt": "2026-08-18"
+      },
+      "calibrationStatus": "unverified"
+    }
+  ],
+  "decisionLog": {
+    "enabled": true,
+    "dirPath": "./data/decisions",
+    "maxFileBytes": 16777216,
+    "maxFiles": 14,
+    "redactMessages": true
+  },
+  "rateLimit": {
+    "enabled": true,
+    "rpm": 120,
+    "burst": 120
+  },
+  "costModel": {
+    "enabled": true,
+    "source": "pricing",
+    "pricingMix": {
+      "input": 10,
+      "output": 1
+    },
+    "cardPrice": {
+      "910B2": 1,
+      "910B4": 1.5
+    },
+    "note": "costIndex 优先按真实结算价归一（加权单价=输入占比×输入价+输出占比×输出价，构成见 pricingMix，当前 10:1）；deployment 资源估算法保留为备选（source=deployment）。价格口径：厂商目录价5折，以实际结算为准；算力豆口径见 budget.beansPerYuan。部署数据（2026-08 录入，表值均为单实例口径）：dsf=单机8卡 单实例吞吐412、hy3=双机16卡 单实例吞吐262.93、均为910B；Qwen3.8-27B（单机4卡）待上线后录入，M2.5 将下线不录。"
+  }
+}

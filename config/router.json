@@ -376,6 +376,38 @@
         "updatedAt": "2026-08-18"
       },
       "calibrationStatus": "unverified"
+    },
+    {
+      "id": "Qwen3.8-27B",
+      "displayName": "Qwen 3.8 27B（自建）",
+      "ownership": "self_hosted",
+      "enabled": false,
+      "calibrationStatus": "unverified",
+      "quality": {
+        "default": 0.8,
+        "simple": 0.85,
+        "coding": 0.75,
+        "reasoning": 0.78,
+        "creative": 0.82,
+        "extraction": 0.85
+      },
+      "costIndex": 0.5,
+      "latencyIndex": 0.5,
+      "pricingYuanPerMillionTokens": {
+        "input": null,
+        "inputCached": null,
+        "output": null
+      },
+      "performance": {},
+      "capabilities": {
+        "chat": true,
+        "stream": true
+      },
+      "contextWindow": 131072,
+      "reasoningControl": {
+        "parameter": "reasoning_effort",
+        "verified": false
+      }
     }
   ],
   "decisionLog": {
@@ -402,5 +434,6 @@
       "910B4": 1.5
     },
     "note": "costIndex 优先按真实结算价归一（加权单价=输入占比×输入价+输出占比×输出价，构成见 pricingMix，当前 10:1）；deployment 资源估算法保留为备选（source=deployment）。价格口径：厂商目录价5折，以实际结算为准；算力豆口径见 budget.beansPerYuan。部署数据（2026-08 录入，表值均为单实例口径）：dsf=单机8卡 单实例吞吐412、hy3=双机16卡 单实例吞吐262.93、均为910B；Qwen3.8-27B（单机4卡）待上线后录入，M2.5 将下线不录。"
-  }
+  },
+  "version": "0.4.22"
 }
