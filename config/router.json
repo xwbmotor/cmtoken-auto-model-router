@@ -382,14 +382,14 @@
       "displayName": "Qwen 3.8 27B（自建）",
       "ownership": "self_hosted",
       "enabled": false,
-      "calibrationStatus": "unverified",
+      "calibrationStatus": "pilot",
       "quality": {
-        "default": 0.8,
-        "simple": 0.85,
-        "coding": 0.75,
-        "reasoning": 0.78,
-        "creative": 0.82,
-        "extraction": 0.85
+        "default": 0.76,
+        "simple": 0.81,
+        "coding": 0.7,
+        "reasoning": 0.83,
+        "creative": 0.84,
+        "extraction": 0.93
       },
       "costIndex": 0.5,
       "latencyIndex": 0.5,
@@ -407,6 +407,19 @@
       "reasoningControl": {
         "parameter": "reasoning_effort",
         "verified": false
+      },
+      "benchmarkScores": {
+        "evalGate": {
+          "at": "2026-08-19",
+          "judge": "auto",
+          "coding": 0.701,
+          "creative": 0.842,
+          "default": 0.755,
+          "extraction": 0.93,
+          "reasoning": 0.833
+        },
+        "updatedAt": "2026-08-19",
+        "source": "eval-gate-50cases"
       }
     }
   ],
