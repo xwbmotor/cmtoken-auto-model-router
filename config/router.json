@@ -209,7 +209,7 @@
         "source": "eval-gate-50cases-serial-glm53-judge",
         "updatedAt": "2026-08-19"
       },
-      "calibrationStatus": "pilot",
+      "calibrationStatus": "verified",
       "deployment": {
         "deviceType": "910B2",
         "machines": 2,
@@ -275,7 +275,7 @@
         "source": "eval-gate-50cases-serial-glm53-judge",
         "updatedAt": "2026-08-19"
       },
-      "calibrationStatus": "pilot",
+      "calibrationStatus": "verified",
       "deployment": {
         "deviceType": "910B2",
         "machines": 1,
@@ -341,7 +341,7 @@
         "source": "eval-gate-50cases-serial-glm53-judge",
         "updatedAt": "2026-08-19"
       },
-      "calibrationStatus": "pilot"
+      "calibrationStatus": "verified"
     },
     {
       "id": "MiniMax-M3",
@@ -396,7 +396,7 @@
       "displayName": "Qwen 3.8 27B（自建）",
       "ownership": "self_hosted",
       "enabled": true,
-      "calibrationStatus": "pilot",
+      "calibrationStatus": "verified",
       "quality": {
         "default": 0.92,
         "simple": 0.97,

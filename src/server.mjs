@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { extname, join, normalize } from 'node:path';
 import { loadConfig, projectRoot, saveConfig, validateConfig } from './config.mjs';
 import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice } from './router.mjs';
+import { resolveModelScope, scopeIntersectsConfig, scopeAllows, scopeCacheStats } from './model-scope.mjs';
 import { classifySemantically, shouldUseSemanticRouter } from './semantic-router.mjs';
 import { BudgetTracker, estimateCostYuan } from './budget.mjs';
 import { FeedbackLog } from './feedback.mjs';
@@ -377,9 +378,18 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true } =
   });
 }
 
-async function resolveAutoDecision(body, { preview = false } = {}) {
+async function resolveAutoDecision(body, { preview = false, clientAuthHeader = null } = {}) {
   const baseAnalysis = { ...analyzeRequest(body, config), routeMethod: 'rules' };
   const runtime = { health, analysisOverride: baseAnalysis, budgetPressure: budgetTracker.pressure(), ...(preview ? { trafficBucket: 0 } : {}) };
+  // 套餐动态候选池：按客户端 key 解析 v1/models 可用集，交集非空才启用过滤（防命名不匹配全灭），失败回退全量
+  const scope = await resolveModelScope({
+    baseUrl: process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl,
+    apiKey: process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY,
+    authorizationHeader: clientAuthHeader,
+    passthrough: process.env.ROUTER_KEY_MODE === 'passthrough'
+  });
+  const scopeActive = scope && scopeIntersectsConfig(scope, config.models);
+  if (scopeActive) runtime.allowedModelIds = scope;
   const baseDecision = routeRequest(body, config, runtime);
   if (!shouldUseSemanticRouter(baseAnalysis, body, config)) return baseDecision;
   if (!preview) counters.semantic.eligible += 1;
@@ -430,7 +440,7 @@ async function proxyCompletion(req, res) {
   let decision;
   if (auto) {
     counters.auto += 1;
-    try { decision = await resolveAutoDecision(body); }
+    try { decision = await resolveAutoDecision(body, { clientAuthHeader: req.headers.authorization }); }
     catch (error) { counters.errors += 1; return errorJson(res, 503, error.message); }
   } else {
     counters.explicit += 1;

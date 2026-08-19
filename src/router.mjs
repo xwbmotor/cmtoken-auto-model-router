@@ -192,6 +192,8 @@ export function routeRequest(body, config, runtime = {}) {
   for (const model of config.models) {
     const reasons = [];
     if (!model.enabled) reasons.push('disabled');
+    // 套餐动态候选池：客户端 key 的 v1/models 可用集不含该模型 → 该租户无权调用（not_entitled）
+    if (runtime.allowedModelIds && !runtime.allowedModelIds.has(model.id)) reasons.push('not_entitled');
     const circuit = health[model.id]?.circuitOpenUntil || 0;
     if (circuit > now) reasons.push('circuit_open');
     if (model.contextWindow && analysis.estimatedInputTokens > model.contextWindow) reasons.push('context_too_long');
