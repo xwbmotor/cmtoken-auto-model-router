@@ -264,9 +264,16 @@ function upstreamRequestBody(body, model, reasoningLevel) {
   return payload;
 }
 
-async function callUpstream(body, model, signal, reasoningLevel = 'off') {
+// —— 上游 key 模式 ——
+// strict（默认）: 客户端持 ROUTER_ACCESS_KEY，路由器用服务端 MAAS_API_KEY 调上游。
+// passthrough: 客户端的 Authorization 头原样转发 MaaS——供 MaaS 网关分流 model=auto 场景：
+//   同一 URL 同一租户 key 调 auto 与直连模型完全一致，计费/配额自然落到调用方租户。
+async function callUpstream(body, model, signal, reasoningLevel = 'off', clientAuthHeader = null) {
   const base = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl).replace(/\/$/, '');
-  const key = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
+  const passthrough = process.env.ROUTER_KEY_MODE === 'passthrough';
+  let key = passthrough ? clientAuthHeader : (process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY);
+  // passthrough 但客户端没带 key：退回服务端 key（仍可用），只是计费落不到租户
+  if (!key && passthrough) key = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
   if (!key) {
     const error = new Error('尚未设置 MAAS_API_KEY；请使用轮换后的新 Key');
     error.retryable = false;
@@ -274,7 +281,7 @@ async function callUpstream(body, model, signal, reasoningLevel = 'off') {
   }
   return fetch(`${base}/chat/completions`, {
     method: 'POST', signal,
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+    headers: { 'content-type': 'application/json', authorization: passthrough ? key : 'Bearer ' + key },
     body: JSON.stringify(upstreamRequestBody(body, model, reasoningLevel))
   });
 }
@@ -367,7 +374,11 @@ async function resolveAutoDecision(body, { preview = false } = {}) {
 
 async function proxyCompletion(req, res) {
   if (shutdownManager.draining) return errorJson(res, 503, '服务正在下线，请稍后重试', 'server_draining');
-  if (!authorized(req, 'ROUTER_ACCESS_KEY')) return errorJson(res, 401, 'Router API Key 无效', 'authentication_error');
+  // passthrough 模式：客户端持的就是 MaaS key（MaaS 网关分流场景），只要求非空——真伪由上游 401 判定；
+  // strict 模式：客户端必须持 ROUTER_ACCESS_KEY。
+  if (process.env.ROUTER_KEY_MODE === 'passthrough') {
+    if (!req.headers.authorization) return errorJson(res, 401, '缺少 Authorization（请携带 MaaS apikey）', 'authentication_error');
+  } else if (!authorized(req, 'ROUTER_ACCESS_KEY')) return errorJson(res, 401, 'Router API Key 无效', 'authentication_error');
   if (config.rateLimit?.enabled !== false) {
     // 桶 key 用 SHA-256 摘要而非原始 Authorization 头：避免完整凭证滞留内存（heap dump/日志误打暴露面）
     const authKey = req.headers.authorization
@@ -408,7 +419,7 @@ async function proxyCompletion(req, res) {
     if (!claimCircuitAttempt(model)) continue;
     const started = Date.now();
     try {
-      const upstream = await callUpstream(body, model, controller.signal, decision.reasoningLevel);
+      const upstream = await callUpstream(body, model, controller.signal, decision.reasoningLevel, req.headers.authorization);
       const latency = Date.now() - started;
       if (!upstream.ok) {
         const message = (await upstream.text()).slice(0, 2000);
