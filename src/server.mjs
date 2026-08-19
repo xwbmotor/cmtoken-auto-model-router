@@ -95,6 +95,69 @@ function record(entry) {
   if (recent.length > 200) recent.length = 200;
 }
 
+// 切换影响预估：heldout 全量回放。dump=evaluate_classifier.py --dump 的逐条输出
+// （gold/clf/rule 任务标签 + 小模型 confidence/tier/complexity + text 原文）。
+// 三种决策链对比（与 runtime 真实代码路径一致）：
+//   rules-only     ：现状 shadow——路由只看规则层分析
+//   partial-active ：现有 active 模式语义——仅规则置信 < confidenceThreshold（即未命中桶 0.55）时采纳小模型
+//   full-active    ：激进——所有请求都采纳小模型任务标签（需 confidenceThreshold>0.98 才等效）
+// 输出：任务判准率、模型分布、质量/成本均值、误判方向分解（漏判难任务=质量风险 / 多判难任务=成本浪费）。
+function replayHeldout(dump, policyConfig) {
+  // 任务难度序（用于误判方向）：default < creative/extraction < coding/reasoning
+  const taskRank = { default: 0, creative: 1, extraction: 1, coding: 2, reasoning: 2 };
+  const semanticPolicy = { ...policyConfig.semanticRouter, enabled: true, provider: policyConfig.semanticRouter?.provider || 'http-json' };
+  const init = () => ({ taskAcc: 0, count: 0, modelDist: {}, qualitySum: 0, costSum: 0, misread: { underCalled: 0, overCalled: 0, taskSwapped: 0 }, modelShifts: {} });
+  const result = { rules: init(), partial: init(), full: init() };
+  for (const row of dump) {
+    const body = { model: 'auto', messages: [{ role: 'user', content: String(row.text || '') }] };
+    const baseAnalysis = analyzeRequest(body, policyConfig);
+    const baseModel = routeRequest(body, policyConfig, { health: {}, analysisOverride: baseAnalysis, trafficBucket: 0 }).suggestedModel;
+    const semantic = { task: row.clf, tier: row.tier, complexity: row.complexity, confidence: row.confidence, reason: 'replay' };
+    const fullAnalysis = mergeSemanticAssessment(baseAnalysis, semantic, true);
+    const fullModel = routeRequest(body, policyConfig, { health: {}, analysisOverride: fullAnalysis, trafficBucket: 0 }).suggestedModel;
+    // partial：与 runtime active 一致——shouldUseSemanticRouter（规则 conf < threshold 且文本够长）→ 采纳小模型
+    const consulted = shouldUseSemanticRouter(baseAnalysis, body, { ...policyConfig, semanticRouter: semanticPolicy });
+    const adopted = consulted && row.confidence >= 0.5;
+    const partialAnalysis = adopted ? fullAnalysis : baseAnalysis;
+    const partialModel = adopted ? fullModel : baseModel;
+    const q = (modelId) => {
+      const m = policyConfig.models.find((item) => item.id === modelId);
+      return Number(m?.quality?.[row.gold] ?? m?.quality?.default ?? 0);
+    };
+    const c = (modelId) => Number(policyConfig.models.find((item) => item.id === modelId)?.costIndex || 0);
+    const aggRow = (agg, predictedTask, modelId) => {
+      agg.count += 1;
+      agg.taskAcc += predictedTask === row.gold ? 1 : 0;
+      agg.modelDist[modelId] = (agg.modelDist[modelId] || 0) + 1;
+      agg.qualitySum += q(modelId);
+      agg.costSum += c(modelId);
+      if (predictedTask !== row.gold) {
+        const pr = taskRank[predictedTask] ?? 0;
+        const gr = taskRank[row.gold] ?? 0;
+        if (pr < gr) agg.misread.underCalled += 1;       // 漏判难任务 → 质量风险
+        else if (pr > gr) agg.misread.overCalled += 1;    // 多判难任务 → 成本浪费
+        else agg.misread.taskSwapped += 1;                // 同档互错 → 影响小
+      }
+    };
+    aggRow(result.rules, baseAnalysis.task, baseModel);
+    aggRow(result.partial, partialAnalysis.task, partialModel);
+    aggRow(result.full, fullAnalysis.task, fullModel);
+    if (baseModel !== partialModel) {
+      const key = `${baseModel}→${partialModel}`;
+      result.partial.modelShifts[key] = (result.partial.modelShifts[key] || 0) + 1;
+    }
+  }
+  const finalize = (agg) => ({
+    taskAcc: Number((agg.taskAcc / (agg.count || 1)).toFixed(4)),
+    avgQuality: Number((agg.qualitySum / (agg.count || 1)).toFixed(3)),
+    avgCost: Number((agg.costSum / (agg.count || 1)).toFixed(3)),
+    misread: agg.misread,
+    modelDist: agg.modelDist,
+    modelShifts: agg.modelShifts
+  });
+  return { heldoutSize: dump.length, rules: finalize(result.rules), partial: finalize(result.partial), full: finalize(result.full) };
+}
+
 function simulatePolicy(policyConfig) {
   const rows = SIMULATION_SAMPLES.map((sample) => {
     const decision = routeRequest({ model: 'auto', ...sample.body }, policyConfig, { health: {}, trafficBucket: 0 });
@@ -283,6 +346,12 @@ async function resolveAutoDecision(body, { preview = false } = {}) {
   try {
     const result = await classifyAndCompare(body, baseAnalysis, baseDecision, { track: !preview });
     if (config.semanticRouter.mode === 'active') {
+      // 置信度门槛：小模型自己也不确定时（confidence < minConfidence），退回规则层决策，只记观察
+      const minConfidence = Number(config.semanticRouter.minConfidence ?? 0);
+      if (result.assessment.confidence < minConfidence) {
+        counters.semantic.rejectedLowConfidence = (counters.semantic.rejectedLowConfidence || 0) + 1;
+        return { ...baseDecision, semanticReview: { status: 'rejected_low_confidence', ...result.review } };
+      }
       counters.semantic.applied += 1;
       return { ...result.proposed, semanticReview: { status: 'applied', ...result.review } };
     }
@@ -455,7 +524,7 @@ const server = http.createServer(async (req, res) => {
     const script = join(projectRoot, 'scripts', 'evaluate_classifier.py');
     const venvPython = join(projectRoot, '.venv', 'Scripts', 'python.exe');
     const pythonCmd = process.env.CLASSIFIER_PYTHON || (existsSync(venvPython) ? venvPython : 'python');
-    const child = spawn(pythonCmd, [script], { cwd: projectRoot, windowsHide: true });
+    const child = spawn(pythonCmd, [script, ...(url.searchParams.get('dump') === '1' ? ['--dump'] : [])], { cwd: projectRoot, windowsHide: true });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => child.kill(), 120000);
@@ -467,6 +536,28 @@ const server = http.createServer(async (req, res) => {
       if (code !== 0) return errorJson(res, 500, `评测脚本退出码 ${code}: ${stderr.slice(0, 500)}`, 'classifier_eval_error');
       try { return json(res, 200, JSON.parse(stdout)); }
       catch { return errorJson(res, 500, `评测输出不是合法 JSON: ${stdout.slice(0, 300)}`, 'classifier_eval_error'); }
+    });
+    return undefined;
+  }
+  // 切换影响预估：heldout 全量回放。Python dump 逐条小模型预测（gold/clf/rule + confidence/tier/complexity），
+  // Node 侧用真实 routeRequest 对比三种决策链：rules-only（现状 shadow）、partial-active（新）、full-active。
+  // 输出：任务判准率、模型分布变化、成本指数与质量变化、误判方向分解（漏判难任务=质量风险 / 多判难任务=成本浪费）。
+  if (req.method === 'POST' && url.pathname === '/admin/api/classifier/replay') {
+    const script = join(projectRoot, 'scripts', 'evaluate_classifier.py');
+    const venvPython = join(projectRoot, '.venv', 'Scripts', 'python.exe');
+    const pythonCmd = process.env.CLASSIFIER_PYTHON || (existsSync(venvPython) ? venvPython : 'python');
+    const child = spawn(pythonCmd, [script, '--dump'], { cwd: projectRoot, windowsHide: true });
+    let stdout = ''; let stderr = '';
+    const timer = setTimeout(() => child.kill(), 120000);
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('error', (error) => { clearTimeout(timer); return errorJson(res, 500, `回放脚本启动失败: ${error.message}`, 'replay_error'); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) return errorJson(res, 500, `回放脚本退出码 ${code}: ${stderr.slice(0, 500)}`, 'replay_error');
+      let dump;
+      try { dump = JSON.parse(stdout); } catch { return errorJson(res, 500, `回放输出不是合法 JSON: ${stdout.slice(0, 300)}`, 'replay_error'); }
+      try { return json(res, 200, replayHeldout(dump, config)); } catch (error) { return errorJson(res, 500, `回放计算失败: ${error.message}`, 'replay_error'); }
     });
     return undefined;
   }

@@ -5,9 +5,10 @@
   - 小模型  ：data/training/model/*.joblib（线上 http-json 端点同款产物）
   - 规则层  ：复刻 src/router.mjs DEFAULT_TASK_PATTERNS 的关键词正则（与线上规则分类同源）
 输出 JSON 到 stdout（Node 端 spawn 调用），含准确率、宏平均、混淆矩阵、规则层未触发率。
-用法: .venv/Scripts/python.exe scripts/evaluate_classifier.py
+--dump 逐条输出 {index, gold, clf, rule, confidence, tier, complexity}（供 Node 回放路由）。
+用法: .venv/Scripts/python.exe scripts/evaluate_classifier.py [--dump]
 """
-import json, re, time
+import json, re, sys, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -34,17 +35,34 @@ def rule_predict(text: str) -> str:
 
 def main():
     import joblib
+    dump = '--dump' in sys.argv
     rows = [json.loads(l) for l in (MODEL_DIR / 'heldout.jsonl').read_text(encoding='utf-8').splitlines() if l.strip()]
     texts = [r['text'] for r in rows]
     gold = [r['task'] for r in rows]
 
     task_model = joblib.load(MODEL_DIR / 'task.joblib')
+    tier_model = joblib.load(MODEL_DIR / 'tier.joblib')
+    cplx_model = joblib.load(MODEL_DIR / 'complexity.joblib')
     t0 = time.time()
-    clf_pred = list(task_model.predict(texts))
+    clf_task = list(task_model.predict(texts))
+    clf_proba = task_model.predict_proba(texts)
+    classes = list(task_model.classes_)
+    clf_conf = [float(proba[list(classes).index(t)]) for proba, t in zip(clf_proba, clf_task)]
+    clf_tier = list(tier_model.predict(texts))
+    clf_cplx = [float(min(1.0, max(0.0, c))) for c in cplx_model.predict(texts)]
     infer_ms = (time.time() - t0) / len(texts) * 1000
     rule_pred = [rule_predict(t) for t in texts]
 
-    labels = sorted(set(gold) | set(clf_pred) | set(rule_pred))
+    if dump:
+        # 逐条明细：Node 端回放路由用（gold/clf/rule 三方任务标签 + 小模型 confidence/tier/complexity + text 原文）
+        print(json.dumps([
+            {'index': r['index'], 'gold': g, 'clf': c, 'rule': p, 'confidence': round(conf, 3),
+             'tier': tier, 'complexity': round(cplx, 3), 'text': t}
+            for r, g, c, p, conf, tier, cplx, t in zip(rows, gold, clf_task, rule_pred, clf_conf, clf_tier, clf_cplx, texts)
+        ], ensure_ascii=False))
+        return
+
+    labels = sorted(set(gold) | set(clf_task) | set(rule_pred))
 
     def confusion(pred):
         m = {a: {b: 0 for b in labels} for a in labels}
@@ -62,9 +80,9 @@ def main():
             fp = sum(1 for g, p in zip(gold, pred) if g != l and p == l)
             fn = sum(1 for g, p in zip(gold, pred) if g == l and p != l)
             prec = tp / (tp + fp) if tp + fp else 0.0
-            rec = tp / (tp + fn) if tp + fn else 0.0
+            rec = tp / (fn + tp) if tp + fn else 0.0
             f1s.append(2 * prec * rec / (prec + rec) if prec + rec else 0.0)
-        return sum(f1s) / len(f1s)
+        return sum(f1s) / len(labels)
 
     meta = json.loads((MODEL_DIR / 'meta.json').read_text(encoding='utf-8')) if (MODEL_DIR / 'meta.json').exists() else {}
     out = {
@@ -72,9 +90,9 @@ def main():
         'modelTrainedAt': meta.get('trainedAt'),
         'labels': labels,
         'classifier': {
-            'accuracy': round(accuracy(clf_pred), 4),
-            'macroF1': round(macro_f1(clf_pred), 4),
-            'confusion': confusion(clf_pred),
+            'accuracy': round(accuracy(clf_task), 4),
+            'macroF1': round(macro_f1(clf_task), 4),
+            'confusion': confusion(clf_task),
             'avgInferMs': round(infer_ms, 1),
         },
         'rules': {
@@ -83,7 +101,7 @@ def main():
             'confusion': confusion(rule_pred),
             'unmatchedRate': round(sum(1 for p in rule_pred if p == 'default') / len(rule_pred), 4),
         },
-        'disagreementRate': round(sum(1 for a, b in zip(clf_pred, rule_pred) if a != b) / len(rows), 4),
+        'disagreementRate': round(sum(1 for a, b in zip(clf_task, rule_pred) if a != b) / len(rows), 4),
     }
     print(json.dumps(out, ensure_ascii=False, indent=1))
 

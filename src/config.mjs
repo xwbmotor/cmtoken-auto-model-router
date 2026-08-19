@@ -68,6 +68,10 @@ export function validateConfig(config) {
     if (provider === 'openai-chat' && config.semanticRouter.openaiChat?.model && !ids.has(config.semanticRouter.openaiChat.model)) throw new Error('semanticRouter.openaiChat.model 不在模型列表中');
     const threshold = Number(config.semanticRouter.confidenceThreshold);
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) throw new Error('semanticRouter.confidenceThreshold 必须在 0 到 1 之间');
+    if (config.semanticRouter.minConfidence !== undefined) {
+      const minConf = Number(config.semanticRouter.minConfidence);
+      if (!Number.isFinite(minConf) || minConf < 0 || minConf > 1) throw new Error('semanticRouter.minConfidence 必须在 0 到 1 之间（小模型复核结果的采纳门槛，低于此值退回规则层）');
+    }
   }
   if (config.decisionLog) {
     if (typeof config.decisionLog.enabled !== 'boolean') throw new Error('decisionLog.enabled 必须是布尔值');
