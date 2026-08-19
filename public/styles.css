@@ -101,3 +101,20 @@ body:not(.simple-view) .simple-only{display:none!important}
 @media(max-width:900px){header{align-items:flex-start;flex-direction:column}.auth{width:100%;flex-wrap:wrap}.cards{grid-template-columns:repeat(2,1fr)}.policy-grid{grid-template-columns:repeat(2,1fr)}.split{grid-template-columns:1fr}}
 @media(max-width:540px){header,main{padding-left:18px;padding-right:18px}.cards,.policy-grid{grid-template-columns:1fr}.auth label{min-width:100%}}
 @media print{.view-switch,.auth{display:none}}
+
+/* 六维质量分输入：窄列紧凑排布，通用分稍大作主值 */
+#models .qcell{display:grid;grid-template-columns:repeat(2,52px 52px);gap:3px 4px;justify-content:start}
+#models .qcell input{width:52px;padding:3px 4px;font-size:11px;font-variant-numeric:tabular-nums}
+#models .qcell input.quality{font-weight:600}
+
+/* 能力跑分矩阵 */
+.capability-matrix-panel table{table-layout:fixed}
+.capability-matrix-panel th:first-child{width:190px}
+.capability-matrix-panel .cap-cell{display:flex;align-items:center;gap:2px}
+.capability-matrix-panel .cap-cell input{width:58px;padding:3px 4px;font-size:12px;font-variant-numeric:tabular-nums;border:1px solid transparent;background:transparent;text-align:center}
+.capability-matrix-panel .cap-cell input:hover,.capability-matrix-panel .cap-cell input:focus{border-color:#d0d5dd;background:#fff}
+.capability-matrix-panel .cap-cell .cap-best{color:#f59e0b;font-size:11px}
+.capability-matrix-panel .cap-model{display:flex;flex-direction:column}
+.capability-matrix-panel .cap-model small{color:#98a2b3;font-weight:400}
+.capability-matrix-panel .dim{opacity:.45}
+.capability-matrix-panel .cap-input{color:#344054}
