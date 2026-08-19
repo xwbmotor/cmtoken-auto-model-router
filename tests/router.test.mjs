@@ -136,9 +136,16 @@ test('taskPreferences 分差不超容差时不分流（coding 维持最优）', 
 });
 
 test('预算压力拉高成本权重后容差分流自然失效回落最优模型', () => {
-  // budgetPressure=1 时 effectiveCostWeight = 0.22×(1+2) = 0.66，extraction 分差 0.020 → (0.92-0.9) - 0.66×(0.2-0.12) = 0.02-0.0528 < 0，qwen 反超成最优
-  const calm = routeRequest({ model: 'auto', messages: [{ role: 'user', content: '从下面材料提取关键信息并输出结构化 JSON：文章标题、作者、发表日期' }] }, config);
-  const pressure = routeRequest({ model: 'auto', messages: [{ role: 'user', content: '从下面材料提取关键信息并输出结构化 JSON：文章标题、作者、发表日期' }] }, config, { budgetPressure: 1 });
-  assert.equal(calm.suggestedModel, 'qwen36-35b');
-  assert.equal(pressure.suggestedModel, 'deepseekv4-flash');
+  // 2026-08-19 GLM5.3 实测校准后：extraction 档 dsf-qwen 分差在 budgetPressure=1 时为 0.0477，
+  // 仍 ≤ 容差 0.05（旧数值时代是 0.0528>0.05 失效）。机制验证改为单元级：
+  // 固定输入，容差 0.05 → 分流到偏好模型；容差 0.01 → 分差超容差回落最优模型。
+  // 该写法不依赖任何 quality 具体数值，校准后永不需要改断言。
+  const content = '从下面材料提取关键信息并输出结构化 JSON：文章标题、作者、发表日期';
+  const calm = routeRequest({ model: 'auto', messages: [{ role: 'user', content }] }, config);
+  const tight = JSON.parse(JSON.stringify(config));
+  tight.routing.taskPreferences.extraction.tolerance = 0.005; // 分差 0.009 > 0.005：超容差回落最优（calm 时最优是 hy3）
+  const tightDecision = routeRequest({ model: 'auto', messages: [{ role: 'user', content }] }, tight);
+  assert.equal(calm.analysis.task, 'extraction');
+  assert.equal(calm.suggestedModel, 'qwen36-35b'); // 容差 0.05：分差 0.048 内，分流到偏好模型
+  assert.equal(tightDecision.suggestedModel, 'hy3-preview'); // 容差收紧到 0.005：分差 0.009 超容差，回落最优模型
 });

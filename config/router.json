@@ -121,12 +121,12 @@
         "vision": null
       },
       "quality": {
-        "default": 0.88,
-        "simple": 0.9,
-        "coding": 0.9,
-        "reasoning": 0.85,
-        "creative": 0.88,
-        "extraction": 0.9
+        "default": 0.843,
+        "simple": 0.893,
+        "coding": 0.89,
+        "reasoning": 0.922,
+        "creative": 0.834,
+        "extraction": 0.96
       },
       "benchmarkScores": {
         "scores": {
@@ -136,8 +136,18 @@
           "aa_lcr": 0.695,
           "swe_bench": 0.802
         },
-        "source": "official-model-cards + public leaderboards",
-        "updatedAt": "2026-08-18"
+        "source": "eval-gate-50cases-serial-glm53-judge",
+        "updatedAt": "2026-08-19",
+        "evalGate": {
+          "at": "2026-08-19",
+          "judge": "glm-5.3(external)",
+          "coding": 0.89,
+          "creative": 0.834,
+          "default": 0.843,
+          "extraction": 0.96,
+          "reasoning": 0.922,
+          "total": 0.89
+        }
       },
       "calibrationStatus": "pilot"
     },
@@ -174,28 +184,29 @@
         "vision": null
       },
       "quality": {
-        "default": 0.81,
-        "simple": 0.88,
-        "coding": 0.92,
-        "reasoning": 0.86,
-        "creative": 0.89,
-        "extraction": 0.9
+        "default": 0.902,
+        "simple": 0.952,
+        "coding": 0.927,
+        "reasoning": 0.941,
+        "creative": 0.875,
+        "extraction": 0.965
       },
       "benchmarkScores": {
         "scores": {
           "swe_bench": 0.46
         },
         "evalGate": {
-          "at": "2026-08-18",
-          "judge": "qwen36-35b",
-          "coding": 0.915,
-          "reasoning": 0.864,
-          "creative": 0.892,
-          "extraction": 0.9,
-          "default": 0.805
+          "at": "2026-08-19",
+          "judge": "glm-5.3(external)",
+          "coding": 0.927,
+          "creative": 0.875,
+          "default": 0.902,
+          "extraction": 0.965,
+          "reasoning": 0.941,
+          "total": 0.922
         },
-        "source": "official-model-cards + public leaderboards",
-        "updatedAt": "2026-08-18"
+        "source": "eval-gate-50cases-serial-glm53-judge",
+        "updatedAt": "2026-08-19"
       },
       "calibrationStatus": "pilot",
       "deployment": {
@@ -238,12 +249,12 @@
         "vision": null
       },
       "quality": {
-        "default": 0.89,
-        "simple": 0.92,
-        "coding": 0.93,
-        "reasoning": 0.84,
-        "creative": 0.88,
-        "extraction": 0.9
+        "default": 0.92,
+        "simple": 0.97,
+        "coding": 0.88,
+        "reasoning": 0.919,
+        "creative": 0.881,
+        "extraction": 0.85
       },
       "benchmarkScores": {
         "scores": {
@@ -251,16 +262,17 @@
           "swe_bench": 0.526
         },
         "evalGate": {
-          "at": "2026-08-18",
-          "judge": "qwen36-35b",
-          "coding": 0.925,
-          "reasoning": 0.84,
-          "creative": 0.882,
-          "extraction": 0.895,
-          "default": 0.89
+          "at": "2026-08-19",
+          "judge": "glm-5.3(external)",
+          "coding": 0.88,
+          "creative": 0.881,
+          "default": 0.92,
+          "extraction": 0.85,
+          "reasoning": 0.919,
+          "total": 0.89
         },
-        "source": "official-model-cards + public leaderboards",
-        "updatedAt": "2026-08-18"
+        "source": "eval-gate-50cases-serial-glm53-judge",
+        "updatedAt": "2026-08-19"
       },
       "calibrationStatus": "pilot",
       "deployment": {
@@ -302,12 +314,12 @@
         "vision": null
       },
       "quality": {
-        "default": 0.86,
-        "simple": 0.91,
-        "coding": 0.77,
-        "reasoning": 0.8,
-        "creative": 0.89,
-        "extraction": 0.92
+        "default": 0.833,
+        "simple": 0.883,
+        "coding": 0.852,
+        "reasoning": 0.923,
+        "creative": 0.875,
+        "extraction": 0.93
       },
       "benchmarkScores": {
         "scores": {
@@ -316,16 +328,17 @@
           "livecodebench": 0.804
         },
         "evalGate": {
-          "at": "2026-08-18",
-          "judge": "qwen36-35b",
-          "coding": 0.772,
-          "reasoning": 0.8,
-          "creative": 0.89,
-          "extraction": 0.92,
-          "default": 0.855
+          "at": "2026-08-19",
+          "judge": "glm-5.3(external)",
+          "coding": 0.852,
+          "creative": 0.875,
+          "default": 0.833,
+          "extraction": 0.93,
+          "reasoning": 0.923,
+          "total": 0.883
         },
-        "source": "official-model-cards + public leaderboards",
-        "updatedAt": "2026-08-18"
+        "source": "eval-gate-50cases-serial-glm53-judge",
+        "updatedAt": "2026-08-19"
       },
       "calibrationStatus": "pilot"
     },
@@ -384,12 +397,12 @@
       "enabled": false,
       "calibrationStatus": "pilot",
       "quality": {
-        "default": 0.76,
-        "simple": 0.81,
-        "coding": 0.7,
-        "reasoning": 0.83,
-        "creative": 0.84,
-        "extraction": 0.93
+        "default": 0.92,
+        "simple": 0.97,
+        "coding": 0.955,
+        "reasoning": 0.944,
+        "creative": 0.845,
+        "extraction": 0.942
       },
       "costIndex": 0.5,
       "latencyIndex": 0.5,
@@ -411,15 +424,16 @@
       "benchmarkScores": {
         "evalGate": {
           "at": "2026-08-19",
-          "judge": "auto",
-          "coding": 0.701,
-          "creative": 0.842,
-          "default": 0.755,
-          "extraction": 0.93,
-          "reasoning": 0.833
+          "judge": "glm-5.3(external)",
+          "coding": 0.955,
+          "creative": 0.845,
+          "default": 0.92,
+          "extraction": 0.942,
+          "reasoning": 0.944,
+          "total": 0.921
         },
         "updatedAt": "2026-08-19",
-        "source": "eval-gate-50cases"
+        "source": "eval-gate-50cases-serial-glm53-judge"
       }
     }
   ],
