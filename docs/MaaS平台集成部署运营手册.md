@@ -108,7 +108,7 @@ systemctl daemon-reload && systemctl enable --now auto-router
 3. **评分选型**：`score = 质量 − 0.22×成本 − 0.12×时延 − 不确定性 + 自建奖励 − 熔断惩罚`；质量底线（qualityFloor）拦截不达标模型
 4. **故障转移**：首选模型失败按 fallbackOrder 自动换模型重试（最多 maxAttempts 次），熔断器隔离故障模型
 
-**基线对照**（454 条 heldout 回放，管理端「决策支持」面板可实时复测）：
+**基线对照**（454 条 heldout 回放，管理端「调整影响预估」面板（基线对照折叠区）可实时复测）：
 
 | 路由策略 | 质量 | 成本指数 | 结论 |
 |---|---|---|---|
@@ -128,7 +128,7 @@ systemctl daemon-reload && systemctl enable --now auto-router
 
 ### 每周/每月
 
-1. 「决策支持」面板点基线对照：当前质量应落在 Zero 与 Oracle 之间且贴近 Oracle
+1. 「调整影响预估」面板展开基线对照：当前质量应落在 Zero 与 Oracle 之间且贴近 Oracle
 2. 调参前先跑「切换影响预估」：多少任务会换模型、质量/成本怎么变，确认后再发布
 3. 「质量评估」面板：小模型 task 准确率 95.4%/tier 94.1%，低于 90% 触发重训
 4. 下游模型更新（如 Qwen3.8-27B 替换 3.6、M2.5 退网）：录入基准 → eval gate 实测 → replay 预估 → 灰度

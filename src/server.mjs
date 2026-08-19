@@ -679,6 +679,16 @@ const server = http.createServer(async (req, res) => {
     try { config = await loadConfig(); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); return json(res, 200, { ok: true, version: config.version }); }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
   }
+  if (url.pathname === '/manual') {
+    // 使用手册页：读 docs/使用说明.md 渲染（服务启动目录固定，路径穿越已被 normalize 防住）
+    try {
+      const md = await readFile(join(projectRoot, 'docs', '使用说明.md'), 'utf8');
+      const html = await readFile(join(projectRoot, 'public', 'manual.html'), 'utf8');
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(html.replace('__MANUAL_CONTENT__', () => md.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')));
+      return;
+    } catch { return errorJson(res, 404, '手册不存在', 'not_found'); }
+  }
   if (req.method === 'GET' && await staticFile(url.pathname, res)) return;
   return errorJson(res, 404, 'Not Found', 'not_found');
 });
