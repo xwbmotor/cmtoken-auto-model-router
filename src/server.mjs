@@ -24,6 +24,8 @@ let config = await loadConfig();
 const budgetTracker = await BudgetTracker.create(projectRoot, config);
 const decisionLog = await DecisionLog.create(projectRoot, config);
 const rateLimiter = createRateLimiter({ rpm: Number(config.rateLimit?.rpm ?? 120), burst: Number(config.rateLimit?.burst ?? config.rateLimit?.rpm ?? 120) });
+// 管理端鉴权失败专用限流桶：比业务限流严得多（10次/分钟），封暴力破解
+const adminAuthLimiter = createRateLimiter({ rpm: 10, burst: 10 });
 const health = {};
 const sessions = new Map();
 const recent = [];
@@ -478,9 +480,18 @@ const server = http.createServer(async (req, res) => {
   req.requestId = requestId;
   res.setHeader('x-request-id', requestId);
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  res.setHeader('access-control-allow-origin', '*');
-  res.setHeader('access-control-allow-headers', 'authorization,content-type,x-session-id,x-request-id');
-  if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+  // CORS 收紧：仅同源（管理页自身）放行。旧值 '*' 允许任意网页跨域调用管理 API——
+  // 本机绑定+未设 ADMIN_TOKEN 时，浏览器里任意恶意页面可静默读写配置（CSRF/驱动式攻击）。
+  const origin = req.headers.origin;
+  if (origin) {
+    const host = req.headers.host;
+    const sameOrigin = !host || new URL(origin).host === host;
+    if (!sameOrigin) {
+      if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+      return errorJson(res, 403, '跨域请求被拒绝（管理端仅允许同源访问）', 'cors_forbidden');
+    }
+  }
+  if (req.method === 'OPTIONS') { res.setHeader('access-control-allow-headers', 'authorization,content-type,x-session-id,x-request-id'); res.writeHead(204); return res.end(); }
   if (req.method === 'GET' && url.pathname === '/metrics') {
     // Prometheus 抓取端点：默认要求 METRICS_TOKEN（未设置时仅本机绑定可用——见下方 host 判断）
     if (process.env.METRICS_TOKEN && !safeEqual(req.headers.authorization, `Bearer ${process.env.METRICS_TOKEN}`)) return errorJson(res, 401, 'Metrics Token 无效', 'authentication_error');
@@ -497,7 +508,13 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'GET' && url.pathname === '/v1/models') return json(res, 200, { object: 'list', data: [{ id: 'auto', object: 'model', owned_by: 'router' }, ...config.models.filter((m) => m.enabled).map((m) => ({ id: m.id, object: 'model', owned_by: m.ownership }))] });
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') return proxyCompletion(req, res);
-  if (url.pathname.startsWith('/admin/api/') && !authorized(req, 'ADMIN_TOKEN')) return errorJson(res, 401, 'Admin Token 无效', 'authentication_error');
+  if (url.pathname.startsWith('/admin/api/') && !authorized(req, 'ADMIN_TOKEN')) {
+    // 鉴权失败也限流（独立更严的桶）：否则 ADMIN_TOKEN 可被无限暴力破解
+    const failKey = 'admin-auth-fail:' + (req.socket.remoteAddress || 'unknown');
+    const verdict = adminAuthLimiter.check(failKey);
+    if (!verdict.allowed) return json(res, 429, { error: { message: '鉴权失败次数过多，请稍后再试', type: 'rate_limit_exceeded', code: 429 } }, { 'retry-after': String(Math.ceil(verdict.retryAfterMs / 1000)) });
+    return errorJson(res, 401, 'Admin Token 无效', 'authentication_error');
+  }
   if (req.method === 'GET' && url.pathname === '/admin/api/config') return json(res, 200, config);
   if (req.method === 'PUT' && url.pathname === '/admin/api/config') {
     try { config = await saveConfig(await readJson(req)); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); return json(res, 200, config); }
