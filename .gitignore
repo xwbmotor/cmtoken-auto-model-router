@@ -12,3 +12,6 @@ node_modules/
 __pycache__/
 *.pyc
 *.log
+
+# 运行时配置备份（含内网端点，不入库不外发）
+config/history/
