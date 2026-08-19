@@ -136,16 +136,24 @@ test('taskPreferences 分差不超容差时不分流（coding 维持最优）', 
 });
 
 test('预算压力拉高成本权重后容差分流自然失效回落最优模型', () => {
-  // 2026-08-19 GLM5.3 实测校准后：extraction 档 dsf-qwen 分差在 budgetPressure=1 时为 0.0477，
-  // 仍 ≤ 容差 0.05（旧数值时代是 0.0528>0.05 失效）。机制验证改为单元级：
-  // 固定输入，容差 0.05 → 分流到偏好模型；容差 0.01 → 分差超容差回落最优模型。
-  // 该写法不依赖任何 quality 具体数值，校准后永不需要改断言。
+  // 纯合成 2 模型单元级测试（不依赖线上 quality 数值，校准永不需要改断言）：
+  // syn-best 全档 0.95、syn-pref 全档 0.90，其余参数相同 → 任意档分差恒 0.05。
+  // 容差 0.05（≥分差）→ 分流到偏好模型 syn-pref；
+  // 容差 0.001（<分差）→ 偏好失效，回落最优 syn-best。
+  // 预算压力场景由 budgetCostMultiplier 单测覆盖（成本权重放大不改本机制）。
+  const base = config.models.find((m) => m.id === 'qwen36-35b');
+  const synthetic = JSON.parse(JSON.stringify(config));
+  const uniform = (v) => ({ default: v, simple: v, coding: v, reasoning: v, creative: v, extraction: v });
+  synthetic.models = [
+    { ...structuredClone(base), id: 'syn-best', displayName: 'Syn Best', quality: uniform(0.95), costIndex: 0.3, latencyIndex: 0.3 },
+    { ...structuredClone(base), id: 'syn-pref', displayName: 'Syn Pref', quality: uniform(0.90), costIndex: 0.3, latencyIndex: 0.3 },
+  ];
+  synthetic.routing.taskPreferences = { extraction: { model: 'syn-pref', tolerance: 0.05 } };
   const content = '从下面材料提取关键信息并输出结构化 JSON：文章标题、作者、发表日期';
-  const calm = routeRequest({ model: 'auto', messages: [{ role: 'user', content }] }, config);
-  const tight = JSON.parse(JSON.stringify(config));
-  tight.routing.taskPreferences.extraction.tolerance = 0.005; // 分差 0.009 > 0.005：超容差回落最优（calm 时最优是 hy3）
-  const tightDecision = routeRequest({ model: 'auto', messages: [{ role: 'user', content }] }, tight);
-  assert.equal(calm.analysis.task, 'extraction');
-  assert.equal(calm.suggestedModel, 'qwen36-35b'); // 容差 0.05：分差 0.048 内，分流到偏好模型
-  assert.equal(tightDecision.suggestedModel, 'hy3-preview'); // 容差收紧到 0.005：分差 0.009 超容差，回落最优模型
+  const within = routeRequest({ model: 'auto', messages: [{ role: 'user', content }] }, synthetic);
+  assert.equal(within.analysis.task, 'extraction');
+  assert.equal(within.suggestedModel, 'syn-pref'); // 分差 0.05 ≤ 容差 0.05：分流到偏好模型
+  synthetic.routing.taskPreferences.extraction.tolerance = 0.001;
+  const beyond = routeRequest({ model: 'auto', messages: [{ role: 'user', content }] }, synthetic);
+  assert.equal(beyond.suggestedModel, 'syn-best'); // 分差 0.05 > 容差 0.001：回落最优模型
 });
