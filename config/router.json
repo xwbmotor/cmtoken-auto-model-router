@@ -10,7 +10,7 @@
     "qualityFloor": 0.72,
     "qualityWeight": 1,
     "costWeight": 0.22,
-    "latencyWeight": 0.12,
+    "latencyWeight": 0.14,
     "uncertaintyPenalty": 0.08,
     "complexQualityMargin": 0.04,
     "scoreStrategy": "weighted",
@@ -60,7 +60,8 @@
     "httpJson": {
       "url": "http://127.0.0.1:8788/classify",
       "timeoutMs": 500
-    }
+    },
+    "minConfidence": 0
   },
   "reasoningControl": {
     "enabled": false,
@@ -404,7 +405,7 @@
         "creative": 0.845,
         "extraction": 0.942
       },
-      "costIndex": 0.5,
+      "costIndex": 0.272,
       "latencyIndex": 0.5,
       "pricingYuanPerMillionTokens": {
         "input": 0.9,
@@ -412,7 +413,9 @@
         "output": 5.4,
         "reasoning": 5.4
       },
-      "performance": {},
+      "performance": {
+        "totalP95Ms": null
+      },
       "capabilities": {
         "chat": true,
         "stream": true
@@ -463,5 +466,5 @@
     },
     "note": "costIndex 优先按真实结算价归一（加权单价=输入占比×输入价+输出占比×输出价，构成见 pricingMix，当前 10:1）；deployment 资源估算法保留为备选（source=deployment）。价格口径：厂商目录价5折，以实际结算为准；算力豆口径见 budget.beansPerYuan。部署数据（2026-08 录入，表值均为单实例口径）：dsf=单机8卡 单实例吞吐412、hy3=双机16卡 单实例吞吐262.93、均为910B；Qwen3.8-27B（单机4卡）待上线后录入，M2.5 将下线不录。"
   },
-  "version": "0.4.22"
+  "version": "0.4.23"
 }

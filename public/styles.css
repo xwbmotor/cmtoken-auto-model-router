@@ -14,6 +14,10 @@ h2{font-size:16px;margin:2px 0;font-weight:620;letter-spacing:-.2px}
 .eyebrow{margin:0;color:var(--brand);font-size:11px;font-weight:650;letter-spacing:1.1px}
 .subtitle,.hint{color:var(--muted);margin:0;font-size:13px}
 .auth{display:flex;gap:10px;align-items:flex-end}.auth label{min-width:240px}
+/* 手册入口按钮：与页头 secondary 按钮同语言，书形图标用内联 SVG（零依赖） */
+.manual-link{display:inline-flex;align-items:center;gap:7px;align-self:flex-end;padding:8px 14px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--text);font-size:13px;font-weight:570;text-decoration:none;line-height:1;transition:background .12s ease,border-color .12s ease;white-space:nowrap}
+.manual-link:hover{background:#f5f6f8;border-color:#b7bdc7}
+.manual-link svg{width:14px;height:14px;stroke:var(--muted);fill:none;stroke-width:1.8}
 main{max-width:1440px;margin:auto;padding:24px 34px 60px}
 .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px}
 .cards article,.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow)}
