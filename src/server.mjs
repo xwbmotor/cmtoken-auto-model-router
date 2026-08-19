@@ -41,7 +41,9 @@ const SIMULATION_SAMPLES = [
   { id: 'reasoning', label: '复杂推理', body: { messages: [{ role: 'user', content: '比较 Saga、TCC 和本地消息表三种分布式事务方案，从一致性、成本、复杂度和恢复能力给出取舍。' }], max_tokens: 4096 } },
   { id: 'architecture', label: '架构设计', body: { messages: [{ role: 'user', content: '设计一个每秒一万请求的幂等支付回调系统，说明去重、事务、重试、监控、成本和扩容方案。' }], max_tokens: 4096 } },
   { id: 'creative', label: '创意文案', body: { messages: [{ role: 'user', content: '为企业内部 AI 助手写三条简洁宣传语，每条不超过18字。' }], max_tokens: 512 } },
-  { id: 'tools', label: '工具调用', body: { messages: [{ role: 'user', content: '查询订单状态并总结异常原因。' }], tools: [{ type: 'function', function: { name: 'get_order', parameters: { type: 'object' } } }], max_tokens: 512 } }
+  { id: 'tools', label: '工具调用', body: { messages: [{ role: 'user', content: '查询订单状态并总结异常原因。' }], tools: [{ type: 'function', function: { name: 'get_order', parameters: { type: 'object' } } }], max_tokens: 512 } },
+  { id: 'deep-consult', label: '深度咨询', body: { messages: [{ role: 'user', content: '我们是省级运营商，需要为全省 21 个地市的营业厅设计一套智能问答系统的落地方案。请完整回答以下问题：第一，系统架构如何分层，渠道侧、应用侧、模型侧、数据侧各自的职责边界是什么，如何避免重复建设；第二，模型选型上自建与采购如何权衡，涉及成本、数据安全、迭代速度、可控性四个维度，并给出量化依据；第三，知识库建设分几期，每期的目标、范围、验收标准和风险是什么；第四，全省推广的节奏怎么安排，试点、扩容、全面上线三个阶段的准入门槛和退出条件分别是什么；第五，运营保障体系怎么建，包括监控指标、告警阈值、值班响应、故障演练的具体要求。回答必须同时满足：给出明确结论、每条结论有依据、标注关键假设、控制总篇幅在两千字以内。' }], max_tokens: 8192 } },
+  { id: 'code-refactor', label: '代码重构', body: { messages: [{ role: 'user', content: '我们有一个 30 万行的 Java 单体系统，交易核心模块每到大促就出现数据库连接池耗尽和慢 SQL 告警。请做一次完整的重构设计：1）先用三段论分析根因，区分架构问题、代码问题和容量问题，并说明验证方法；2）给出目标架构，要求读写分离、热点数据本地缓存、异步削峰，同时保证分布式事务一致性，说明每种一致性方案（强一致、最终一致、补偿）的适用场景和代价；3）制定分步迁移计划，每一步要可回滚，给出灰度策略和观察指标；4）列出迁移过程中的十大风险及对应预案；5）给出容量估算模型：假设峰值 QPS 从当前 2000 涨到 12000，按读写比 8:2、缓存命中率 90% 目标推演数据库、缓存、应用层的扩容需求。要求所有结论标注置信度。' }], max_tokens: 8192 } }
 ];
 
 if (!['127.0.0.1', 'localhost', '::1'].includes(host) && (!process.env.ADMIN_TOKEN || !process.env.ROUTER_ACCESS_KEY)) {
