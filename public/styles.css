@@ -49,6 +49,7 @@ th{color:var(--muted);font-size:11px;font-weight:600;letter-spacing:.5px;text-tr
 td input[type=number]{width:92px;padding:6px 8px}
 td input[type=checkbox]{width:auto;accent-color:var(--brand)}
 .tag,.pill{display:inline-flex;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}
+[hidden]{display:none!important}/* 作者 display 覆盖浏览器 [hidden] 默认，必须显式赢回，否则徽标常显（dirtyBadge 事故） */
 .tag.self{background:#eef1fe;color:#4a55c0}
 .tag.eco{background:#fffaeb;color:var(--warn)}
 .pill.good{background:#ecfdf3;color:var(--good)}

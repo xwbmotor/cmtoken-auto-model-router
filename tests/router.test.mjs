@@ -128,10 +128,13 @@ test('taskPreferences 容差内分流到指定模型（extraction→qwen）', ()
   assert.match(decision.preference.note, /taskPreferences\[extraction\]/);
 });
 
-test('taskPreferences 分差不超容差时不分流（coding 维持最优）', () => {
+test('taskPreferences 分差不超容差时不分流（无偏好档位维持评分最优）', () => {
   const decision = routeRequest({ model: 'auto', messages: [{ role: 'user', content: '用 Go 实现并发安全的计数器并解释锁的作用' }] }, config);
   assert.equal(decision.analysis.task, 'coding');
-  assert.equal(decision.suggestedModel, 'deepseekv4-flash');
+  // 结构性断言（不绑具体模型 id，校准换最优也不碎）：coding 无 taskPreference 偏好时，
+  // 建议模型 = 候选中评分最高者，且不发生偏好分流。
+  const best = decision.candidates.reduce((a, b) => (b.score > a.score ? b : a));
+  assert.equal(decision.suggestedModel, best.model);
   assert.equal(decision.preference, null);
 });
 

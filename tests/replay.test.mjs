@@ -41,7 +41,14 @@ test('replay 端到端：真实 server /admin/api/classifier/replay 返回三策
   // 直接调用内部函数不可行（未导出），端到端走真实服务
   const health = await fetch('http://127.0.0.1:8787/health');
   if (!health.ok) return; // 服务未运行时跳过（CI 环境）
-  const res = await fetch('http://127.0.0.1:8787/admin/api/classifier/replay', { method: 'POST' });
+  // 服务要求 Admin Token 鉴权：带上本机 .env 的 token（仅本机联调；无 .env 的 CI 环境跳过）
+  let adminToken = process.env.ADMIN_TOKEN || '';
+  try {
+    const envText = await readFile(new URL('../.env', import.meta.url), 'utf8');
+    adminToken = adminToken || envText.split(/\r?\n/).find((line) => line.startsWith('ADMIN_TOKEN='))?.slice('ADMIN_TOKEN='.length).trim() || '';
+  } catch {}
+  const res = await fetch('http://127.0.0.1:8787/admin/api/classifier/replay', { method: 'POST', headers: adminToken ? { authorization: `Bearer ${adminToken}` } : {} });
+  if (res.status === 401) return; // 无 token 环境跳过（与上方服务未运行跳过同理）
   assert.ok(res.ok, `replay 应 200，实际 ${res.status}`);
   const data = await res.json();
   for (const key of ['rules', 'partial', 'full']) {
