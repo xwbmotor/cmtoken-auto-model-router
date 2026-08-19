@@ -175,6 +175,13 @@ systemctl daemon-reload && systemctl enable --now auto-router
 - 教训 2：`calibrationStatus` 枚举只有 `pilot/unverified/verified`（无 pending）——按钮模板已按此修正。
 
 
+
+**测试方法学四坑（2026-08-19 Qwen3.8 案例实录：伪 0.774 → 真 0.921）**：
+1. **裁判必须同一**：不同裁判宽严尺度不可比。基线谁裁的，对比就谁裁。外部强裁判用 `--judge "url=https://api.z.ai/api/coding/paas/v4|model=glm-5.3|key=GLMCODE_API_KEY"`（GLM Coding Plan key 走 coding 端点，通用 paas/v4 会报无资源包）。
+2. **max_tokens 别太紧**：思考型模型 reasoning 烧额度，1024 会导致 content 为空记 0 分。生成 8192 / 裁判 2048。
+3. **裁判失败≠模型 0 分**：裁判 JSON 解析失败要重试并记 null 剔除，不能记在被测模型头上。
+4. **超时=0 分是最大伪影源**：慢模型串行单跑 + `EVAL_GATE_TIMEOUT_MS=300000`；5 路并行会互相挤带宽放大超时。**「某能力项明显退化」先查失败条目明细，再下结论**。
+
 ## 六、还剩什么要做（按优先级）
 
 | 优先级 | 事项 | 说明 |

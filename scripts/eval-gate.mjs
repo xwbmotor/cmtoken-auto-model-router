@@ -43,13 +43,13 @@ function pickJudge(config) {
   return enabled.slice().sort((a, b) => (b.quality?.default || 0) - (a.quality?.default || 0))[0].id;
 }
 
-const TIMEOUT_MS = 90000;
+const TIMEOUT_MS = Number(process.env.EVAL_GATE_TIMEOUT_MS || 90000);
 
 async function generate(base, key, model, prompt) {
   const res = await fetch(`${base}/chat/completions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: 1024 }),
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: 8192 }),
     signal: AbortSignal.timeout(TIMEOUT_MS)
   });
   if (!res.ok) throw new Error(`生成失败 ${model}: HTTP ${res.status} ${(await res.text()).slice(0, 120)}`);
@@ -66,29 +66,45 @@ function clamp01(v) {
 }
 
 async function judge(base, key, judgeModel, task, rubric, output) {
-  const prompt = JUDGE_PROMPT.replace('{task}', task).replace('{rubric}', rubric).replace('{output}', output);
-  const res = await fetch(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model: judgeModel, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: 256 }),
-    signal: AbortSignal.timeout(TIMEOUT_MS)
-  });
-  if (!res.ok) throw new Error(`裁判失败 ${judgeModel}: HTTP ${res.status}`);
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || '';
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) return { score: 0, reason: '裁判未返回 JSON', raw: text.slice(0, 120) };
-  try {
-    const parsed = JSON.parse(match[0]);
-    return { score: clamp01(parsed.score), reason: parsed.reason || '', raw: text.slice(0, 120) };
-  } catch {
-    return { score: 0, reason: '裁判 JSON 解析失败', raw: text.slice(0, 120) };
+  // --judge 支持外部裁判："--judge url=https://...|model=xxx|key=ENV_VAR"，用于引入网关外更强的裁判（如 GLM5.3）
+  let jBase = base, jKey = key, jModel = judgeModel;
+  if (judgeModel.startsWith('url=')) {
+    const parts = judgeModel.split('|');
+    for (const p of parts) {
+      const [k, v] = p.split('=');
+      if (k === 'url') jBase = v.replace(/\/$/, '');
+      else if (k === 'model') jModel = v;
+      else if (k === 'key' && process.env[v]) jKey = process.env[v];
+    }
   }
+  const prompt = JUDGE_PROMPT.replace('{task}', task).replace('{rubric}', rubric).replace('{output}', output);
+  // 裁判失败不能记成被测模型的 0 分（2026-08-19 Qwen3.8 演练教训）：重试 1 次，仍失败记 null 并在汇总中剔除
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const res = await fetch(`${jBase}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${jKey}` },
+      body: JSON.stringify({ model: jModel, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: 2048 }),
+      signal: AbortSignal.timeout(TIMEOUT_MS)
+    });
+    if (!res.ok) { if (attempt === 2) return { score: null, reason: `[裁判失效] HTTP ${res.status}`, raw: '' }; continue; }
+    const data = await res.json();
+    const text = data.choices?.[0]?.message?.content || '';
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) { if (attempt === 2) return { score: null, reason: '[裁判失效] 未返回 JSON', raw: text.slice(0, 120) }; continue; }
+    try {
+      const parsed = JSON.parse(match[0]);
+      return { score: clamp01(parsed.score), reason: parsed.reason || '', raw: text.slice(0, 120) };
+    } catch {
+      if (attempt === 2) return { score: null, reason: '[裁判失效] JSON 解析失败', raw: text.slice(0, 120) };
+    }
+  }
+  return { score: null, reason: '[裁判失效]', raw: '' };
 }
 
 function summarize(results, field) {
   const map = {};
   for (const r of results) {
+    if (r.score == null) continue; // 裁判失效的不计入均分
     const k = r[field] ?? 'unknown';
     (map[k] ||= []).push(r.score);
   }
@@ -97,13 +113,13 @@ function summarize(results, field) {
 
 function printReport(avg, byTask, byModel, results) {
   console.log('\n================ eval gate 报告 ================');
-  console.log(`总均分：${avg.toFixed(3)}（${results.length} 条，成功 ${results.filter((r) => r.model).length} 条）`);
+  console.log(`总均分：${avg.toFixed(3)}（${results.length} 条，有效 ${results.filter((r) => r.score != null).length} 条）`);
   console.log('\n按任务：');
   for (const [task, s] of Object.entries(byTask)) console.log(`  ${task.padEnd(12)} ${String(s.count).padStart(2)} 条  均分 ${s.avg}`);
   console.log('\n按模型：');
   for (const [model, s] of Object.entries(byModel)) console.log(`  ${model.padEnd(18)} ${String(s.count).padStart(2)} 条  均分 ${s.avg}`);
   console.log('\n低分用例（< 0.6）：');
-  const low = results.filter((r) => r.score < 0.6);
+  const low = results.filter((r) => r.score != null && r.score < 0.6);
   if (low.length) for (const r of low) console.log(`  ${r.id} (${r.task}) → ${r.model} → ${r.score.toFixed(2)}：${r.reason}`);
   else console.log('  无');
 }
@@ -141,9 +157,12 @@ async function main() {
     }
   }
 
-  const scores = results.map((r) => r.score);
-  const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const scored = results.filter((r) => r.score != null);
+  const judgeFailed = results.length - scored.length;
+  const scores = scored.map((r) => r.score);
+  const avg = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
   printReport(avg, summarize(results, 'task'), summarize(results, 'model'), results);
+  if (judgeFailed) console.log(`\n⚠️ 裁判失效剔除：${judgeFailed} 条（不计入均分，不算 0）`);
 
   // 落盘报告（默认 data/eval-gate/）
   const outPath = args.out || resolve(projectRoot, 'data', 'eval-gate', `eval-gate-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
