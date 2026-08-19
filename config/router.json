@@ -395,7 +395,7 @@
       "id": "Qwen3.8-27B",
       "displayName": "Qwen 3.8 27B（自建）",
       "ownership": "self_hosted",
-      "enabled": false,
+      "enabled": true,
       "calibrationStatus": "pilot",
       "quality": {
         "default": 0.92,
@@ -406,7 +406,7 @@
         "extraction": 0.942
       },
       "costIndex": 0.272,
-      "latencyIndex": 0.5,
+      "latencyIndex": 0.286,
       "pricingYuanPerMillionTokens": {
         "input": 0.9,
         "inputCached": 0.9,
@@ -438,7 +438,8 @@
         },
         "updatedAt": "2026-08-19",
         "source": "eval-gate-50cases-serial-glm53-judge"
-      }
+      },
+      "avgLatencyMs": 12502
     }
   ],
   "decisionLog": {
