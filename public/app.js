@@ -43,6 +43,45 @@ async function renderTaskBoard() {
     }).join('');
   } catch (e) { rows.innerHTML = `<tr><td colspan="5" class="empty">${e.message}</td></tr>`; }
 }
+// 市场信号状态：飞轮健康度（激活任务数/休眠原因），样本不足时明说「等真实流量」
+async function renderMarketSignal() {
+  const badge = $('marketSignalBadge'); const box = $('marketSignalBox');
+  if (!badge || !box) return;
+  try {
+    const data = await api('/admin/api/market-signal');
+    const st = data.status;
+    badge.style.display = '';
+    if (!st.tasksTracked) {
+      badge.textContent = '市场信号：待数据'; badge.className = 'pill muted';
+      box.hidden = true; return;
+    }
+    badge.textContent = `市场信号：${st.tasksActive}/${st.tasksTracked} 任务激活`;
+    badge.className = 'pill ' + (st.tasksActive ? 'good' : 'muted');
+    if (st.tasksActive) {
+      const lines = Object.entries(data.signals || {}).map(([task, models]) => {
+        const items = Object.entries(models).map(([m, sg]) => {
+          const adj = sg.adjust ? `<span style="color:${sg.adjust > 0 ? 'var(--good,#067647)' : 'var(--danger,#b42318)'};font-weight:600">（${sg.adjust > 0 ? '+' : ''}${sg.adjust}）</span>` : '';
+          const fails = sg.fails ? ` <span style="color:var(--danger,#b42318)">失败${sg.fails}</span>` : '';
+          return `${m} ${sg.share}%${adj}${fails}`;
+        }).join('；');
+        return `<div><strong>${TASK_LABELS[task] || task}</strong>：${items}</div>`;
+      }).join('');
+      box.hidden = false;
+      box.innerHTML = `<p class="hint"><strong>白话版：哪个模型最近跑得好就多派活，跑砸了就少派活。</strong><br>机制：看最近 ${st.windowDays} 天的真实使用（样本太少不动，避免小数据乱调；调整幅度封顶 ±${st.maxAdjust}，只微调不颠覆跑分）。份额领先者加成、失败多者降权、被点名者小幅加成。</p>${lines}`;
+    } else box.hidden = true;
+  } catch { badge.style.display = 'none'; }
+}
+// 路由体检：auto vs 单模型基线（OpenRouter 评测叙事模板）
+async function renderRoutingReport() {
+  const rows = $('reportRows'); const hl = $('reportHighlights');
+  if (!rows) return;
+  rows.innerHTML = '<tr><td colspan="4" class="empty">计算中…</td></tr>';
+  try {
+    const data = await api('/admin/api/routing-report');
+    rows.innerHTML = data.arms.map((a) => `<tr${a.name.startsWith('auto') ? ' style="font-weight:600;background:#f5f6fc"' : ''}><th>${a.name}${a.name.startsWith('auto') ? ' ⭐' : ''}</th><td>${a.quality}</td><td>${a.costIndex}</td><td>${a.latencyIndex}</td></tr>`).join('');
+    hl.innerHTML = (data.highlights || []).map((t) => `<div class="highlight">${t}</div>`).join('');
+  } catch (e) { rows.innerHTML = `<tr><td colspan="4" class="empty">${e.message}</td></tr>`; }
+}
 function updateRangeLabels() { $('trafficValue').textContent = `${$('activeTrafficPercent').value}%`; $('qualityFloorValue').textContent = `≥ ${percentValue($('qualityFloor').value)}`; $('costWeightValue').textContent = sensLabel($('costWeight').value); $('latencyWeightValue').textContent = sensLabel($('latencyWeight').value); $('selfBonusValue').textContent = `+${Number($('selfBonus').value).toFixed(2)}`; $('presetHelp').textContent = PRESETS[document.querySelector('input[name="costTier"]:checked')?.value]?.label || PRESETS.custom.label; }
 // 脏标记：表单与已发布版本不一致时提示「有未发布修改」，避免不知道改没改成
 // diff 驱动而非交互驱动——拖回原值/改了又撤销会自动熄灭；键序无关深比较，server 端规范化重排键也不误报
@@ -140,8 +179,9 @@ async function simulate() { if (!config) return; readForm(); const result = awai
 function scheduleSimulation(){ clearTimeout(simulateTimer); simulateTimer=setTimeout(()=>simulate().catch(()=>{}),350); }
 function percent(n,d){ return d ? `${(n/d*100).toFixed(1)}%` : '0.0%'; }
 function renderMetrics(){ const c=metrics.counters; $('total').textContent=c.total; $('autoRate').textContent=percent(c.auto,c.total); const selfIds=new Set(config.models.filter(m=>m.ownership==='self_hosted').map(m=>m.id)); const self=Object.entries(c.selected).filter(([id])=>selfIds.has(id)).reduce((s,[,n])=>s+n,0); $('selfRate').textContent=percent(self,c.success); $('semanticRate').textContent=percent(c.semantic?.disagreed||0,c.semantic?.succeeded||0); $('budgetRate').textContent=metrics.budget?.enabled?percentValue(metrics.budget.pressure):'未启用'; $('fallback').textContent=c.fallback; $('errorRate').textContent=percent(c.errors,c.total); document.querySelectorAll('#models tr').forEach(row=>{const m=config.models[Number(row.dataset.index)],h=metrics.health[m.id],cell=row.querySelector('.health'); cell.innerHTML=!h?'<span class="pill muted">无数据</span>':h.circuitState==='half_open'?'<span class="pill muted">恢复探测</span>':h.circuitOpenUntil>Date.now()?'<span class="pill bad">熔断</span>':`<span class="pill good">${h.ewmaLatencyMs}ms · ${h.failures}错</span>`}); $('recent').innerHTML=metrics.recent.length?metrics.recent.map(x=>`<div class="recent-item"><time>${new Date(x.at).toLocaleTimeString()}</time><div><b>${x.selected}</b> <small>← ${x.requested} · ${taskCN(x.task)} · ${METHOD_CN[x.routeMethod]||x.routeMethod||'规则'} · 推理${x.reasoningLevel||'off'}${x.fallbackAttempt?` · fallback ${x.fallbackAttempt}`:''}</small></div><span class="pill ${x.ok?'good':'bad'}">${x.ok?`${x.latencyMs}ms`:'失败'}</span></div>`).join(''):'<p class="empty">暂无请求</p>'; }
-async function connect(){ try{sessionStorage.setItem('routerAdminToken',$('token').value); [config,metrics]=await Promise.all([api('/admin/api/config'),api('/admin/api/metrics')]);snapshotBaseline(); $('status').textContent=`已连接 · v${config.version}`; $('status').className='pill good'; renderMetrics(); renderTaskBoard(); await simulate();}catch(error){$('status').textContent='连接失败';$('status').className='pill bad';toast(error.message,true)} }
-$('token').value=sessionStorage.getItem('routerAdminToken')||''; $('connect').onclick=connect; $('refresh').onclick=async()=>{try{metrics=await api('/admin/api/metrics');renderMetrics()}catch(e){toast(e.message,true)}}; $('reload').onclick=()=>{if(!savedConfig)return;config=structuredClone(savedConfig);snapshotBaseline();renderMetrics();simulate();toast('已恢复到当前线上版本')}; $('refreshBoard').onclick = () => renderTaskBoard();
+async function connect(){ try{sessionStorage.setItem('routerAdminToken',$('token').value); [config,metrics]=await Promise.all([api('/admin/api/config'),api('/admin/api/metrics')]);snapshotBaseline(); $('status').textContent=`已连接 · v${config.version}`; $('status').className='pill good'; renderMetrics(); renderTaskBoard(); renderMarketSignal(); await simulate();}catch(error){$('status').textContent='连接失败';$('status').className='pill bad';toast(error.message,true)} }
+$('token').value=sessionStorage.getItem('routerAdminToken')||''; $('connect').onclick=connect; $('refresh').onclick=async()=>{try{metrics=await api('/admin/api/metrics');renderMetrics()}catch(e){toast(e.message,true)}}; $('reload').onclick=()=>{if(!savedConfig)return;config=structuredClone(savedConfig);snapshotBaseline();renderMetrics();simulate();toast('已恢复到当前线上版本')}; $('refreshBoard').onclick = () => { renderTaskBoard(); renderMarketSignal(); };
+$('runReport').onclick = () => renderRoutingReport();
 $('simulate').onclick=()=>simulate().catch(e=>toast(e.message,true));
 document.querySelectorAll('#tierPicker .tier').forEach((el) => el.addEventListener('click', () => {
   const tier = el.dataset.tier; const p = PRESETS[tier];

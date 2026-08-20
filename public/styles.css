@@ -151,3 +151,11 @@ body:not(.simple-view) .simple-only{display:none!important}
 .tier-picker .tier.active strong { color: var(--brand, #5e6ad2); }
 /* 任务榜单 */
 .task-board-panel .pill { margin-left: 4px; }
+
+/* 市场信号状态盒（任务榜单内） */
+.market-signal-box { margin: 0 0 12px; padding: 12px 14px; border: 1px dashed var(--border, #e5e7eb); border-radius: 10px; background: #fafbfc; font-size: 12px; line-height: 1.7; }
+.market-signal-box .hint { margin: 0 0 6px; }
+.market-signal-box strong { color: var(--brand, #5e6ad2); }
+/* 路由体检 */
+.report-highlights { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.report-highlights .highlight { padding: 10px 14px; border-left: 3px solid var(--brand, #5e6ad2); background: #f5f6fc; border-radius: 0 8px 8px 0; font-size: 13px; }

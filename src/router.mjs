@@ -13,6 +13,8 @@ export function costTierBand(config) {
   return COST_TIERS[tier];
 }
 
+// 市场信号：决策日志聚合的活信号（份额/点名/失败率），样本不足自动休眠、幅度有界
+import { adjustFor as marketAdjustFor } from './market-signal-runtime.mjs';
 // 任务分类正则：内置为缺省值；config.taskRules.patterns 提供可覆盖子集（key=任务名，value=字符串数组按 | 合并）
 const DEFAULT_TASK_PATTERNS = {
   coding: /代码|编程|程序|函数|接口|报错|异常|debug|bug|python|java|javascript|typescript|golang|rust|sql|regex|算法|并发|重构|单元测试/i,
@@ -235,12 +237,17 @@ export function routeRequest(body, config, runtime = {}) {
     const budgetCostMultiplier = Number(config.routing.budgetCostMultiplier ?? 2);
     const effectiveCostWeight = config.routing.costWeight * (1 + budgetPressure * budgetCostMultiplier);
     const { fn: scoreFn } = resolveScoreStrategy(config);
-    const score = scoreFn({ model, quality, config, uncertainty, dynamicPenalty, selfBonus, effectiveCostWeight });
+    const baseScore = scoreFn({ model, quality, config, uncertainty, dynamicPenalty, selfBonus, effectiveCostWeight });
+    // 市场信号微调（有界 ±maxAdjust，默认 0.05）：静态跑分是先验，真实使用是后验，两者互补
+    const marketAdjust = marketAdjustFor(config, analysis.task, model.id, runtime);
+    const score = baseScore + marketAdjust;
     candidates.push({
       model: model.id,
       ownership: model.ownership,
       quality,
       score: Number(score.toFixed(4)),
+      baseScore: Number(baseScore.toFixed(4)),
+      marketAdjust: Number(marketAdjust.toFixed(4)),
       qualityQualified: quality >= effectiveQualityFloor,
       effectiveQualityFloor,
       costIndex: model.costIndex,

@@ -15,6 +15,8 @@ import { renderPrometheusMetrics } from './metrics.mjs';
 import { createShutdownManager, installCrashHandlers } from './shutdown.mjs';
 import { createRateLimiter } from './rate-limiter.mjs';
 import { shouldPromoteVerified } from './calibration.mjs';
+import { MarketSignal } from './market-signal.mjs';
+import { registerMarketSignal } from './market-signal-runtime.mjs';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 
 const host = process.env.HOST || '127.0.0.1';
@@ -25,6 +27,12 @@ const serverHeadersTimeoutMs = Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 310
 let config = await loadConfig();
 const budgetTracker = await BudgetTracker.create(projectRoot, config);
 const decisionLog = await DecisionLog.create(projectRoot, config);
+// 市场信号引擎（OpenRouter wisdom-of-market 内网飞轮）：聚合决策日志的份额/点名/失败率，
+// 样本不足自动休眠、幅度有界（±0.05），进程级单例供 router 热路径查询
+const marketSignal = new MarketSignal({ decisionLog });
+marketSignal.updateConfig(config);
+marketSignal.rebuild().catch(() => {});
+registerMarketSignal(marketSignal);
 const feedbackLog = await FeedbackLog.create(projectRoot, config);
 const rateLimiter = createRateLimiter({ rpm: Number(config.rateLimit?.rpm ?? 120), burst: Number(config.rateLimit?.burst ?? config.rateLimit?.rpm ?? 120) });
 // 管理端鉴权失败专用限流桶：比业务限流严得多（10次/分钟），封暴力破解
@@ -319,7 +327,8 @@ function maybePromoteVerified(model) {
   if (!verdict) return;
   modelConfig.calibrationStatus = 'verified';
   logger.info('model_calibrated', { model, samples: verdict.samples, failureRate: verdict.failureRate });
-  saveConfig(config).then((next) => { config = next; }).catch((error) => logger.warn('model_calibrated_save_failed', { model, error: error.message }));
+  saveConfig(config).then((next) => { config = next;
+  if (marketSignal) { marketSignal.updateConfig(config); marketSignal.rebuild().catch(() => {}); } }).catch((error) => logger.warn('model_calibrated_save_failed', { model, error: error.message }));
 }
 
 function sessionModel(req, decision) {
@@ -712,6 +721,48 @@ const server = http.createServer(async (req, res) => {
   }
   // 任务榜单（OpenRouter「task-spend rankings」内网版）：按任务类型聚合决策日志，
   // 每类任务展示首选模型+使用份额+满意度——「大家把流量花在了哪」一目了然。
+  // 路由体检报表（OpenRouter 评测叙事模板的内网版）：同一批代表任务上，
+  // auto 路由 vs 每个单模型固定基线的加权质量/平均成本/平均时延对比——
+  // 「auto 比 X 便宜多少/质量高多少」一句话有数可查。模拟口径（读配置跑分），不调模型、零成本。
+  if (req.method === 'GET' && url.pathname === '/admin/api/routing-report') {
+    const rows = SIMULATION_SAMPLES.map((sample) => {
+      const decision = routeRequest(sample.body, config, { health, preview: true });
+      return { sample: sample.id, task: decision.analysis.task, model: decision.selectedModel,
+        quality: decision.candidates[0]?.quality ?? 0,
+        costIndex: decision.candidates[0]?.costIndex ?? 0, latencyIndex: decision.candidates[0]?.latencyIndex ?? 0 };
+    });
+    const enabled = config.models.filter((m) => m.enabled !== false);
+    const estimate = (modelId) => {
+      const m = enabled.find((x) => x.id === modelId);
+      return rows.map((r) => {
+        const q = Number(m?.quality?.[r.task] ?? m?.quality?.default ?? 0);
+        return { quality: q, costIndex: Number(m?.costIndex ?? 0), latencyIndex: Number(m?.latencyIndex ?? 0) };
+      });
+    };
+    const avg = (xs) => xs.reduce((a, b) => a + b, 0) / (xs.length || 1);
+    const auto = { name: 'auto 路由', rows: rows.map((r) => ({ quality: r.quality, costIndex: r.costIndex, latencyIndex: r.latencyIndex })) };
+    const baselines = enabled.map((m) => ({ name: `固定 ${m.displayName || m.id}`, rows: estimate(m.id) }));
+    const summarize = (arm) => {
+      const q = avg(arm.rows.map((r) => r.quality));
+      const c = avg(arm.rows.map((r) => r.costIndex));
+      const l = avg(arm.rows.map((r) => r.latencyIndex));
+      return { name: arm.name, quality: Number(q.toFixed(3)), costIndex: Number(c.toFixed(3)), latencyIndex: Number(l.toFixed(3)) };
+    };
+    const arms = [auto, ...baselines].map(summarize);
+    const base = arms.find((a) => a.name.startsWith('auto'));
+    // 金句生成：auto vs 最强单模型 / auto vs 最便宜单模型
+    const strongest = arms.filter((a) => a !== base).sort((a, b) => b.quality - a.quality)[0];
+    const cheapest = arms.filter((a) => a !== base).sort((a, b) => a.costIndex - b.costIndex)[0];
+    const highlights = [];
+    if (strongest) highlights.push(`对比最强单模型 ${strongest.name}：质量 ${base.quality} vs ${strongest.quality}（${base.quality >= strongest.quality ? '+' : ''}${(base.quality - strongest.quality).toFixed(3)}），成本指数 ${base.costIndex} vs ${strongest.costIndex}（省 ${(((strongest.costIndex - base.costIndex) / (strongest.costIndex || 1)) * 100).toFixed(0)}%）`);
+    if (cheapest) highlights.push(`对比最便宜单模型 ${cheapest.name}：成本接近（${base.costIndex} vs ${cheapest.costIndex}），质量 ${base.quality} vs ${cheapest.quality}（${base.quality >= cheapest.quality ? '高' : '低'} ${Math.abs(base.quality - cheapest.quality).toFixed(3)}）`);
+    return json(res, 200, { sampleCount: rows.length, arms, highlights, perSample: rows });
+  }
+  // 市场信号状态：各任务的信号覆盖（激活/休眠）与每模型的份额/调整值——飞轮健康度一览
+  if (req.method === 'GET' && url.pathname === '/admin/api/market-signal') {
+    marketSignal.rebuild().catch(() => {});
+    return json(res, 200, { status: marketSignal.status(), signals: marketSignal.signals });
+  }
   if (req.method === 'GET' && url.pathname === '/admin/api/task-board') {
     const recent = await decisionLog.recent(2000).catch(() => []);
     const byTask = {};
