@@ -139,3 +139,15 @@ body:not(.simple-view) .simple-only{display:none!important}
 #models input[type="checkbox"].enabled:checked::after { left: 18px; }
 #models input[type="checkbox"].enabled:focus-visible { outline: 2px solid #129150; outline-offset: 2px; }
 #capRows tr.enabled-row .cap-status { margin-left: 6px; }
+
+/* 成本档位选择器（OpenRouter cost_tier 式四档段控件） */
+.tier-picker { display: flex; gap: 8px; flex-wrap: wrap; }
+.tier-picker .tier { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; cursor: pointer; background: #fff; min-width: 128px; transition: border-color .15s, box-shadow .15s; }
+.tier-picker .tier:hover { border-color: #9fb3c8; }
+.tier-picker .tier.active { border-color: var(--brand, #5e6ad2); box-shadow: 0 0 0 3px rgba(94, 106, 210, .15); background: #f5f6fc; }
+.tier-picker .tier input { display: none; }
+.tier-picker .tier strong { font-size: 13px; }
+.tier-picker .tier small { color: var(--muted, #6b7280); font-size: 11px; line-height: 1.4; }
+.tier-picker .tier.active strong { color: var(--brand, #5e6ad2); }
+/* 任务榜单 */
+.task-board-panel .pill { margin-left: 4px; }

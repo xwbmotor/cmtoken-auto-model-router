@@ -582,6 +582,8 @@ async function proxyCompletion(req, res) {
         'cache-control': 'no-cache',
         'x-router-selected-model': model,
         'x-router-suggested-model': decision.suggestedModel,
+        'x-router-task': decision.analysis?.task || '',
+        'x-router-cost-tier': config.routing?.costTier || 'custom',
         'x-router-policy-version': String(config.version),
         'x-router-shadow': String(decision.shadow),
         'x-router-reasoning-level': decision.reasoningLevel,
@@ -707,6 +709,30 @@ const server = http.createServer(async (req, res) => {
       if (!result.ok) return errorJson(res, 400, result.error, 'invalid_feedback');
       return json(res, 200, { ok: true });
     } catch (error) { return errorJson(res, 400, error.message, 'invalid_feedback'); }
+  }
+  // 任务榜单（OpenRouter「task-spend rankings」内网版）：按任务类型聚合决策日志，
+  // 每类任务展示首选模型+使用份额+满意度——「大家把流量花在了哪」一目了然。
+  if (req.method === 'GET' && url.pathname === '/admin/api/task-board') {
+    const recent = await decisionLog.recent(2000).catch(() => []);
+    const byTask = {};
+    for (const entry of recent) {
+      const task = entry?.decision?.analysis?.task || 'unknown';
+      const model = entry?.decision?.selectedModel || entry?.decision?.suggestedModel;
+      if (!model) continue;
+      const slot = byTask[task] ||= { task, total: 0, models: {}, fails: {} };
+      slot.total += 1;
+      slot.models[model] = (slot.models[model] || 0) + 1;
+      if (entry?.outcome?.ok === false) slot.fails[model] = (slot.fails[model] || 0) + 1;
+    }
+    const board = Object.values(byTask).map((slot) => ({
+      task: slot.task,
+      total: slot.total,
+      picks: Object.entries(slot.models)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([model, count]) => ({ model, share: Number(((count / slot.total) * 100).toFixed(1)), fails: slot.fails[model] || 0 }))
+    })).sort((a, b) => b.total - a.total);
+    return json(res, 200, { window: 'recent 2000 decisions', board });
   }
   if (req.method === 'GET' && url.pathname === '/admin/api/metrics') return json(res, 200, { counters, health, recent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: sessions.size });
   // 分类器标准评测：spawn Python 脚本跑 heldout 集，输出三方（gold/小模型/规则层）准确率与混淆矩阵。

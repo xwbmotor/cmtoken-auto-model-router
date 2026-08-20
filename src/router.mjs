@@ -1,3 +1,18 @@
+// 成本档位带定义：档位=[min,max]（基于 costIndex 0~1，锚点=池内最贵模型单价）。
+// 语义档位（OpenRouter cost_tier 思路）：预算/均衡/质量/顶配——带内双向过滤，
+// 高档位同样排除过于便宜的模型（band 不是 ceiling）。null=未启用档位（兼容旧配置）。
+const COST_TIERS = {
+  budget:  { label: '省钱', min: 0,    max: 0.2 },
+  balanced:{ label: '均衡', min: 0,    max: 0.5 },
+  quality: { label: '质量', min: 0.15, max: 1 },
+  max:     { label: '顶配', min: 0.3,  max: 1 }
+};
+export function costTierBand(config) {
+  const tier = config.routing?.costTier;
+  if (!tier || !COST_TIERS[tier]) return null;
+  return COST_TIERS[tier];
+}
+
 // 任务分类正则：内置为缺省值；config.taskRules.patterns 提供可覆盖子集（key=任务名，value=字符串数组按 | 合并）
 const DEFAULT_TASK_PATTERNS = {
   coding: /代码|编程|程序|函数|接口|报错|异常|debug|bug|python|java|javascript|typescript|golang|rust|sql|regex|算法|并发|重构|单元测试/i,
@@ -200,6 +215,13 @@ export function routeRequest(body, config, runtime = {}) {
     const requestedCompletionTokens = Number(body.max_completion_tokens || body.max_tokens || 0);
     if (requestedCompletionTokens > 0 && model.minimumCompletionTokensForReliableAnswer
       && requestedCompletionTokens < model.minimumCompletionTokensForReliableAnswer) reasons.push('completion_budget_too_low');
+    // 成本档位带（OpenRouter cost_tier 语义）：tier 是「带」不是「上限」——
+    // 高档位排除过于便宜的模型（防止低端拉低质量），低档位排除超出预算带的模型。
+    const tierBand = costTierBand(config);
+    if (tierBand) {
+      if (model.costIndex < tierBand.min) reasons.push('below_cost_tier');
+      else if (model.costIndex > tierBand.max) reasons.push('above_cost_tier');
+    }
     reasons.push(...capabilityEligible(model, analysis.requirements).map((x) => `missing_${x}`));
     if (reasons.length) { rejected.push({ model: model.id, reasons }); continue; }
 
