@@ -850,9 +850,14 @@ function subCategoryOf(task, subTask) {
   }
   // 小模型端点连通测试：对配置的 http-json 端点发一条真实探测请求，验证「地址通/协议对/返回合法」
   if (req.method === 'POST' && url.pathname === '/admin/api/semantic/probe') {
+    // url_ 提升到 try 外：catch 里也要回显目标地址（块级作用域会让 catch 读不到 try 内的 const）
+    let url_ = '';
     try {
       const body = await readJson(req);
-      const url_ = String(body.url || '').trim();
+      // 不传 url 时探测当前生效端点（env SEMANTIC_CLASSIFIER_URL > config）；传了则探测指定地址（改地址后先验再存）
+      const config = await loadConfig();
+      const effective = process.env.SEMANTIC_CLASSIFIER_URL || config.semanticRouter?.httpJson?.url || '';
+      url_ = String(body.url || effective).trim();
       if (!/^https?:\/\//.test(url_)) return errorJson(res, 400, '端点地址必须以 http:// 或 https:// 开头', 'bad_url');
       const started = Date.now();
       const probeBody = { text: '把"商品破损申请退款"分类为售前、售后或咨询，只返回标签。' };
@@ -861,7 +866,7 @@ function subCategoryOf(task, subTask) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(probeBody),
         signal: AbortSignal.timeout(8000)
-      });
+      }).catch((e) => { throw Object.assign(e, { stage: 'network' }); });
       const text = await response.text();
       const latencyMs = Date.now() - started;
       if (!response.ok) return json(res, 200, { ok: false, stage: 'http', latencyMs, httpStatus: response.status, message: `HTTP ${response.status}：${text.slice(0, 200)}` });
@@ -869,10 +874,10 @@ function subCategoryOf(task, subTask) {
       try { parsed = JSON.parse(text); } catch { return json(res, 200, { ok: false, stage: 'json', latencyMs, httpStatus: response.status, message: `返回不是 JSON：${text.slice(0, 200)}` }); }
       const missing = ['task', 'tier', 'complexity', 'confidence'].filter((k) => !(k in parsed));
       if (missing.length) return json(res, 200, { ok: false, stage: 'schema', latencyMs, httpStatus: response.status, message: `缺少字段：${missing.join('、')}（要求 {task,tier,complexity,confidence,reason}）`, sample: text.slice(0, 200) });
-      return json(res, 200, { ok: true, stage: 'ok', latencyMs, httpStatus: 200, assessment: parsed });
+      return json(res, 200, { ok: true, stage: 'ok', latencyMs, httpStatus: 200, probedUrl: url_, assessment: parsed });
     } catch (error) {
       const timeout = String(error).includes('Timeout') || String(error).includes('abort');
-      return json(res, 200, { ok: false, stage: timeout ? 'timeout' : 'network', message: timeout ? '8 秒内无响应（连接超时）' : `网络不通：${error.message}` });
+      return json(res, 200, { ok: false, stage: timeout ? 'timeout' : 'network', probedUrl: url_, message: timeout ? '8 秒内无响应（连接超时）' : `网络不通：${error.message}` });
     }
   }
   if (req.method === 'GET' && url.pathname === '/admin/api/task-board') {
@@ -969,9 +974,10 @@ function subCategoryOf(task, subTask) {
     try {
       const md = await readFile(join(projectRoot, 'docs', '使用说明.md'), 'utf8');
       const tpl = await readFile(join(projectRoot, 'public', 'manual.html'), 'utf8');
-      // markdown → HTML：给 h2/h3 加 id 便于 TOC 锚点；body 内的 " 等无需转义（它已是 DOM 内容）
-      const body = renderMarkdown(md).replace(/<(h[23])>([^<]+)<\/>/g, (_, t, txt) => {
-        const id = 'sec-' + txt.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40) + '-' + Math.random().toString(36).slice(2,6);
+      // markdown → HTML：给 h2/h3 加 id 便于 TOC 锚点（id 由标题文本生成，双语稳定）
+      let seq = 0;
+      const body = renderMarkdown(md).replace(/<(h[23])>([^<]+)<\/h[23]>/g, (_, t, txt) => {
+        const id = 'sec-' + txt.replace(/<[^>]+>/g, '').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40) + '-' + (seq++);
         return '<' + t + ' id="' + id + '">' + txt + '</' + t + '>';
       });
       const html = tpl

@@ -222,6 +222,8 @@ body:not(.simple-view) .simple-only{display:none!important}
 
 /* 帮助（手册）tab：让 iframe 自管滚动，外层不参与 */
 .tab-page#help > .panel { display: flex; flex-direction: column; }
+/* 质量复核 tab：配置区与体检区分置两个面板，间隔拉开避免误读为一个区块 */
+.tab-page[data-tab="semantic"] > .panel { margin-bottom: 26px; }
 .tab-page#help iframe { flex: 1; }
 
 /* ── 业务策略分区 + 只读锁 ── */
@@ -232,6 +234,9 @@ body:not(.simple-view) .simple-only{display:none!important}
 .probe-result { margin-top: 12px; padding: 12px 14px; border-radius: 8px; font-size: 13px; line-height: 1.6; }
 .probe-result.ok { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
 .probe-result.bad { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+/* 连通性自检：按钮+提示与左侧标签对齐，紧贴端点地址所在分区 */
+.probe-inline > span:last-child { display: flex; flex-direction: column; gap: 4px; }
+.probe-inline button { align-self: stretch; height: 34px; }
 /* 手册直嵌（替代 iframe） */
 .manual-inline { display: block; }
 .manual-inline .manual-toc { position: sticky; top: 8px; }

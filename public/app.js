@@ -176,6 +176,13 @@ if ($('gotoPolicy')) $('gotoPolicy').onclick = () => applyTab('policy');
 if ($('gotoInsights')) $('gotoInsights').onclick = () => applyTab('insights');
 // 手册直嵌（不再 iframe）：拉预渲染页，用 Shadow DOM 隔离样式（手册的全局选择器不污染管理页），
 // 目录 TOC 由这里手动生成（DOMParser 不执行页面脚本）。
+function manualLegacyCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch { }
+  document.body.removeChild(ta); return ok;
+}
 async function loadManual() {
   const host = $('manualInline'); if (!host || host.dataset.loaded) return;
   try {
@@ -205,6 +212,11 @@ async function loadManual() {
         const a = document.createElement('a');
         a.href = '#' + h.id; a.textContent = h.textContent;
         if (h.tagName === 'H3') a.style.paddingLeft = '30px';
+        // Shadow DOM 内 href="#..." 的原生锚点跳转不生效（不穿透 shadow root）——手动滚动
+        a.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
         toc.appendChild(a);
       });
       // 滚动高亮（监听管理页窗口滚动，按视口位置点亮当前节）
@@ -212,11 +224,27 @@ async function loadManual() {
       const onScroll = () => {
         let cur = null;
         heads.forEach((h) => { if (h.getBoundingClientRect().top < 100) cur = h.id; });
-        links.forEach((a) => { a.className = a.getAttribute('href') === '#' + cur ? 'active' : ''; });
+        links.forEach((a) => a.className = a.getAttribute('href') === '#' + cur ? 'active' : '');
       };
       window.addEventListener('scroll', onScroll, { passive: true });
       onScroll();
     }
+    // 代码块复制按钮（同 /manual 独立页；clipboard 失败退回 execCommand）
+    shadow.querySelectorAll('pre').forEach((pre) => {
+      const btn = document.createElement('button');
+      btn.className = 'copy-btn'; btn.type = 'button'; btn.textContent = '复制';
+      btn.addEventListener('click', () => {
+        const text = pre.querySelector('code') ? pre.querySelector('code').textContent : pre.textContent;
+        const done = (ok) => {
+          btn.textContent = ok ? '已复制 ✓' : '复制失败';
+          btn.classList.toggle('copied', ok);
+          setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1600);
+        };
+        if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => done(true), () => done(manualLegacyCopy(text)));
+        else done(manualLegacyCopy(text));
+      });
+      pre.appendChild(btn);
+    });
     host.dataset.loaded = '1';
   } catch (e) { host.innerHTML = '<p class="empty">手册加载失败：' + escHtml(e.message) + ' <a href="/manual" target="_blank" rel="noopener">在新窗口打开</a></p>'; }
 }
@@ -313,14 +341,15 @@ $('token').value=sessionStorage.getItem('routerAdminToken')||''; $('connect').on
 if ($('probeSemantic')) $('probeSemantic').onclick = async () => {
   const url = $('semanticHttpUrl')?.value?.trim();
   const box = $('semanticProbeResult');
-  if (!url) { box.hidden = false; box.className = 'probe-result bad'; box.innerHTML = '请先填写小模型端点地址。'; return; }
   box.hidden = false; box.className = 'probe-result'; box.textContent = '正在探测…';
   try {
-    const r = await api('/admin/api/semantic/probe', { method: 'POST', body: JSON.stringify({ url }) });
-    if (r.ok) { box.className = 'probe-result ok'; box.innerHTML = `✅ 连通正常（${r.latencyMs}ms）——小模型返回：<code>${escHtml(JSON.stringify(r.assessment))}</code>，接口协议对得上。`; }
+    // 不传 url 时由服务端探测当前生效端点（env 覆盖 config 的场景也不会测错对象）；填了则先验再存
+    const r = await api('/admin/api/semantic/probe', { method: 'POST', body: JSON.stringify(url ? { url } : {}) });
+    const target = url || r.probedUrl || '';
+    if (r.ok) { box.className = 'probe-result ok'; box.innerHTML = `✅ <code>${escHtml(target)}</code> 连通正常（${r.latencyMs}ms）——小模型返回：<code>${escHtml(JSON.stringify(r.assessment))}</code>，接口协议对得上。`; }
     else {
       const stageText = { http: '端点有响应但返回了错误状态', json: '端点通了，但返回的不是 JSON', schema: 'JSON 通了，但缺少约定字段', network: '网络不通（地址或端口错误）', timeout: '8 秒内无响应' }[r.stage] || '探测失败';
-      box.className = 'probe-result bad'; box.innerHTML = `❌ ${stageText}：<br>${escHtml(r.message || '')}`;
+      box.className = 'probe-result bad'; box.innerHTML = `❌ ${stageText}（目标：<code>${escHtml(target)}</code>）：<br>${escHtml(r.message || '')}<br><small>本机开发需先启动 scripts/serve_classifier.bat（:8788）；compose 部署由 depends_on 自动拉起。</small>`;
     }
   } catch (e) { box.className = 'probe-result bad'; box.textContent = '探测请求失败：' + e.message; }
 };
