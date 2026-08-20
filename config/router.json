@@ -90,134 +90,6 @@
   },
   "models": [
     {
-      "id": "minimax-m25",
-      "displayName": "MiniMax M2.5（自建）",
-      "ownership": "self_hosted",
-      "enabled": false,
-      "contextWindow": 131072,
-      "minimumCompletionTokensForReliableAnswer": 2048,
-      "costIndex": 0.278,
-      "latencyIndex": 1,
-      "avgLatencyMs": 43787,
-      "pricingYuanPerMillionTokens": {
-        "input": 1.05,
-        "inputCached": 0.21,
-        "output": 4.2,
-        "reasoning": 4.2
-      },
-      "performance": {
-        "ttftP50Ms": null,
-        "totalP95Ms": null,
-        "tokensPerSecond": null
-      },
-      "reasoningControl": {
-        "verified": false,
-        "parameter": "reasoning_effort"
-      },
-      "capabilities": {
-        "chat": true,
-        "stream": true,
-        "tools": null,
-        "json": null,
-        "vision": null
-      },
-      "quality": {
-        "default": 0.843,
-        "simple": 0.893,
-        "coding": 0.89,
-        "reasoning": 0.922,
-        "creative": 0.834,
-        "extraction": 0.96
-      },
-      "benchmarkScores": {
-        "scores": {
-          "gpqa_diamond": 0.852,
-          "hle": 0.194,
-          "scicode": 0.444,
-          "aa_lcr": 0.695,
-          "swe_bench": 0.802
-        },
-        "source": "eval-gate-50cases-serial-glm53-judge",
-        "updatedAt": "2026-08-19",
-        "evalGate": {
-          "at": "2026-08-19",
-          "judge": "glm-5.3(external)",
-          "coding": 0.89,
-          "creative": 0.834,
-          "default": 0.843,
-          "extraction": 0.96,
-          "reasoning": 0.922,
-          "total": 0.89
-        }
-      },
-      "calibrationStatus": "pilot"
-    },
-    {
-      "id": "hy3-preview",
-      "displayName": "HY3 Preview（自建）",
-      "ownership": "self_hosted",
-      "enabled": true,
-      "contextWindow": 131072,
-      "costIndex": 0.265,
-      "latencyIndex": 0.63,
-      "avgLatencyMs": 27504,
-      "pricingYuanPerMillionTokens": {
-        "input": 1,
-        "inputCached": 0.4,
-        "output": 4,
-        "reasoning": 4
-      },
-      "performance": {
-        "ttftP50Ms": null,
-        "totalP95Ms": null,
-        "tokensPerSecond": null,
-        "ttftMs": 2620
-      },
-      "reasoningControl": {
-        "verified": false,
-        "parameter": "reasoning_effort"
-      },
-      "capabilities": {
-        "chat": true,
-        "stream": true,
-        "tools": null,
-        "json": null,
-        "vision": null
-      },
-      "quality": {
-        "default": 0.902,
-        "simple": 0.952,
-        "coding": 0.927,
-        "reasoning": 0.941,
-        "creative": 0.875,
-        "extraction": 0.965
-      },
-      "benchmarkScores": {
-        "scores": {
-          "swe_bench": 0.46
-        },
-        "evalGate": {
-          "at": "2026-08-19",
-          "judge": "glm-5.3(external)",
-          "coding": 0.927,
-          "creative": 0.875,
-          "default": 0.902,
-          "extraction": 0.965,
-          "reasoning": 0.941,
-          "total": 0.922
-        },
-        "source": "eval-gate-50cases-serial-glm53-judge",
-        "updatedAt": "2026-08-19"
-      },
-      "calibrationStatus": "verified",
-      "deployment": {
-        "deviceType": "910B2",
-        "machines": 2,
-        "cardsPerMachine": 8,
-        "tps": 262.93
-      }
-    },
-    {
       "id": "deepseekv4-flash",
       "displayName": "DeepSeek V4 Flash（自建）",
       "ownership": "self_hosted",
@@ -278,8 +150,10 @@
       "calibrationStatus": "verified",
       "deployment": {
         "deviceType": "910B2",
-        "machines": 1,
-        "cardsPerMachine": 8,
+        "machines": 12,
+        "instances": 12,
+        "concurrencyPerInstance": 15,
+        "totalConcurrency": 180,
         "tps": 412
       }
     },
@@ -341,55 +215,15 @@
         "source": "eval-gate-50cases-serial-glm53-judge",
         "updatedAt": "2026-08-19"
       },
-      "calibrationStatus": "verified"
-    },
-    {
-      "id": "MiniMax-M3",
-      "displayName": "MiniMax M3（生态）",
-      "ownership": "ecosystem",
-      "enabled": false,
-      "contextWindow": 131072,
-      "costIndex": 1,
-      "latencyIndex": 0.65,
-      "avgLatencyMs": 28462,
-      "pricingYuanPerMillionTokens": {
-        "input": 3.78,
-        "inputCached": 0.756,
-        "output": 15.12,
-        "reasoning": 15.12
-      },
-      "performance": {
-        "ttftP50Ms": null,
-        "totalP95Ms": null,
-        "tokensPerSecond": null
-      },
-      "reasoningControl": {
-        "verified": false,
-        "parameter": "reasoning_effort"
-      },
-      "capabilities": {
-        "chat": true,
-        "stream": true,
-        "tools": null,
-        "json": null,
-        "vision": null
-      },
-      "quality": {
-        "default": 0.9,
-        "simple": 0.9,
-        "coding": 0.88,
-        "reasoning": 0.92,
-        "creative": 0.92,
-        "extraction": 0.88
-      },
-      "benchmarkScores": {
-        "scores": {
-          "swe_bench": 0.59
-        },
-        "source": "official-model-cards + public leaderboards",
-        "updatedAt": "2026-08-18"
-      },
-      "calibrationStatus": "unverified"
+      "calibrationStatus": "verified",
+      "deployment": {
+        "deviceType": "910B2",
+        "machines": 2,
+        "instances": 4,
+        "concurrencyPerInstance": 45,
+        "totalConcurrency": 180,
+        "tps": 520
+      }
     },
     {
       "id": "Qwen3.8-27B",
@@ -439,7 +273,15 @@
         "updatedAt": "2026-08-19",
         "source": "eval-gate-50cases-serial-glm53-judge"
       },
-      "avgLatencyMs": 12502
+      "avgLatencyMs": 12502,
+      "deployment": {
+        "deviceType": "910B2",
+        "machines": 10,
+        "instances": 20,
+        "concurrencyPerInstance": 15,
+        "totalConcurrency": 300,
+        "tps": 300
+      }
     }
   ],
   "decisionLog": {
@@ -465,7 +307,8 @@
       "910B2": 1,
       "910B4": 1.5
     },
-    "note": "costIndex 优先按真实结算价归一（加权单价=输入占比×输入价+输出占比×输出价，构成见 pricingMix，当前 10:1）；deployment 资源估算法保留为备选（source=deployment）。价格口径：厂商目录价5折，以实际结算为准；算力豆口径见 budget.beansPerYuan。部署数据（2026-08 录入，表值均为单实例口径）：dsf=单机8卡 单实例吞吐412、hy3=双机16卡 单实例吞吐262.93、均为910B；Qwen3.8-27B（单机4卡）待上线后录入，M2.5 将下线不录。"
+    "note": "costIndex 优先按真实结算价归一（加权单价=输入占比×输入价+输出占比×输出价，构成见 pricingMix，当前 10:1）；deployment 资源估算法保留为备选（source=deployment）。价格口径：厂商目录价5折，以实际结算为准；算力豆口径见 budget.beansPerYuan。部署数据（2026-08 录入，表值均为单实例口径）：dsf=单机8卡 单实例吞吐412、hy3=双机16卡 单实例吞吐262.93、均为910B；Qwen3.8-27B（单机4卡）待上线后录入，M2.5 将下线不录。",
+    "pricingAnchorYuan": 4.811
   },
   "version": "0.4.24"
 }

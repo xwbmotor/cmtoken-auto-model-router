@@ -131,3 +131,11 @@ body:not(.simple-view) .simple-only{display:none!important}
 .sens-card p { font-size: 12px; color: #5c6470; margin: 0; line-height: 1.5; }
 .sens-card p b { color: #1f2429; }
 .sens-why { font-size: 12px; color: #8a5524; background: #fff8ef; border: 1px dashed #e8cfa5; border-radius: 6px; padding: 6px 8px; margin: 0; line-height: 1.5; }
+
+/* 启用开关（模型参数表第一列）：明显可辨的 toggle */
+#models input[type="checkbox"].enabled { appearance: none; width: 36px; height: 20px; border-radius: 10px; background: #cfd4dc; position: relative; cursor: pointer; transition: background .15s; vertical-align: middle; }
+#models input[type="checkbox"].enabled::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: left .15s; }
+#models input[type="checkbox"].enabled:checked { background: #129150; }
+#models input[type="checkbox"].enabled:checked::after { left: 18px; }
+#models input[type="checkbox"].enabled:focus-visible { outline: 2px solid #129150; outline-offset: 2px; }
+#capRows tr.enabled-row .cap-status { margin-left: 6px; }

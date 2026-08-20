@@ -37,6 +37,9 @@ export function validateConfig(config) {
       if (d.machines !== undefined && (!Number.isInteger(Number(d.machines)) || Number(d.machines) < 1)) throw new Error(`模型 ${model.id} deployment.machines 必须是正整数`);
       if (d.cardsPerMachine !== undefined && (!Number.isInteger(Number(d.cardsPerMachine)) || Number(d.cardsPerMachine) < 1)) throw new Error(`模型 ${model.id} deployment.cardsPerMachine 必须是正整数`);
       if (d.tps !== undefined && (!Number.isFinite(Number(d.tps)) || Number(d.tps) <= 0)) throw new Error(`模型 ${model.id} deployment.tps 必须是正数`);
+      if (d.instances !== undefined && (!Number.isInteger(Number(d.instances)) || Number(d.instances) < 1)) throw new Error(`模型 ${model.id} deployment.instances 必须是正整数`);
+      if (d.concurrencyPerInstance !== undefined && d.concurrencyPerInstance !== null && (!Number.isInteger(Number(d.concurrencyPerInstance)) || Number(d.concurrencyPerInstance) < 1)) throw new Error(`模型 ${model.id} deployment.concurrencyPerInstance 必须是正整数`);
+      if (d.totalConcurrency !== undefined && d.totalConcurrency !== null && (!Number.isInteger(Number(d.totalConcurrency)) || Number(d.totalConcurrency) < 1)) throw new Error(`模型 ${model.id} deployment.totalConcurrency 必须是正整数`);
     }
   }
   if (!config.routing || !['active', 'shadow'].includes(config.routing.mode)) throw new Error('routing.mode 必须是 active 或 shadow');
@@ -149,9 +152,14 @@ export function computeCostIndexFromPricing(models, costModel) {
     costs.push({ id: model.id, unitCost: weighted });
   }
   if (costs.length < 2) return null;
-  const max = Math.max(...costs.map((c) => c.unitCost));
+  // 归一化锚点：优先用 costModel.pricingAnchorYuan 固定基准（默认 4.811，
+  // = 历史最贵 MiniMax-M3 的加权单价，保持删模型/换池子时成本指数语义不漂移）；
+  // 未配置时回退池内最贵（旧行为，仅兼容）。
+  const anchor = Number(costModel?.pricingAnchorYuan) > 0 ? Number(costModel.pricingAnchorYuan)
+    : Math.max(...costs.map((c) => c.unitCost));
+  if (!(anchor > 0)) return null;
   const result = {};
-  for (const c of costs) result[c.id] = Number((c.unitCost / max).toFixed(3));
+  for (const c of costs) result[c.id] = Number(Math.min(1, (c.unitCost / anchor)).toFixed(3));
   return result;
 }
 

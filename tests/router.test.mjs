@@ -33,9 +33,9 @@ test('rejects a model that explicitly lacks a required capability', () => {
 });
 
 test('shadow mode records suggestion but sends configured shadow model', () => {
-  const custom = structuredClone(config); custom.routing.mode = 'shadow'; custom.routing.shadowModel = 'minimax-m25';
+  const custom = structuredClone(config); custom.routing.mode = 'shadow'; custom.routing.shadowModel = 'Qwen3.8-27B';
   const decision = routeRequest({ messages: [{ role: 'user', content: '提取姓名并输出 JSON' }] }, custom);
-  assert.equal(decision.selectedModel, 'minimax-m25');
+  assert.equal(decision.selectedModel, 'Qwen3.8-27B');
   assert.equal(decision.shadow, true);
   assert.ok(decision.suggestedModel);
 });
@@ -47,8 +47,10 @@ test('open circuit removes model from candidates', () => {
 });
 
 test('rejects a reasoning model when completion budget is known to be insufficient', () => {
-  const decision = routeRequest({ messages: [{ role: 'user', content: '分析一个复杂问题' }], max_tokens: 512 }, config);
-  assert.ok(decision.rejected.some((x) => x.model === 'minimax-m25' && x.reasons.includes('completion_budget_too_low')));
+  const custom = structuredClone(config); // 合成注入门槛：不依赖某个线上模型恰好配置了该字段
+  custom.models.find((m) => m.id === 'Qwen3.8-27B').minimumCompletionTokensForReliableAnswer = 4096;
+  const decision = routeRequest({ messages: [{ role: 'user', content: '分析一个复杂问题' }], max_tokens: 512 }, custom);
+  assert.ok(decision.rejected.some((x) => x.model === 'Qwen3.8-27B' && x.reasons.includes('completion_budget_too_low')));
 });
 
 test('recognizes common Chinese reasoning and creative expressions', () => {
