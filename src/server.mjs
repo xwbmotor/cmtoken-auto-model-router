@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { extname, join, normalize } from 'node:path';
 import { loadConfig, projectRoot, saveConfig, validateConfig } from './config.mjs';
-import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice } from './router.mjs';
+import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice, recommendReasoningLevel } from './router.mjs';
 import { resolveModelScope, scopeIntersectsConfig, scopeAllows, scopeCacheStats } from './model-scope.mjs';
 import { classifySemantically, shouldUseSemanticRouter } from './semantic-router.mjs';
 import { BudgetTracker, estimateCostYuan } from './budget.mjs';
@@ -401,9 +401,25 @@ function upstreamRequestBody(body, model, reasoningLevel) {
   if (config.reasoningControl?.enabled && modelConfig?.reasoningControl?.verified) {
     const parameter = modelConfig.reasoningControl.parameter || 'reasoning_effort';
     const values = modelConfig.reasoningControl.values || { off: 'low', standard: 'medium', high: 'high' };
-    payload[parameter] = values[reasoningLevel] || values.standard;
+    // 尊重客户端显式意图：客户端已传同名参数（含点路径叶子）就不覆盖
+    const parts = String(parameter).split('.');
+    let node = payload; let clientSet = true;
+    for (const part of parts) { if (node?.[part] === undefined) { clientSet = false; break; } node = node[part]; }
+    if (!clientSet) setDeepParameter(payload, parameter, values[reasoningLevel] ?? values.standard);
   }
   return payload;
+}
+
+// 点路径参数注入（如 "chat_template_kwargs.enable_thinking" → body.chat_template_kwargs.enable_thinking）。
+// 只覆盖叶子值，不整棵替换客户端已传的同名子对象（其他键保留）。
+function setDeepParameter(payload, dottedPath, value) {
+  const parts = String(dottedPath).split('.');
+  let node = payload;
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    if (!node[parts[i]] || typeof node[parts[i]] !== 'object') node[parts[i]] = {};
+    node = node[parts[i]];
+  }
+  node[parts.at(-1)] = value;
 }
 
 // —— 上游 key 模式 ——
@@ -586,9 +602,23 @@ async function proxyCompletion(req, res) {
     const model = config.models.find((x) => x.id === body.model && x.enabled);
     if (!config.routing.allowExplicitModel) return errorJson(res, 403, '当前策略不允许显式选择模型');
     if (!model) return errorJson(res, 400, `模型不存在或未启用: ${body.model}`, 'invalid_request_error');
-    decision = { requestedModel: body.model, selectedModel: body.model, suggestedModel: body.model, shadow: false, analysis: { task: 'explicit', tier: 'explicit', complexity: 0, routeMethod: 'explicit' }, reasoningLevel: 'off', candidates: [], rejected: [], fallbackOrder: [body.model], configVersion: config.version };
+    // explicit：reasoningLevel 不再硬编码 off——按请求本身复杂度定档（点名思考型模型问复杂问题应保留思考）
+    const explicitAnalysis = analyzeRequest(body, config);
+    const explicitLevel = recommendReasoningLevel(explicitAnalysis, config);
+    decision = { requestedModel: body.model, selectedModel: body.model, suggestedModel: body.model, shadow: false, analysis: { ...explicitAnalysis, task: 'explicit', tier: 'explicit', routeMethod: 'explicit' }, reasoningLevel: explicitLevel, candidates: [], rejected: [], fallbackOrder: [body.model], configVersion: config.version };
   }
   decision.selectedModel = sessionModel(req, decision);
+  // 思考预算守卫：选中的是思考型模型但客户端给的 max_tokens 低于其安全下限时强制关思考——
+  // 否则思考与正文共享预算，思考烧完 content 为空（finish=length）；保住正文输出优先于深度思考
+  const selectedModelConfig = config.models.find((item) => item.id === decision.selectedModel);
+  if (decision.reasoningLevel !== 'off' && selectedModelConfig?.reasoningControl?.verified) {
+    const requestedCompletionTokens = Number(body.max_completion_tokens || body.max_tokens || 0);
+    const minForThinking = Number(selectedModelConfig.minimumCompletionTokensForReliableAnswer || 0);
+    if (requestedCompletionTokens > 0 && minForThinking > 0 && requestedCompletionTokens < minForThinking) {
+      decision.reasoningLevel = 'off';
+      decision.reasoningGuard = `思考预算不足（${requestedCompletionTokens} < ${minForThinking}）：已强制关闭思考保正文输出`;
+    }
+  }
   counters.suggested[decision.suggestedModel] = (counters.suggested[decision.suggestedModel] || 0) + 1;
   counters.task[decision.analysis.task] = (counters.task[decision.analysis.task] || 0) + 1;
   const fallback = decision.fallbackOrder.filter((m) => m !== decision.selectedModel);

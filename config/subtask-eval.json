@@ -1,0 +1,198 @@
+{
+  "updatedAt": "2026-08-20",
+  "note": "CODE 大类粒度验证用例集：4 小类（debugging / code-generation / code-review / sql-database）各 8 条，共 32 条。用途：判断路由打分层 coding 单档是否足够，还是需要按小类拆档。判定规则：同模型跨小类分差 <0.1 → 单档足够；≥0.1 → 该小类值得拆档。用例均为内网真实业务风格。",
+  "cases": [
+    {
+      "id": "dbg-01",
+      "sub": "debugging",
+      "prompt": "我们的 ETL 脚本上线三个月一直正常，昨晚突然报错退出，traceback 如下，请定位根因并给出修复方案：\n\nTraceback (most recent call last):\n  File \"etl_sync.py\", line 87, in <module>\n    main()\n  File \"etl_sync.py\", line 61, in main\n    record = transform(raw)\n  File \"etl_sync.py\", line 42, in transform\n    return {\"city\": raw[\"city\"].strip(), \"amount\": float(raw[\"amount\"])}\nKeyError: 'city'\n\n上游数据源昨晚刚做过一次字段调整（发过变更通知但没人看）。",
+      "rubric": "指出根因是上游字段变更导致 city 键缺失（KeyError 只是表象）；修复方案应包含防御性读取（get/默认值）+ 数据源契约校验，最好提到加告警或 dry-run 预检。"
+    },
+    {
+      "id": "dbg-02",
+      "sub": "debugging",
+      "prompt": "Spring Boot 服务启动失败，关键日志：\n\norg.springframework.beans.factory.NoSuchBeanDefinitionException: No qualifying bean of type 'com.cm.order.service.PaymentService' available\n\tat org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor$AutowiredFieldElement.resolveFieldValue(...)\n\nPaymentService 接口有且仅有一个实现类 PaymentServiceImpl，标注了 @Service，包在 com.cm.order.service.impl 下。主类标注 @SpringBootApplication 位于 com.cm.order。请列出最可能的 3 个原因和逐一排查的方法。",
+      "rubric": "至少给出：①实现类被条件注解(@Profile/@ConditionalOnProperty)跳过②包扫描没覆盖(impl 子包不在扫描路径或组件被排除)③存在同名冲突/bean 未编译进 classpath。每个原因配具体排查命令或验证方法（如查启动日志的 bean 报告、检查 @ComponentScan）。"
+    },
+    {
+      "id": "dbg-03",
+      "sub": "debugging",
+      "prompt": "前端页面偶发白屏，Sentry 上报：\n\nTypeError: Cannot read properties of undefined (reading 'map')\n    at OrderList (OrderList.jsx:23)\n\nOrderList.jsx 第 23 行是：{orders.map(o => <Row key={o.id} {...o} />)}\norders 来自 props，由父组件 fetch('/api/orders') 后 setState 传入。请分析为什么是「偶发」而不是必现，给出最小修复和根治方案。",
+      "rubric": "指出偶发原因：接口异常/慢时序下 orders 为 undefined（初始 state 未定义或请求失败分支没兜底）；最小修复是初始值设为 [] 或 (orders||[])；根治是统一接口错误处理 + loading/error 状态分离 + 类型约束。"
+    },
+    {
+      "id": "dbg-04",
+      "sub": "debugging",
+      "prompt": "Go 写的 HTTP 转发服务，压测时 p99 从 50ms 涨到 8s，goroutine 数持续增长不回落。handler 大致逻辑：\n\nfunc handler(w http.ResponseWriter, r *http.Request) {\n    resp, err := http.Get(upstream)\n    if err != nil { w.WriteHeader(502); return }\n    io.Copy(w, resp.Body)\n}\n\n请定位泄漏点，解释机制，并给出修复代码。",
+      "rubric": "指出 resp.Body 没有 Close：连接无法复用、协程阻塞在读 body 导致堆积；修复是在使用完后 defer/显式 resp.Body.Close()（注意 io.Copy 后关闭）；最好提到复用 http.Client 传输层。"
+    },
+    {
+      "id": "dbg-05",
+      "sub": "debugging",
+      "prompt": "一条 PostgreSQL 查询上周还在 200ms 内，这周变成 40s+。EXPLAIN 关键输出：\n\nSeq Scan on orders  (cost=0.00..987654.00 rows=312)\n  Filter: ((status = 'PAID') AND (created_at >= '2026-07-01'))\n\n表 8000 万行，status 和 created_at 上分别有单列索引。请解释为什么优化器选了全表扫描，以及如何让查询回到索引。",
+      "rubric": "解释单列索引选择性不足/优化器估算行数偏差导致放弃索引；方案：建 (status, created_at) 复合索引（顺序有讲究：等值列在前）；可补充 ANALYZE 更新统计信息、或 partial index where status='PAID'。"
+    },
+    {
+      "id": "dbg-06",
+      "sub": "debugging",
+      "prompt": "容器化 Python 服务每隔两三天被杀一次重启，事件：\n\nLast State: Terminated, Reason: OOMKilled, Exit Code: 137\n\n容器 memory limit 512Mi，进程 RSS 平时 300Mi 但加载大表后会冲到 600Mi。pandas 读 CSV 的代码：\ndf = pd.read_csv(path)。文件最大约 2GB。请给出 3 层解法：立即止血、代码层优化、架构层调整。",
+      "rubric": "立即：调大 limit 或加 swap（说明只是缓解）；代码：read_csv 分块 chunksize/只读需要的列 usecols/dtype 降精度、或用 polars/数据库导入代替；架构：改流式处理或拆分文件、加内存监控告警。三层齐全且各自正确。"
+    },
+    {
+      "id": "dbg-07",
+      "sub": "debugging",
+      "prompt": "Nginx 反向代理的站点每几小时出现一批 502，持续 1-2 分钟自愈。error.log 片段：\n\nupstream prematurely closed connection while reading response header\nconnect() failed (111: Connection refused) while connecting to upstream\n\n后端是 4 个 Node.js 实例。请给出按可能性排序的原因清单和对应证据采集方法。",
+      "rubric": "原因应覆盖：后端进程 crash/restart（OOM、未捕获异常退出）、事件循环阻塞导致健康检查失败被摘除、keepalive 配置不匹配（nginx 默认 60s vs 后端更短超时）、CPU 打满。每个配证据：后端容器重启事件/PM2 日志、健康检查日志、连接数监控。"
+    },
+    {
+      "id": "dbg-08",
+      "sub": "debugging",
+      "prompt": "我们的订单导出功能在数据量 10 万行时超时（30s 网关超时），代码是同步生成 Excel 再一次性返回。当前实现：查询全部订单 → 循环写 Excel → 转字节流返回。请诊断性能瓶颈点（至少 3 个），并给出渐进式改造路径。",
+      "rubric": "瓶颈：一次性全量查询占内存、同步循环写 Excel 阻塞、整包传输大响应体；改造：分页/游标流式查询、SXSSF 流式写、改为异步任务+进度查询+OSS 下载链接，或 CSV 替代 Excel。给出渐进顺序（先低成本后高成本）。"
+    },
+    {
+      "id": "gen-01",
+      "sub": "code-generation",
+      "prompt": "用 Python 写一个带指数退避的重试装饰器 @retry(times=3, base_delay=0.5)，要求：只捕获网络类异常（自定异常类型 ExceptionProxy 可模拟）、每次重试延迟 0.5*2^n 秒、重试耗尽抛最后一次异常并附重试次数信息。给完整可运行代码和最小使用示例。",
+      "rubric": "functools.wraps 保留元信息；指数退避计算正确；只捕获指定异常类型（不能裸 except）；耗尽后抛出原始异常（不是吞掉）；带使用示例。"
+    },
+    {
+      "id": "gen-02",
+      "sub": "code-generation",
+      "prompt": "用 Java 写一个幂等的支付回调接收接口骨架（Spring @RestController）：要求防重放（同一回调号只处理一次）、金额校验、事务内落库+发消息、失败返回让网关重试的语义。关键方法给签名和核心逻辑，不用写完整实现细节。",
+      "rubric": "有回调唯一号去重机制（唯一索引或 Redis setnx）；金额与本地订单比对；事务边界正确（落库和消息在事务内或用事务消息）；重复收到返回成功（幂等语义）而处理失败返回 5xx 触发重试。"
+    },
+    {
+      "id": "gen-03",
+      "sub": "code-generation",
+      "prompt": "用 Go 实现一个固定大小 worker pool：NewPool(size, queue)，Submit(task) 满时阻塞，Close() 后不再接受任务并等所有已提交任务执行完再退出，支持优雅关停（收到 os.Signal 触发 Close）。给完整可编译代码。",
+      "rubric": "goroutine 数固定为 size；任务队列 channel 带界；Close 幂等且关闭安全（不 panic：close 只执行一次、Submit 在关闭后返回错误）；sync.WaitGroup 等待全部退出；signal 处理正确。"
+    },
+    {
+      "id": "gen-04",
+      "sub": "code-generation",
+      "prompt": "用 TypeScript 写 debounce<T extends (...args:any[])=>void>(fn: T, wait: number)：返回的新函数连续调用只在停顿 wait 毫秒后执行一次、用最后一次调用的参数、带 cancel() 取消待执行、带 flush() 立即执行。附类型定义和使用示例。",
+      "rubric": "定时器句柄管理正确（重复调用先 clear）；this/参数保留（最后一次调用）；cancel 清定时器且后续不再执行；flush 立即以最后一次参数执行并清理；TypeScript 类型基本正确。"
+    },
+    {
+      "id": "gen-05",
+      "sub": "code-generation",
+      "prompt": "用 Python 写一个日志文件监控小工具：tail -f 方式跟随 /var/log/app.log，按分钟窗口统计 ERROR 出现次数，每分钟输出一行「HH:MM ERROR数」，超过阈值(默认10)时打印告警。只用标准库。要求能处理文件轮转（inode 变化时重开）。",
+      "rubric": "tail 实现（seek 到末尾/按行读取不丢半行）；分钟窗口聚合正确（跨分钟重置）；轮转检测（stat inode 对比后重开）；告警阈值可配；无第三方依赖。"
+    },
+    {
+      "id": "gen-06",
+      "sub": "code-generation",
+      "prompt": "写一个 bash 脚本 compress_old_logs.sh：把 /var/log/app/ 下修改时间超过 7 天的 .log 文件 gzip 压缩、保留 90 天后删除同名 .gz、记录每次执行的动作到 /var/log/compress.log、支持 --dry-run 只打印不执行。要求处理好文件名带空格的情况。",
+      "rubric": "find -mtime +7 且用 -print0/while read -d 处理空格；删除规则 -mtime +90 只删 .gz；--dry-run 分支完整；日志追加记录；set -euo pipefail 等健壮性处理加分。"
+    },
+    {
+      "id": "gen-07",
+      "sub": "code-generation",
+      "prompt": "用 Python（redis-py）实现分布式锁：acquire(key, ttl) 用 SET NX PX 抇占、持锁线程定期续期（看门狗）、release 时只释放自己持有的锁（token 校验 + Lua 原子释放）。给完整类代码和使用示例（with 语法糖）。",
+      "rubric": "SET key token NX PX 一条命令抇占；token 随机且 release 用 Lua 比对再删（原子性）；看门狗后台续期且停锁时退出；支持 with 协议；示例正确。"
+    },
+    {
+      "id": "gen-08",
+      "sub": "code-generation",
+      "prompt": "用 JavaScript 写一个 EventEmitter 子类 SafeEmitter：on 注册的监听器抛异常时不影响其他监听器执行、once 语义正确、off 可按名移除、emit 返回是否有监听器处理。给完整代码和覆盖异常场景的测试示例。",
+      "rubric": "监听器异常被捕获且继续执行后续监听器；once 触发后自动移除（包括抛异常时也移除）；off 边界（不存在名字不报错）；emit 返回 boolean；测试示例覆盖异常场景。"
+    },
+    {
+      "id": "rev-01",
+      "sub": "code-review",
+      "prompt": "请 review 这段 Python 代码，指出所有 bug 和风险（这是一段即将上线的订单缓存模块）：\n\n```python\nclass OrderCache:\n    def __init__(self):\n        self.cache = {}\n\n    def get_or_load(self, order_id, loader):\n        if order_id in self.cache:\n            return self.cache[order_id]\n        value = loader(order_id)\n        self.cache[order_id] = value\n        return value\n\n    def clear(self):\n        self.cache = {}\n\n    def stats(self):\n        return {\"size\": len(self.cache)}\n```",
+      "rubric": "至少指出：①无 TTL/上限 → 内存无限增长 ②多线程竞态（check-then-act 不原子）③缓存 null/异常值未处理 ④clear 重建 dict 与并发读的可见性问题。指出 3 个以上并说明后果。"
+    },
+    {
+      "id": "rev-02",
+      "sub": "code-review",
+      "prompt": "请 review 这段 Java 代码（用户中心登录校验片段），找出全部问题：\n\n```java\npublic class LoginService {\n    private static final SimpleDateFormat FMT = new SimpleDateFormat(\"yyyy-MM-dd HH:mm:ss\");\n\n    public boolean checkUser(String username, String password) {\n        User u = userDao.findByName(username);\n        if (u == null) return false;\n        if (u.getPassword().equals(md5(password))) {\n            log.info(\"login ok at \" + FMT.format(new Date()));\n            return true;\n        }\n        return false;\n    }\n\n    private String md5(String s) {\n        try {\n            MessageDigest md = MessageDigest.getInstance(\"MD5\");\n            return new String(md.digest(s.getBytes()));\n        } catch (NoSuchAlgorithmException e) { return null; }\n    }\n}\n```",
+      "rubric": "至少指出：①static SimpleDateFormat 线程不安全 ②MD5 无盐不安全且 new String(digest) 产生乱码不是 hex ③异常吞掉返回 null 会引发 NPE ④用户不存在与密码错误可区分（时序/枚举风险加分项）。4 个中指出 3 个以上。"
+    },
+    {
+      "id": "rev-03",
+      "sub": "code-review",
+      "prompt": "请 review 这段 Node.js 代码（批量拉取用户积分并汇总），指出所有问题：\n\n```javascript\nasync function sumScores(userIds) {\n  let total = 0;\n  userIds.forEach(async (id) => {\n    const score = await fetchScore(id);\n    total += score;\n  });\n  await save(total);\n  return total;\n}\n```",
+      "rubric": "核心：forEach 不等待 async 回调，save(total) 执行时累加未完成（total 是旧值/0）；修复应使用 Promise.all + map 或 for...of；可加分项：fetchScore 失败未处理会变 unhandledrejection、大列表并发无限制。必须抓住 forEach+async 主问题。"
+    },
+    {
+      "id": "rev-04",
+      "sub": "code-review",
+      "prompt": "请 review 这段 Go 代码（并发拉取多个机房的状态并汇总），找出全部问题：\n\n```go\nfunc checkAll(zones []string) []Status {\n    results := make([]Status, len(zones))\n    var wg sync.WaitGroup\n    for i, z := range zones {\n        wg.Add(1)\n        go func() {\n            defer wg.Done()\n            resp, err := http.Get(\"http://\" + z + \"/status\")\n            if err != nil {\n                return\n            }\n            results[i] = parse(resp)\n        }()\n    }\n    wg.Wait()\n    return results\n}\n```",
+      "rubric": "指出：①goroutine 闭包捕获循环变量 i/z（Go 1.22 前全部为最后一次值，需要参数传值）②err 时 results[i] 留零值且调用方无法区分失败 ③resp.Body 未关闭 ④http.Get 无超时。4 个中指出 3 个以上（①闭包变量为必抓项）。"
+    },
+    {
+      "id": "rev-05",
+      "sub": "code-review",
+      "prompt": "请 review 这条即将上线的 SQL（订单日报查询，orders 表 8000 万行）：\n\n```sql\nSELECT *\nFROM orders\nWHERE DATE(created_at) = CURDATE() - INTERVAL 1 DAY\n  AND YEAR(created_at) = YEAR(CURDATE() - INTERVAL 1 DAY)\n  AND amount * 1.0 > 100\nORDER BY id DESC;\n```\n\n指出全部性能和正确性问题。",
+      "rubric": "指出：①对列套函数 DATE()/YEAR() 使索引失效（非 sargable）②两条件冗余且逻辑可简化 ③SELECT * 回表浪费 ④amount*1.0 隐含转换问题（若 amount 是字符串类型会全表扫且精度异常）⑤无分页。至少指出 ①④两项核心。"
+    },
+    {
+      "id": "rev-06",
+      "sub": "code-review",
+      "prompt": "请 review 这段 Python 配置加载代码，指出风险：\n\n```python\nimport json, os\n\ndef load_config(path=\"config.json\"):\n    try:\n        with open(path) as f:\n            cfg = json.load(f)\n        if \"port\" not in cfg:\n            cfg[\"port\"] = 80\n        if os.environ.get(\"CONFIG_OVERRIDE\"):\n            cfg.update(json.loads(os.environ[\"CONFIG_OVERRIDE\"]))\n        return cfg\n    except:\n        return {\"port\": 80}\n```",
+      "rubric": "指出：①裸 except 吞掉一切错误（文件不存在、JSON 语法错、环境变量拼写错全部静默回退默认值，故障排查黑洞）②环境变量注入配置无校验直接 update ③默认配置掩盖真实故障（应 fail-fast 或至少记日志）。核心是①，②③指出任一即可。"
+    },
+    {
+      "id": "rev-07",
+      "sub": "code-review",
+      "prompt": "请 review 这段 TypeScript 代码（分页取列表中间段），找出全部问题：\n\n```typescript\nfunction slicePage<T>(items: any[], page: number, size: number): T[] {\n  let start = page * size;\n  let end = start + size;\n  if (start > items.length) start = items.length;\n  if (end >= items.length) end = items.length;\n  return items.slice(start, end);\n}\n```",
+      "rubric": "指出：①page 从 0 还是 1 开始的语义不明（调用方极易 off-by-one）②any[] 放弃类型检查（应泛型约束）③start>length 时返回 [] 合理但 end>=length 用 >= 而非 >（多剪一个元素，边界 bug）④page 为负数未防护。指出 3 个以上。"
+    },
+    {
+      "id": "rev-08",
+      "sub": "code-review",
+      "prompt": "请 review 这段 Java 代码（对账文件解析，每天处理百万行），找出性能与正确性问题：\n\n```java\npublic List<Record> parse(Path file) throws Exception {\n    List<String> lines = Files.readAllLines(file);\n    List<Record> records = new ArrayList<>();\n    for (String line : lines) {\n        String[] parts = line.split(\",\");\n        records.add(new Record(parts[0], parts[1], Long.parseLong(parts[2])));\n    }\n    return records;\n}\n```",
+      "rubric": "指出：①readAllLines 百万行全量进内存（应 Files.lines 流式或 BufferedReader）②split 产生大量临时数组（可 indexOf 手工切或复用）③行格式异常无防护（parts 越界/parse 失败一个坏行毁整批）④字段含逗号未考虑 CSV 转义。指出 3 个以上。"
+    },
+    {
+      "id": "sql-01",
+      "sub": "sql-database",
+      "prompt": "PostgreSQL：orders 表（id, customer_id, amount, status, created_at），status='PAID' 视为有效。写一条查询：2026 年 Q3（7-9 月）累计消费前 10 的客户，输出客户 ID、总金额、订单数，按总金额降序。金额保留 2 位小数。",
+      "rubric": "日期范围用 created_at >= '2026-07-01' and < '2026-10-01'（半开区间）；SUM + COUNT + GROUP BY；ROUND(sum,2)；ORDER BY 总额 DESC LIMIT 10；status 条件不能丢。"
+    },
+    {
+      "id": "sql-02",
+      "sub": "sql-database",
+      "prompt": "orders 表 8000 万行且每天增 50 万，按 created_at 查询为主。请给出 PostgreSQL 分区方案：分区键与策略选择、现有表如何平滑过渡（不能长时间锁表）、查询如何命中分区。要点式回答。",
+      "rubric": "按 created_at RANGE 分区（按月合理）；过渡方案用逐步迁移：新分区表+双写或逻辑复制/_ATTACH 分区（pg_partman、inherit + 约束迁移、或 create table new + insert select 分批 + rename 原子切换），提到避免长锁；查询带分区键条件才能分区裁剪。三条都有且正确。"
+    },
+    {
+      "id": "sql-03",
+      "sub": "sql-database",
+      "prompt": "这条 SQL 在 8000 万行的 orders 表上跑了 40 秒：\n\nSELECT * FROM orders WHERE customer_id = 88123 ORDER BY created_at DESC LIMIT 20;\n\nEXPLAIN 显示 Seq Scan + Sort。已有单列索引 idx_customer(customer_id) 和 idx_created(created_at)。分析原因并给出让它在 100ms 内的优化方案。",
+      "rubric": "原因：单列 customer 索引后仍需回表取全部行再 Sort（该客户订单多时回表量大）；方案：建复合索引 (customer_id, created_at DESC) 使排序免 Sort、索引覆盖扫描直接 LIMIT 20；加分：延迟关联 select * 只对 20 个 id 回表。"
+    },
+    {
+      "id": "sql-04",
+      "sub": "sql-database",
+      "prompt": "customers 表有重复注册数据（phone 相同的多条，id 不同，created_at 不同）。写 SQL：找出每个 phone 保留 created_at 最新的一条，其余的 id 列出来（只查不删）。要求用窗口函数写，MySQL 8 语法。",
+      "rubric": "ROW_NUMBER() OVER (PARTITION BY phone ORDER BY created_at DESC)；rn=1 为保留、rn>1 为重复；子查询/CTE 包一层再过滤；正确处理同一 phone 内 created_at 相同的并列（提到 id 作次序 tie-break 加分）。"
+    },
+    {
+      "id": "sql-05",
+      "sub": "sql-database",
+      "prompt": "sales 表（product_id, category, amount, sold_at）。写 PostgreSQL 查询：每个品类内按销售额排名的产品榜（含并列同排名），输出品类、产品、销售额、品类内排名，只取每品类前 5（含并列第 5）。用窗口函数。",
+      "rubric": "RANK()（不是 ROW_NUMBER，并列要同名次）OVER (PARTITION BY category ORDER BY SUM(amount) DESC)；聚合和窗口的嵌套顺序正确（先 GROUP BY 聚合再窗口）；取前 5 含并列用 rank<=5 而非 rownum。三个关键点全对。"
+    },
+    {
+      "id": "sql-06",
+      "sub": "sql-database",
+      "prompt": "生产库要把 orders 表的 usr 字段改名为 customer_id（8000 万行）。直接 ALTER TABLE RENAME COLUMN 在我们用的 MySQL 8.0 / PostgreSQL 14 上各是什么代价？给出不停机的安全迁移步骤。",
+      "rubric": "说明 PG14 的 RENAME COLUMN 是元数据操作（瞬间完成不重写），MySQL 8.0 RENAME COLUMN 也是元数据级（INSTANT/不改数据），但锁表窗口与长事务风险要提；安全步骤：新列+双写+回填（分批小事务）+读切换+删旧列；提到灰度/可回滚。"
+    },
+    {
+      "id": "sql-07",
+      "sub": "sql-database",
+      "prompt": "events 表记录用户每日活跃（user_id, dt）。写 SQL 计算 7 月每日的新增用户数和次日留存率（当天新增、次日还活跃的比例），输出 dt、new_users、day1_retention（百分比保留 1 位）。PostgreSQL 语法。",
+      "rubric": "首次出现日期 = MIN(dt) GROUP BY user_id 得新用户集；与 events 自连（e2.dt = e1.first_dt + 1）算次日活跃；留存率 = 留存数/新增数（注意除零）；输出百分比格式。整体思路正确且 SQL 可执行。"
+    },
+    {
+      "id": "sql-08",
+      "sub": "sql-database",
+      "prompt": "订单查询页面固定模式：WHERE status = ? AND merchant_id = ? ORDER BY created_at DESC LIMIT 20，status 只有 6 个值其中 PAID 占 60%。请设计索引并说明理由：复合索引列顺序、为什么这个顺序、merchant_id 上还需要单列索引吗？",
+      "rubric": "复合索引 (merchant_id, status, created_at)：等值列在前（merchant_id 选择性高），status 等值其次，created_at 排序殿后避免 Sort；或 (status, merchant_id, created_at) 的讨论也可但需论证；PAID 占 60% 时该组合仍优于全表；merchant_id 单列索引可省（被最左前缀覆盖）。"
+    }
+  ]
+}

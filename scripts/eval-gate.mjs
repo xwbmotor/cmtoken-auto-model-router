@@ -49,7 +49,7 @@ async function generate(base, key, model, prompt) {
   const res = await fetch(`${base}/chat/completions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: 8192 }),
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: Number(process.env.EVAL_GATE_MAX_TOKENS || 32768) }),
     signal: AbortSignal.timeout(TIMEOUT_MS)
   });
   if (!res.ok) throw new Error(`生成失败 ${model}: HTTP ${res.status} ${(await res.text()).slice(0, 120)}`);

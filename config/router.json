@@ -65,7 +65,7 @@
     "minConfidence": 0
   },
   "reasoningControl": {
-    "enabled": false,
+    "enabled": true,
     "offMaxComplexity": 0.3,
     "highMinComplexity": 0.78
   },
@@ -259,8 +259,13 @@
       },
       "contextWindow": 131072,
       "reasoningControl": {
-        "parameter": "reasoning_effort",
-        "verified": false
+        "parameter": "chat_template_kwargs.enable_thinking",
+        "values": {
+          "off": false,
+          "standard": true,
+          "high": true
+        },
+        "verified": true
       },
       "benchmarkScores": {
         "evalGate": {
@@ -285,7 +290,8 @@
         "instances": 20,
         "concurrencyPerInstance": 15,
         "totalConcurrency": 300
-      }
+      },
+      "minimumCompletionTokensForReliableAnswer": 16384
     }
   ],
   "decisionLog": {

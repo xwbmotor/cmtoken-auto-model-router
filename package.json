@@ -10,7 +10,9 @@
     "test": "node --test",
     "benchmark": "node --env-file-if-exists=.env scripts/benchmark.mjs",
     "benchmark:stream": "node --env-file-if-exists=.env scripts/stream-performance.mjs",
-    "eval:gate": "node --env-file-if-exists=.env scripts/eval-gate.mjs"
+    "eval:gate": "node --env-file-if-exists=.env scripts/eval-gate.mjs",
+    "eval:subtask": "node --env-file-if-exists=.env scripts/subtask-eval.mjs",
+    "eval:regen": "node --env-file-if-exists=.env scripts/subtask-regen.mjs"
   },
   "engines": {
     "node": ">=20"
