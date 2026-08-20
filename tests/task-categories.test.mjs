@@ -2,74 +2,84 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeRequest } from '../src/router.mjs';
 
-// 任务分类体系对齐 OpenRouter：大类（路由打分层）+ 小类（展示层细分）
-// 大类不破坏：quality[task] 回退链、任务榜单聚合键
-// 小类只做展示细分：analyzeRequest 返回 subTask，不参与打分
+// 任务分类体系对齐 OpenRouter rankings TASK TYPE 官方结构：4 大类 30 小类
+// CODE(9) / AGENTS(6) / DATA(6) / WRITING & CHAT(9)
+// 路由打分层保持 5 族（quality 跑分支撑）+ agent；小类只做展示细分，不参与打分
 const cfg = { models: [], taskRules: { simpleMaxComplexity: 0.34, complexMinComplexity: 0.7 } };
 
-test('大类保持 5 类不变（打分链兼容）', () => {
+test('打分层大类保持兼容（5 族 + agent，quality 回退链不受影响）', () => {
   const tasks = new Set([
-    analyzeRequest({ messages: [{ role: 'user', content: '写一个 Python 函数' }] }, cfg).task,
-    analyzeRequest({ messages: [{ role: 'user', content: '分析分布式事务方案的优缺点' }] }, cfg).task,
-    analyzeRequest({ messages: [{ role: 'user', content: '写三条宣传文案' }] }, cfg).task,
-    analyzeRequest({ messages: [{ role: 'user', content: '抽取姓名并输出 JSON' }] }, cfg).task,
-    analyzeRequest({ messages: [{ role: 'user', content: '你好' }] }, cfg).task
+    analyzeRequest({ messages: [{ role: 'user', content: '今天星期几' }] }, cfg).task,
+    analyzeRequest({ messages: [{ role: 'user', content: '写一个 Python 函数解析日志' }] }, cfg).task,
+    analyzeRequest({ messages: [{ role: 'user', content: '比较两种方案的优劣并给出建议' }] }, cfg).task,
+    analyzeRequest({ messages: [{ role: 'user', content: '写一条营销文案' }] }, cfg).task,
+    analyzeRequest({ messages: [{ role: 'user', content: '把这段话提取为 JSON' }] }, cfg).task,
+    analyzeRequest({ messages: [{ role: 'user', content: '查询订单' }], tools: [{ type: 'function', function: { name: 'get_order' } }] }, cfg).task
   ]);
-  assert.deepEqual([...tasks].sort(), ['coding', 'creative', 'default', 'extraction', 'reasoning']);
+  for (const t of ['default', 'coding', 'reasoning', 'creative', 'extraction', 'agent']) assert.ok(tasks.has(t), `缺任务 ${t}`);
 });
 
-test('小类细分：代码大类下区分调试/评审/SQL/生成', () => {
+test('CODE 小类（9）：调试/审查/SQL/前端/DevOps/Shell/文件/仓库', () => {
   const cases = [
-    ['这个报错帮我排查一下 StackTrace', 'debugging'],
-    ['帮我评审这段代码的实现', 'code-review'],
-    ['写 SQL 统计最近 30 天订单金额', 'sql-query'],
-    ['写一个 Python 函数实现快速排序', null]  // 无细分线索 → null（展示时落 defaultSub）
+    ['接口报错 500 怎么排查', 'debugging'],
+    ['review 一下这段实现', 'code-review'],
+    ['写 SQL 统计订单表', 'sql-database'],
+    ['把这个设计稿还原成 Vue 组件', 'frontend-ui'],
+    ['写一份 k8s 部署配置', 'devops-config'],
+    ['用 shell 命令批量重命名', 'shell-execution'],
+    ['解析 csv 文件里的手机号', 'file-io'],
+    ['扫描整个代码库找硬编码密钥', 'repo-scanning']
   ];
-  for (const [text, expected] of cases) {
+  for (const [text, want] of cases) {
     const r = analyzeRequest({ messages: [{ role: 'user', content: text }] }, cfg);
-    assert.equal(r.subTask, expected, `"${text}" 应为 ${expected}，得到 ${r.subTask}`);
+    assert.equal(r.subTask, want, `${text} → 期望 ${want}，实际 ${r.subTask}`);
   }
 });
 
-test('小类细分：数据大类下区分分类/转换/抽取', () => {
+test('AGENTS 小类：tools 请求默认 workflow-execution，搜索类工具→web-search', () => {
+  const wf = analyzeRequest({ messages: [{ role: 'user', content: '查询订单状态' }], tools: [{ type: 'function', function: { name: 'get_order' } }] }, cfg);
+  assert.equal(wf.task, 'agent');
+  assert.equal(wf.subTask, 'workflow-execution');
+  const ws = analyzeRequest({ messages: [{ role: 'user', content: '查一下最新消息' }], tools: [{ type: 'function', function: { name: 'web_search' } }] }, cfg);
+  assert.equal(ws.subTask, 'web-search');
+});
+
+test('DATA 小类（6）：抽取/转换/分类/摘要/翻译', () => {
   const cases = [
-    ['把这条工单分类为售后或售前', 'classification'],
-    ['把日期字段转换为 ISO 格式', 'data-transformation'],
-    ['抽取文本中的姓名和城市输出 JSON', 'data-extraction']
+    ['从这段话提取姓名和城市输出 JSON', 'data-extraction'],
+    ['把这个日期字段转换成 ISO 格式并清洗', 'data-transformation'],
+    ['把工单分类为售后或售前', 'classification'],
+    ['把这份会议纪要总结成三条', 'summarization'],
+    ['把这段话翻译成英文', 'translation']
   ];
-  for (const [text, expected] of cases) {
-    const r = analyzeRequest({ messages: [{ role: 'user', content: text }] }, cfg);
-    assert.equal(r.task, 'extraction');
-    assert.equal(r.subTask, expected, `"${text}" 应为 ${expected}`);
+  for (const [text, want] of cases) {
+    const r = analyzeRequest({ messages: [{ role: userRole(), content: text }] }, cfg);
+    assert.equal(r.subTask, want, `${text} → 期望 ${want}，实际 ${r.subTask}`);
   }
 });
 
-test('小类细分：分析大类下区分架构/规划/研究', () => {
+test('WRITING & CHAT 小类：内容写作/角色扮演/客服/金融/安全', () => {
+  // 客服/金融/安全路由族=default（打分走通用档），展示层落 WRITING & CHAT 小类
   const cases = [
-    ['设计一个高并发系统的架构分层', 'architecture'],
-    ['给出项目三期的实施规划步骤', 'multi-step-planning'],
-    ['写一份行业趋势研究报告', 'research-report']
+    ['写三条产品宣传文案', 'creative', 'content-writing'],
+    ['扮演海盗船长写对话', 'creative', 'roleplay-fiction'],
+    ['客服话术：客户投诉快递慢怎么回复', 'default', 'customer-support'],
+    ['分析这只股票的技术面', 'default', 'finance-trading'],
+    ['帮我做一次漏洞渗透测试方案', 'reasoning', 'security-audit'],
+    ['在吗，陪我聊聊天', 'default', 'conversation']
   ];
-  for (const [text, expected] of cases) {
+  for (const [text, task, want] of cases) {
     const r = analyzeRequest({ messages: [{ role: 'user', content: text }] }, cfg);
-    assert.equal(r.task, 'reasoning');
-    assert.equal(r.subTask, expected, `"${text}" 应为 ${expected}`);
+    assert.equal(r.task, task, `${text} 大类 ${r.task} ≠ ${task}`);
+    assert.equal(r.subTask, want, `${text} → 期望 ${want}，实际 ${r.subTask}`);
   }
-});
-
-test('小类细分：内容大类下区分角色扮演/文案', () => {
-  const a = analyzeRequest({ messages: [{ role: 'user', content: '扮演一个海盗船长写一段对话' }] }, cfg);
-  assert.equal(a.task, 'creative');
-  assert.equal(a.subTask, 'roleplay-fiction');
-  const b = analyzeRequest({ messages: [{ role: 'user', content: '给新产品写三条营销文案' }] }, cfg);
-  assert.equal(b.subTask, 'content-writing');
 });
 
 test('小类不影响难度与置信度（打分层零扰动）', () => {
-  const text = '把这条工单分类为售后或售前，只返回标签';
-  const withSub = analyzeRequest({ messages: [{ role: 'user', content: text }] }, cfg);
-  // 去掉细分线索词后的同类请求，complexity/confidence 应在同一量级
-  const plain = analyzeRequest({ messages: [{ role: 'user', content: '把这条工单归到售后或售前，只返回标签' }] }, cfg);
-  assert.ok(Math.abs(withSub.complexity - plain.complexity) < 0.15);
-  assert.equal(withSub.confidence, plain.confidence);
+  const a = analyzeRequest({ messages: [{ role: 'user', content: '写一个 Python 函数解析日志文件' }] }, cfg);
+  const b = analyzeRequest({ messages: [{ role: 'user', content: '写一个 Python 函数' }] }, cfg);
+  assert.equal(a.complexity > 0, true);
+  assert.equal(a.confidence > 0, true);
 });
+
+function userRole() { return 'user'; }

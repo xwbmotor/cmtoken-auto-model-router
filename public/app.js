@@ -2,7 +2,9 @@ let config, savedConfig, metrics, lastSimulation, simulateTimer;
 const $ = (id) => document.getElementById(id);
 // —— 后台枚举 → 中文展示映射（只影响展示，不碰配置值）——
 const TASK_CN = { coding: '代码', reasoning: '推理', creative: '创意', extraction: '抽取', default: '通用' };
-const TASK_CATEGORIES = { default: { category: '通用', icon: '💬', subs: { conversation: '会话', 'qa-knowledge': '问答' }, defaultSub: '问答' }, coding: { category: '代码', icon: '⚙️', subs: { debugging: '调试', 'code-review': '代码评审', 'sql-query': 'SQL 查询', 'code-test': '编写测试', 'code-generation': '代码生成' }, defaultSub: '代码生成' }, reasoning: { category: '分析', icon: '🧠', subs: { architecture: '架构设计', 'multi-step-planning': '多步规划', 'research-report': '研究报告' }, defaultSub: '综合推理' }, creative: { category: '内容', icon: '✍️', subs: { 'roleplay-fiction': '角色扮演', 'content-writing': '文案写作' }, defaultSub: '创意写作' }, extraction: { category: '数据', icon: '📋', subs: { classification: '分类打标', 'data-transformation': '数据转换', 'data-extraction': '数据抽取' }, defaultSub: '数据抽取' }, agent: { category: '智能体', icon: '🤖', subs: { 'workflow-execution': '工作流执行', 'web-search': '联网搜索', 'multi-step': '多步工具链' }, defaultSub: '工作流执行' }, explicit: { category: '指定模型', icon: '📌', subs: {}, defaultSub: '用户点名' }, unknown: { category: '未分类', icon: '·', subs: {}, defaultSub: '—' } };
+// OpenRouter rankings TASK TYPE 官方 30 小类 → 4 大类（+Pinned）
+const SUB_CATEGORY = { 'code-generation': ['代码', 'CODE', '⚙️', '代码生成'], debugging: ['代码', 'CODE', '⚙️', '调试'], 'code-review': ['代码', 'CODE', '⚙️', '代码审查'], 'sql-database': ['代码', 'CODE', '⚙️', 'SQL 与数据库'], 'frontend-ui': ['代码', 'CODE', '⚙️', '前端与 UI'], 'devops-config': ['代码', 'CODE', '⚙️', 'DevOps 与配置'], 'shell-execution': ['代码', 'CODE', '⚙️', 'Shell 执行'], 'file-io': ['代码', 'CODE', '⚙️', '文件读写'], 'repo-scanning': ['代码', 'CODE', '⚙️', '仓库扫描'], 'multi-step-planning': ['智能体', 'AGENTS', '🤖', '多步规划'], 'tool-dispatch': ['智能体', 'AGENTS', '🤖', '工具调度'], 'workflow-execution': ['智能体', 'AGENTS', '🤖', '工作流执行'], 'web-search': ['智能体', 'AGENTS', '🤖', 'Web 搜索'], 'memory-extraction': ['智能体', 'AGENTS', '🤖', '记忆提取'], devops: ['智能体', 'AGENTS', '🤖', 'DevOps'], 'data-extraction': ['数据', 'DATA', '📋', '数据抽取'], 'data-transformation': ['数据', 'DATA', '📋', '数据转换'], classification: ['数据', 'DATA', '📋', '分类'], summarization: ['数据', 'DATA', '📋', '摘要'], translation: ['数据', 'DATA', '📋', '翻译'], math: ['数据', 'DATA', '📋', '数学'], 'content-writing': ['写作与对话', 'WRITING & CHAT', '💬', '内容写作'], 'research-reports': ['写作与对话', 'WRITING & CHAT', '💬', '研究与报告'], 'qa-knowledge': ['写作与对话', 'WRITING & CHAT', '💬', '问答与知识'], conversation: ['写作与对话', 'WRITING & CHAT', '💬', '对话'], 'customer-support': ['写作与对话', 'WRITING & CHAT', '💬', '客户支持'], 'roleplay-fiction': ['写作与对话', 'WRITING & CHAT', '💬', '角色扮演与虚构'], 'finance-trading': ['写作与对话', 'WRITING & CHAT', '💬', '金融与交易'], 'security-audit': ['写作与对话', 'WRITING & CHAT', '💬', '安全审计'], other: ['写作与对话', 'WRITING & CHAT', '💬', '其他'], pinned: ['指定模型', 'PINNED', '📌', '用户点名'] };
+function subCategoryOf(task, subTask) { if (task === 'explicit') return SUB_CATEGORY.pinned; if (SUB_CATEGORY[subTask]) return SUB_CATEGORY[subTask]; const fb = { default: 'qa-knowledge', coding: 'code-generation', reasoning: 'research-reports', creative: 'content-writing', extraction: 'data-extraction', agent: 'workflow-execution' }[task]; return SUB_CATEGORY[fb] || SUB_CATEGORY.other; }
 const TIER_CN = { simple: '轻量', balanced: '均衡', complex: '复杂' };
 const METHOD_CN = { rules: '规则', semantic: '语义复核', 'rules+semantic': '规则+复核' };
 const taskCN = (t) => TASK_CN[t] || t;
@@ -41,12 +43,12 @@ async function renderTaskBoard() {
       const cells = [0, 1, 2].map((i) => b.picks[i]
         ? `<td>${b.picks[i].model} <span class="pill ${i === 0 ? 'good' : 'muted'}">${b.picks[i].share}%${b.picks[i].fails ? ` ·失败${b.picks[i].fails}` : ''}</span></td>`
         : '<td class="empty">—</td>').join('');
-      const cat = TASK_CATEGORIES[b.task] || TASK_CATEGORIES.unknown;
-      const subLabel = b.sub || cat.defaultSub;
-      const icon = b.categoryIcon || cat.icon;
-      const catLabel = b.category || cat.category;
-      const enMap = { '通用': 'General', '代码': 'Code', '分析': 'Reasoning', '内容': 'Content', '数据': 'Data', '智能体': 'Agent', '指定模型': 'Pinned', '未分类': '—' };
-      return `<tr><th>${icon} ${catLabel} · ${subLabel}<br><span class="task-cat">${enMap[catLabel] || catLabel}</span></th><td>${b.total}</td>${cells}</tr>`;
+      const sc = subCategoryOf(b.task, b.sub);
+      const subLabel = b.subLabel || sc[3];
+      const icon = b.categoryIcon || sc[2];
+      const catLabel = b.category || sc[0];
+      const catEn = b.categoryEn || sc[1];
+      return `<tr><th>${icon} ${catLabel} · ${subLabel}<br><span class="task-cat">${catEn}</span></th><td>${b.total}</td>${cells}</tr>`;
     }).join('');
   } catch (e) { rows.innerHTML = `<tr><td colspan="5" class="empty">${e.message}</td></tr>`; }
 }
@@ -280,7 +282,7 @@ function metricDeltaCost(current, proposed, lower = false) { const delta = propo
 function renderSimulation(result) {
   lastSimulation = result; const c = result.current, p = result.proposed, risk = result.changedRate >= .5 ? 'high' : result.changedRate >= .2 ? 'medium' : 'low';
   $('impactSummary').innerHTML = `<article class="impact ${risk}"><span>模型切换</span><strong>${result.changed}/${result.sampleCount}</strong><small>${percentValue(result.changedRate)} 代表任务改变</small></article><article><span>预计质量</span>${metricDelta(c.averageQuality,p.averageQuality)}</article>${(c.averageCostYuan!=null&&p.averageCostYuan!=null)?`<article><span>平均单次成本 <span class="help" data-help="按代表性任务（含系统提示词+多轮上下文+业务文档，非单句提问）的平均输入输出量估算的每次请求成本（元）。">?</span></span>${metricDeltaCost(c.averageCostYuan,p.averageCostYuan,true)}</article>`:`<article><span>成本指数</span>${metricDelta(c.averageCostIndex,p.averageCostIndex,true)}</article>`}${(c.averageLatencyMs!=null&&p.averageLatencyMs!=null)?`<article><span>平均端到端时延 <span class="help" data-help="从发出请求到收完完整回答的总耗时（含模型思考时间），按代表性任务平均。">?</span></span>${metricDeltaMs(c.averageLatencyMs,p.averageLatencyMs,true)}</article>`:`<article><span>时延指数</span>${metricDelta(c.averageLatencyIndex,p.averageLatencyIndex,true)}</article>`}<article><span>自建比例</span><strong>${percentValue(p.selfHostedRate)}</strong><small>当前 ${percentValue(c.selfHostedRate)}</small></article>`;
-  $('impactRows').innerHTML = p.rows.map((row,i) => { const before=c.rows[i], changed=before.model!==row.model; const cat3 = TASK_CATEGORIES[row.task] || TASK_CATEGORIES.unknown; const sub3 = cat3.subs?.[row.subTask] || cat3.defaultSub; return `<tr><td><strong>${row.label}</strong><br><small>${cat3.icon} ${cat3.category} · ${sub3}</small></td><td>${Math.round(row.complexity*100)} · ${tierCN(row.tier)}</td><td>${before.model}</td><td>${row.model}</td><td><span class="pill ${changed?'bad':'good'}">${changed?'切换':'不变'}</span></td></tr>`; }).join('');
+  $('impactRows').innerHTML = p.rows.map((row,i) => { const before=c.rows[i], changed=before.model!==row.model; const sc3 = subCategoryOf(row.task, row.subTask); return `<tr><td><strong>${row.label}</strong><br><small>${sc3[2]} ${sc3[0]} · ${sc3[3]}</small></td><td>${Math.round(row.complexity*100)} · ${tierCN(row.tier)}</td><td>${before.model}</td><td>${row.model}</td><td><span class="pill ${changed?'bad':'good'}">${changed?'切换':'不变'}</span></td></tr>`; }).join('');
   renderSensitivity(result.sensitivity);
 }
 // 调整手感：每个滑条「再拉多少才会变 / 拉到头也变不了的原因」

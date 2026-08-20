@@ -17,36 +17,57 @@ export function costTierBand(config) {
 import { adjustFor as marketAdjustFor } from './market-signal-runtime.mjs';
 // 任务分类正则：内置为缺省值；config.taskRules.patterns 提供可覆盖子集（key=任务名，value=字符串数组按 | 合并）
 const DEFAULT_TASK_PATTERNS = {
-  coding: /代码|编程|程序|函数|接口|报错|异常|debug|bug|python|java|javascript|typescript|golang|rust|sql|regex|算法|并发安全|重构|单元测试|评审.{0,6}代码|代码评审/i,
+  coding: /代码|编程|程序|函数|接口|报错|异常|debug|bug|review|评审|前端|vue|react|css|组件|docker|k8s|kubernetes|ci\/cd|nginx|yaml|部署配置|shell|bash|命令行|解析.{0,4}文件|csv|python|java|javascript|typescript|golang|rust|sql|regex|算法|并发安全|重构|单元测试/i,
   reasoning: /推理|证明|分析原因|根因|权衡|取舍|对比|评估|规划|方案|设计|架构|分层|框架|路由|综合选择|怎么做|如何实现|分布式事务|数学|逻辑|为什么|比较.*优缺点|研究报告|调研报告|行业趋势|reason|prove|analy[sz]e|architecture/i,
-  creative: /创作|文案|故事|诗|广告|宣传语|口号|营销|改写.*风格|脑暴|起名|剧本|扮演|角色扮演|slogan|creative|story|poem|copywriting|roleplay/i,
+  creative: /创作|文案|故事|诗|广告|宣传语|口号|营销|改写.*风格|脑暴|起名|剧本|扮演|角色扮演|slogan|creative|story|poem|copywriting|roleplay|写.{0,4}(故事|小说)/i,
   extraction: /提取|抽取|分类|归类|标签|结构化|转换为|转换|映射|清洗|格式化|只返回|识别字段|extract|classify|parse|json/i
 };
 
 // 小类细分（OpenRouter subcategory 语义）：在已识别大类内按线索细分，只影响展示不影响打分
 const SUBTASK_PATTERNS = {
+  // —— CODE 代码（9 小类）——
   coding: [
     [/报错|异常|bug|debug|错误|排查|修复|stack ?trace|为什么.*不(工作|生效)/i, 'debugging'],
     [/评审|review|code review|看看.{0,8}代码|检查.{0,8}(代码|实现)/i, 'code-review'],
-    [/sql|查询.*表|select |join |数据库查询|索引优化/i, 'sql-query'],
-    [/测试|单元测试|test case|用例/i, 'code-test']
+    [/sql|查询.*表|select |join |数据库查询|索引优化/i, 'sql-database'],
+    [/前端|vue|react|css|页面|组件|界面|ui ?(设计|稿|还原)/i, 'frontend-ui'],
+    [/部署|docker|k8s|kubernetes|ci\/cd|jenkins|nginx|yaml|helm|配置文件|环境变量/i, 'devops-config'],
+    [/shell|bash|命令行|执行命令|脚本执行|powershell|终端命令/i, 'shell-execution'],
+    [/(读|写|解析|打开|生成).{0,6}(文件|csv|excel|日志文件)|file ?i\/o/i, 'file-io'],
+    [/仓库扫描|全库|整个代码库|repo scan|代码库分析|扫描.{0,4}仓库/i, 'repo-scanning']
   ],
+  // —— AGENTS 智能体（6 小类；multi-step-planning 归推理族触发）——
   reasoning: [
-    [/架构|分层|部署方案|技术选型|系统设计|扩容/i, 'architecture'],
-    [/规划|排期|路线图|分几期|怎么做|步骤/i, 'multi-step-planning'],
-    [/调研|报告|研究|综述|白皮书|分析报告/i, 'research-report']
+    [/漏洞|渗透|安全审计|攻击面|安全扫描/i, 'security-audit'],
+    [/金融|交易|股票|风控|行情|投资/i, 'finance-trading'],
+    [/客服|售后|客户咨询|工单回复|投诉处理/i, 'customer-support'],
+    [/翻译|translate|中译英|英译中/i, 'translation'],
+    [/摘要|总结|压缩|提炼|summar/i, 'summarization'],
+    [/规划|排期|路线图|分几期|怎么做|分步|步骤/i, 'multi-step-planning'],
+    [/调研|报告|研究|综述|白皮书|架构|方案|系统设计|技术选型/i, 'research-reports'],
+    [/数学|证明|方程|概率|微积分|求解|计算/i, 'math']
   ],
+  // —— WRITING & CHAT 写作与对话（内容族小类）——
   creative: [
-    [/扮演|角色扮演|roleplay|rp|写.{0,4}(故事|小说|剧本)/i, 'roleplay-fiction'],
-    [/文案|宣传|营销|slogan|口号|起名|标题/i, 'content-writing']
+    [/扮演|角色扮演|roleplay|写.{0,4}(故事|小说|剧本)/i, 'roleplay-fiction'],
+    [/文案|宣传|营销|slogan|口号|起名|标题|内容写作/i, 'content-writing']
   ],
+  // —— DATA 数据（6 小类）——
   extraction: [
     [/分类|标签|归类|打标|classify/i, 'classification'],
     [/转换|清洗|映射|格式化|transform/i, 'data-transformation'],
+    [/摘要|总结|压缩|提炼|summar/i, 'summarization'],
+    [/翻译|translate|中译英|英译中/i, 'translation'],
     [/提取|抽取|结构化|抽取字段|extract|json/i, 'data-extraction']
   ],
+  // default 族的展示层小类（未命中走 qa-knowledge 兜底）
   default: [
-    [/你好|嗨|hello|hi|在吗/i, 'conversation']
+    [/客服|售后|客户咨询|工单回复|投诉处理/i, 'customer-support'],
+    [/金融|交易|股票|风控|行情|投资/i, 'finance-trading'],
+    [/漏洞|渗透|安全审计|攻击面|安全扫描/i, 'security-audit'],
+    [/翻译|translate|中译英|英译中/i, 'translation'],
+    [/摘要|总结|压缩|提炼|summar/i, 'summarization'],
+    [/你好|嗨|hello|hi\b|在吗|聊天/i, 'conversation']
   ]
 };
 
@@ -134,9 +155,13 @@ export function analyzeRequest(body, config) {
   const tier = complexity >= config.taskRules.complexMinComplexity ? 'complex'
     : complexity <= config.taskRules.simpleMaxComplexity ? 'simple' : 'balanced';
   const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
-  // 工具调用请求 → Agent 大类（OpenRouter: Workflow Execution），打分仍用 default 档（quality.agent 未实测）
+  // 工具调用请求 → Agent 大类（OpenRouter: Workflow Execution / Web search），打分仍用 default 档（quality.agent 未实测）
   const finalTask = hasTools ? 'agent' : task;
-  const subTask = hasTools ? 'workflow-execution' : resolveSubTask(task, text);
+  let subTask = resolveSubTask(task, text);
+  if (hasTools) {
+    const toolNames = (body.tools || []).map((t) => String(t?.function?.name || t?.name || '')).join(' ').toLowerCase();
+    subTask = /search|web|检索|surf/.test(toolNames) ? 'web-search' : /devops|deploy|ops/.test(toolNames) ? 'devops' : 'workflow-execution';
+  }
   return { task: finalTask, subTask, tier, complexity, confidence: trivial ? 0.98 : task === 'default' ? 0.55 : 0.86, textLength: text.length, estimatedInputTokens: estimateInputTokens(text), requirements, signals };
 }
 

@@ -778,15 +778,64 @@ const server = http.createServer(async (req, res) => {
 // 任务分类体系（对齐 OpenRouter rankings 的 category/subcategory 两级语义）：
 // 5 大类 = 路由打分层（quality 有实测跑分支撑）；小类 = 展示层细分（正则线索，不影响打分）
 const TASK_CATEGORIES = {
-  default:    { category: '通用', categoryEn: 'General', icon: '💬', subs: { conversation: '会话', 'qa-knowledge': '问答' }, defaultSub: '问答' },
-  coding:     { category: '代码', categoryEn: 'Code', icon: '⚙️', subs: { debugging: '调试', 'code-review': '代码评审', 'sql-query': 'SQL 查询', 'code-test': '编写测试', 'code-generation': '代码生成' }, defaultSub: '代码生成' },
-  reasoning:  { category: '分析', categoryEn: 'Reasoning', icon: '🧠', subs: { architecture: '架构设计', 'multi-step-planning': '多步规划', 'research-report': '研究报告' }, defaultSub: '综合推理' },
-  creative:   { category: '内容', categoryEn: 'Content', icon: '✍️', subs: { 'roleplay-fiction': '角色扮演', 'content-writing': '文案写作' }, defaultSub: '创意写作' },
-  extraction: { category: '数据', categoryEn: 'Data', icon: '📋', subs: { classification: '分类打标', 'data-transformation': '数据转换', 'data-extraction': '数据抽取' }, defaultSub: '数据抽取' },
-  agent:      { category: '智能体', categoryEn: 'Agent', icon: '🤖', subs: { 'workflow-execution': '工作流执行', 'web-search': '联网搜索', 'multi-step': '多步工具链' }, defaultSub: '工作流执行' },
-  explicit:   { category: '指定模型', categoryEn: 'Pinned', icon: '📌', subs: {}, defaultSub: '用户点名' },
-  unknown:    { category: '未分类', categoryEn: '—', icon: '·', subs: {}, defaultSub: '—' }
+  // 路由打分层 5 族 + agent（quality 跑分支撑），仅用于打分回退，不决定展示大类
+  default:    { subs: ['qa-knowledge', 'conversation', 'customer-support', 'finance-trading', 'security-audit', 'summarization', 'translation', 'other'] },
+  coding:     { subs: ['code-generation', 'debugging', 'code-review', 'sql-database', 'frontend-ui', 'devops-config', 'shell-execution', 'file-io', 'repo-scanning'] },
+  reasoning:  { subs: ['multi-step-planning', 'research-reports', 'math', 'security-audit', 'finance-trading', 'customer-support', 'summarization', 'translation'] },
+  creative:   { subs: ['content-writing', 'roleplay-fiction'] },
+  extraction: { subs: ['data-extraction', 'data-transformation', 'classification', 'summarization', 'translation', 'math'] },
+  agent:      { subs: ['multi-step-planning', 'tool-dispatch', 'workflow-execution', 'web-search', 'memory-extraction', 'devops'] },
+  explicit:   { subs: [] },
+  unknown:    { subs: [] }
 };
+
+// OpenRouter rankings TASK TYPE 官方 30 小类 → 4 大类（+Pinned 内网特有）
+const SUB_CATEGORY = {
+  // CODE（9）
+  'code-generation': { category: '代码', en: 'CODE', icon: '⚙️', label: '代码生成' },
+  debugging: { category: '代码', en: 'CODE', icon: '⚙️', label: '调试' },
+  'code-review': { category: '代码', en: 'CODE', icon: '⚙️', label: '代码审查' },
+  'sql-database': { category: '代码', en: 'CODE', icon: '⚙️', label: 'SQL 与数据库' },
+  'frontend-ui': { category: '代码', en: 'CODE', icon: '⚙️', label: '前端与 UI' },
+  'devops-config': { category: '代码', en: 'CODE', icon: '⚙️', label: 'DevOps 与配置' },
+  'shell-execution': { category: '代码', en: 'CODE', icon: '⚙️', label: 'Shell 执行' },
+  'file-io': { category: '代码', en: 'CODE', icon: '⚙️', label: '文件读写' },
+  'repo-scanning': { category: '代码', en: 'CODE', icon: '⚙️', label: '仓库扫描' },
+  // AGENTS（6）
+  'multi-step-planning': { category: '智能体', en: 'AGENTS', icon: '🤖', label: '多步规划' },
+  'tool-dispatch': { category: '智能体', en: 'AGENTS', icon: '🤖', label: '工具调度' },
+  'workflow-execution': { category: '智能体', en: 'AGENTS', icon: '🤖', label: '工作流执行' },
+  'web-search': { category: '智能体', en: 'AGENTS', icon: '🤖', label: 'Web 搜索' },
+  'memory-extraction': { category: '智能体', en: 'AGENTS', icon: '🤖', label: '记忆提取' },
+  devops: { category: '智能体', en: 'AGENTS', icon: '🤖', label: 'DevOps' },
+  // DATA（6）
+  'data-extraction': { category: '数据', en: 'DATA', icon: '📋', label: '数据抽取' },
+  'data-transformation': { category: '数据', en: 'DATA', icon: '📋', label: '数据转换' },
+  classification: { category: '数据', en: 'DATA', icon: '📋', label: '分类' },
+  summarization: { category: '数据', en: 'DATA', icon: '📋', label: '摘要' },
+  translation: { category: '数据', en: 'DATA', icon: '📋', label: '翻译' },
+  math: { category: '数据', en: 'DATA', icon: '📋', label: '数学' },
+  // WRITING & CHAT（9）
+  'content-writing': { category: '写作与对话', en: 'WRITING & CHAT', icon: '💬', label: '内容写作' },
+  'research-reports': { category: '写作与对话', en: 'WRITING & CHAT', icon: '💬', label: '研究与报告' },
+  'qa-knowledge': { category: '写作与对话', en: 'WRITING & CHAT', icon: '💬', label: '问答与知识' },
+  conversation: { category: '写作与对话', en: 'WRITING & CHAT', icon: '💬', label: '对话' },
+  'customer-support': { category: '写作与对话', en: 'WRITING & CHAT', icon: '💬', label: '客户支持' },
+  'roleplay-fiction': { category: '写作与对话', en: 'WRITING & CHAT', icon: '💬', label: '角色扮演与虚构' },
+  'finance-trading': { category: '写作与对话', en: 'WRITING & CHAT', icon: '💬', label: '金融与交易' },
+  'security-audit': { category: '写作与对话', en: 'WRITING & CHAT', icon: '💬', label: '安全审计' },
+  other: { category: '写作与对话', en: 'WRITING & CHAT', icon: '💬', label: '其他' },
+  // 内网特有：点名模型
+  pinned: { category: '指定模型', en: 'PINNED', icon: '📌', label: '用户点名' }
+};
+
+function subCategoryOf(task, subTask) {
+  if (task === 'explicit') return SUB_CATEGORY.pinned;
+  if (SUB_CATEGORY[subTask]) return SUB_CATEGORY[subTask];
+  // 路由族兜底小类（未命中线索时）
+  const fallback = { default: 'qa-knowledge', coding: 'code-generation', reasoning: 'research-reports', creative: 'content-writing', extraction: 'data-extraction', agent: 'workflow-execution' }[task];
+  return SUB_CATEGORY[fallback] || SUB_CATEGORY.other;
+}
 
 // 任务榜单（OpenRouter「task-spend rankings」内网版）：按任务类型聚合决策日志，
   // 每类任务展示首选模型+使用份额+满意度——「大家把流量花在了哪」一目了然。
@@ -842,17 +891,21 @@ const TASK_CATEGORIES = {
       slot.models[model] = (slot.models[model] || 0) + 1;
       if (entry?.outcome?.ok === false) slot.fails[model] = (slot.fails[model] || 0) + 1;
     }
-    const board = Object.values(byTask).map((slot) => ({
+    const board = Object.values(byTask).map((slot) => {
+      const sc = subCategoryOf(slot.task, slot.sub);
+      return {
       task: slot.task,
       sub: slot.sub,
-      category: TASK_CATEGORIES[slot.task]?.category || '未分类',
-      categoryIcon: TASK_CATEGORIES[slot.task]?.icon || '·',
+      subLabel: sc.label,
+      category: sc.category,
+      categoryEn: sc.en,
+      categoryIcon: sc.icon,
       total: slot.total,
       picks: Object.entries(slot.models)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
         .map(([model, count]) => ({ model, share: Number(((count / slot.total) * 100).toFixed(1)), fails: slot.fails[model] || 0 }))
-    })).sort((a, b) => b.total - a.total);
+    }}).sort((a, b) => b.total - a.total);
     return json(res, 200, { window: 'recent 2000 decisions', board });
   }
   if (req.method === 'GET' && url.pathname === '/admin/api/metrics') return json(res, 200, { counters, health, recent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: sessions.size });
