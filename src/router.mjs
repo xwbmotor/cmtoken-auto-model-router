@@ -17,11 +17,45 @@ export function costTierBand(config) {
 import { adjustFor as marketAdjustFor } from './market-signal-runtime.mjs';
 // 任务分类正则：内置为缺省值；config.taskRules.patterns 提供可覆盖子集（key=任务名，value=字符串数组按 | 合并）
 const DEFAULT_TASK_PATTERNS = {
-  coding: /代码|编程|程序|函数|接口|报错|异常|debug|bug|python|java|javascript|typescript|golang|rust|sql|regex|算法|并发|重构|单元测试/i,
-  reasoning: /推理|证明|分析原因|根因|权衡|取舍|对比|评估|规划|方案|设计|架构|框架|路由|综合选择|怎么做|如何实现|分布式事务|数学|逻辑|为什么|比较.*优缺点|reason|prove|analy[sz]e|architecture/i,
-  creative: /创作|文案|故事|诗|广告|宣传语|口号|营销|改写.*风格|脑暴|起名|剧本|slogan|creative|story|poem|copywriting/i,
-  extraction: /提取|抽取|分类|标签|结构化|转换为.*json|只返回|识别字段|extract|classify|parse|json/i
+  coding: /代码|编程|程序|函数|接口|报错|异常|debug|bug|python|java|javascript|typescript|golang|rust|sql|regex|算法|并发安全|重构|单元测试|评审.{0,6}代码|代码评审/i,
+  reasoning: /推理|证明|分析原因|根因|权衡|取舍|对比|评估|规划|方案|设计|架构|分层|框架|路由|综合选择|怎么做|如何实现|分布式事务|数学|逻辑|为什么|比较.*优缺点|研究报告|调研报告|行业趋势|reason|prove|analy[sz]e|architecture/i,
+  creative: /创作|文案|故事|诗|广告|宣传语|口号|营销|改写.*风格|脑暴|起名|剧本|扮演|角色扮演|slogan|creative|story|poem|copywriting|roleplay/i,
+  extraction: /提取|抽取|分类|归类|标签|结构化|转换为|转换|映射|清洗|格式化|只返回|识别字段|extract|classify|parse|json/i
 };
+
+// 小类细分（OpenRouter subcategory 语义）：在已识别大类内按线索细分，只影响展示不影响打分
+const SUBTASK_PATTERNS = {
+  coding: [
+    [/报错|异常|bug|debug|错误|排查|修复|stack ?trace|为什么.*不(工作|生效)/i, 'debugging'],
+    [/评审|review|code review|看看.{0,8}代码|检查.{0,8}(代码|实现)/i, 'code-review'],
+    [/sql|查询.*表|select |join |数据库查询|索引优化/i, 'sql-query'],
+    [/测试|单元测试|test case|用例/i, 'code-test']
+  ],
+  reasoning: [
+    [/架构|分层|部署方案|技术选型|系统设计|扩容/i, 'architecture'],
+    [/规划|排期|路线图|分几期|怎么做|步骤/i, 'multi-step-planning'],
+    [/调研|报告|研究|综述|白皮书|分析报告/i, 'research-report']
+  ],
+  creative: [
+    [/扮演|角色扮演|roleplay|rp|写.{0,4}(故事|小说|剧本)/i, 'roleplay-fiction'],
+    [/文案|宣传|营销|slogan|口号|起名|标题/i, 'content-writing']
+  ],
+  extraction: [
+    [/分类|标签|归类|打标|classify/i, 'classification'],
+    [/转换|清洗|映射|格式化|transform/i, 'data-transformation'],
+    [/提取|抽取|结构化|抽取字段|extract|json/i, 'data-extraction']
+  ],
+  default: [
+    [/你好|嗨|hello|hi|在吗/i, 'conversation']
+  ]
+};
+
+function resolveSubTask(task, text) {
+  const rules = SUBTASK_PATTERNS[task];
+  if (!rules) return null;
+  for (const [re, sub] of rules) if (re.test(text)) return sub;
+  return null;
+}
 
 function resolveTaskPatterns(taskRules) {
   const merged = { ...DEFAULT_TASK_PATTERNS };
@@ -47,13 +81,18 @@ export function requestText(body) {
   return (body.messages || []).map((m) => flattenContent(m.content)).join('\n');
 }
 
+// 任务分类用的文本：排除系统提示词（模板词如「你是研发助手」会把所有请求都拽向 coding）
+function taskText(body) {
+  return (body.messages || []).filter((m) => m.role !== 'system').map((m) => flattenContent(m.content)).join('\n');
+}
+
 export function estimateInputTokens(text) {
   const cjk = (text.match(/[\u3400-\u9fff]/g) || []).length;
   return Math.max(1, Math.ceil(cjk / 1.6 + (text.length - cjk) / 4));
 }
 
 export function analyzeRequest(body, config) {
-  const text = requestText(body);
+  const text = taskText(body);
   const patterns = resolveTaskPatterns(config.taskRules);
   let task = 'default';
   for (const [name, regex] of Object.entries(patterns)) {
@@ -94,7 +133,11 @@ export function analyzeRequest(body, config) {
   const complexity = Number(Math.min(1, signals.reduce((sum, signal) => sum + signal.contribution, 0)).toFixed(3));
   const tier = complexity >= config.taskRules.complexMinComplexity ? 'complex'
     : complexity <= config.taskRules.simpleMaxComplexity ? 'simple' : 'balanced';
-  return { task, tier, complexity, confidence: trivial ? 0.98 : task === 'default' ? 0.55 : 0.86, textLength: text.length, estimatedInputTokens: estimateInputTokens(text), requirements, signals };
+  const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+  // 工具调用请求 → Agent 大类（OpenRouter: Workflow Execution），打分仍用 default 档（quality.agent 未实测）
+  const finalTask = hasTools ? 'agent' : task;
+  const subTask = hasTools ? 'workflow-execution' : resolveSubTask(task, text);
+  return { task: finalTask, subTask, tier, complexity, confidence: trivial ? 0.98 : task === 'default' ? 0.55 : 0.86, textLength: text.length, estimatedInputTokens: estimateInputTokens(text), requirements, signals };
 }
 
 export function mergeSemanticAssessment(base, semantic, applied = true) {
@@ -179,7 +222,8 @@ export function oracleChoice(body, config, runtime = {}) {
     return !capabilityEligible(m, analysis.requirements).length;
   });
   if (!eligible.length) return null;
-  const qualityOf = (m) => Number(m.quality?.[analysis.task] ?? m.quality.default);
+  // 质量回退链：任务无实测跑分（如 agent/web-search 小类）→ 用 default 档，避免 NaN 参与排序
+  const qualityOf = (m) => Number(m.quality?.[analysis.task] ?? m.quality['default'] ?? 0.75);
   const floor = Number(config.routing?.qualityFloor || 0.72);
   const qualified = eligible.filter((m) => qualityOf(m) >= floor);
   const pool = qualified.length ? qualified : eligible;
@@ -227,7 +271,7 @@ export function routeRequest(body, config, runtime = {}) {
     reasons.push(...capabilityEligible(model, analysis.requirements).map((x) => `missing_${x}`));
     if (reasons.length) { rejected.push({ model: model.id, reasons }); continue; }
 
-    const quality = Number(model.quality?.[analysis.task] ?? model.quality.default);
+    const quality = Number(model.quality?.[analysis.task] ?? model.quality['default'] ?? 0.75);
     const uncertainty = model.calibrationStatus === 'verified' ? 0 : config.routing.uncertaintyPenalty;
     const selfBonus = config.routing.preferSelfHosted && model.ownership === 'self_hosted' ? config.routing.selfHostedBonus : 0;
     const dynamicPenalty = livePenalty(model.id, health, config);

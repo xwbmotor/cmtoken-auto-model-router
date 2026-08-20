@@ -235,7 +235,7 @@ function simulatePolicy(policyConfig) {
     const model = policyConfig.models.find((item) => item.id === decision.suggestedModel);
     const costYuan = estimateCostYuan(sample.body, decision.analysis, model, policyConfig, decision.reasoningLevel || 'off');
     const latencyMs = model?.avgLatencyMs ?? Math.round(Number(candidate?.latencyIndex || 0) * 43787);
-    return { id: sample.id, label: sample.label, task: decision.analysis.task, complexity: decision.analysis.complexity, tier: decision.analysis.tier, model: decision.suggestedModel, quality: candidate?.quality || 0, costIndex: Number(candidate?.costIndex || 0), latencyIndex: Number(candidate?.latencyIndex || 0), costYuan: costYuan == null ? null : Number(costYuan), latencyMs, signals: decision.analysis.signals };
+    return { id: sample.id, label: sample.label, task: decision.analysis.task, subTask: decision.analysis.subTask || '', complexity: decision.analysis.complexity, tier: decision.analysis.tier, model: decision.suggestedModel, quality: candidate?.quality || 0, costIndex: Number(candidate?.costIndex || 0), latencyIndex: Number(candidate?.latencyIndex || 0), costYuan: costYuan == null ? null : Number(costYuan), latencyMs, signals: decision.analysis.signals };
   });
   const distribution = {};
   for (const row of rows) distribution[row.model] = (distribution[row.model] || 0) + 1;
@@ -775,13 +775,17 @@ const server = http.createServer(async (req, res) => {
     } catch (error) { return errorJson(res, 400, error.message, 'invalid_feedback'); }
   }
   // 任务分类体系（参考 OpenRouter 大类+小类）：路由层仍是 5 任务（打分键），展示层归大类。
+// 任务分类体系（对齐 OpenRouter rankings 的 category/subcategory 两级语义）：
+// 5 大类 = 路由打分层（quality 有实测跑分支撑）；小类 = 展示层细分（正则线索，不影响打分）
 const TASK_CATEGORIES = {
-  default:    { category: '通用问答', sub: '日常问答', icon: '💬' },
-  coding:     { category: '技术工程', sub: '代码/SQL/工具', icon: '⚙️' },
-  reasoning:  { category: '分析推理', sub: '推理/规划/架构', icon: '🧠' },
-  creative:   { category: '内容创作', sub: '文案/营销/创意', icon: '✍️' },
-  extraction: { category: '数据结构化', sub: '抽取/分类/JSON', icon: '📋' },
-  unknown:    { category: '未分类', sub: '—', icon: '·' }
+  default:    { category: '通用', categoryEn: 'General', icon: '💬', subs: { conversation: '会话', 'qa-knowledge': '问答' }, defaultSub: '问答' },
+  coding:     { category: '代码', categoryEn: 'Code', icon: '⚙️', subs: { debugging: '调试', 'code-review': '代码评审', 'sql-query': 'SQL 查询', 'code-test': '编写测试', 'code-generation': '代码生成' }, defaultSub: '代码生成' },
+  reasoning:  { category: '分析', categoryEn: 'Reasoning', icon: '🧠', subs: { architecture: '架构设计', 'multi-step-planning': '多步规划', 'research-report': '研究报告' }, defaultSub: '综合推理' },
+  creative:   { category: '内容', categoryEn: 'Content', icon: '✍️', subs: { 'roleplay-fiction': '角色扮演', 'content-writing': '文案写作' }, defaultSub: '创意写作' },
+  extraction: { category: '数据', categoryEn: 'Data', icon: '📋', subs: { classification: '分类打标', 'data-transformation': '数据转换', 'data-extraction': '数据抽取' }, defaultSub: '数据抽取' },
+  agent:      { category: '智能体', categoryEn: 'Agent', icon: '🤖', subs: { 'workflow-execution': '工作流执行', 'web-search': '联网搜索', 'multi-step': '多步工具链' }, defaultSub: '工作流执行' },
+  explicit:   { category: '指定模型', categoryEn: 'Pinned', icon: '📌', subs: {}, defaultSub: '用户点名' },
+  unknown:    { category: '未分类', categoryEn: '—', icon: '·', subs: {}, defaultSub: '—' }
 };
 
 // 任务榜单（OpenRouter「task-spend rankings」内网版）：按任务类型聚合决策日志，
@@ -827,17 +831,22 @@ const TASK_CATEGORIES = {
     const byTask = {};
     for (const entry of recent) {
       const task = entry?.decision?.analysis?.task || 'unknown';
+      const subTask = entry?.decision?.analysis?.subTask || '';
       const model = entry?.decision?.selectedModel || entry?.decision?.suggestedModel;
       if (!model) continue;
-      const slot = byTask[task] ||= { task, total: 0, models: {}, fails: {} };
+      const cat = TASK_CATEGORIES[task] || TASK_CATEGORIES.unknown;
+      const sub = cat.subs[subTask] || cat.defaultSub;
+      const key = task + '/' + sub;
+      const slot = byTask[key] ||= { task, sub, total: 0, models: {}, fails: {} };
       slot.total += 1;
       slot.models[model] = (slot.models[model] || 0) + 1;
       if (entry?.outcome?.ok === false) slot.fails[model] = (slot.fails[model] || 0) + 1;
     }
     const board = Object.values(byTask).map((slot) => ({
       task: slot.task,
+      sub: slot.sub,
       category: TASK_CATEGORIES[slot.task]?.category || '未分类',
-      sub: TASK_CATEGORIES[slot.task]?.sub || '—',
+      categoryIcon: TASK_CATEGORIES[slot.task]?.icon || '·',
       total: slot.total,
       picks: Object.entries(slot.models)
         .sort((a, b) => b[1] - a[1])
