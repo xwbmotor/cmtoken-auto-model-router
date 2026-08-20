@@ -240,7 +240,7 @@ export function routeRequest(body, config, runtime = {}) {
   if (pref?.model && ordered.length > 1) {
     const best = ordered[0];
     const target = ordered.find((x) => x.model === pref.model);
-    if (target && best.model !== pref.model && best.score - target.score <= Number(pref.tolerance ?? 0.02)) {
+    if (target && best.model !== pref.model && best.score - target.score <= Number(pref.tolerance ?? 0.02) + 1e-9) {
       ordered.splice(ordered.indexOf(target), 1);
       ordered.unshift(target);
       preferenceApplied = true;

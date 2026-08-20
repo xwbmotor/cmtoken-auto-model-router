@@ -86,6 +86,26 @@ function renderSimulation(result) {
   lastSimulation = result; const c = result.current, p = result.proposed, risk = result.changedRate >= .5 ? 'high' : result.changedRate >= .2 ? 'medium' : 'low';
   $('impactSummary').innerHTML = `<article class="impact ${risk}"><span>模型切换</span><strong>${result.changed}/${result.sampleCount}</strong><small>${percentValue(result.changedRate)} 代表任务改变</small></article><article><span>预计质量</span>${metricDelta(c.averageQuality,p.averageQuality)}</article>${(c.averageCostYuan!=null&&p.averageCostYuan!=null)?`<article><span>平均单次成本 <span class="help" data-help="按代表性任务的平均输入输出量估算的每次请求成本（元）。0.003 元 = 一千次请求约 3 元。">?</span></span>${metricDeltaCost(c.averageCostYuan,p.averageCostYuan,true)}</article>`:`<article><span>成本指数</span>${metricDelta(c.averageCostIndex,p.averageCostIndex,true)}</article>`}${(c.averageLatencyMs!=null&&p.averageLatencyMs!=null)?`<article><span>平均端到端时延 <span class="help" data-help="从发出请求到收完完整回答的总耗时（含模型思考时间），按代表性任务平均。">?</span></span>${metricDeltaMs(c.averageLatencyMs,p.averageLatencyMs,true)}</article>`:`<article><span>时延指数</span>${metricDelta(c.averageLatencyIndex,p.averageLatencyIndex,true)}</article>`}<article><span>自建比例</span><strong>${percentValue(p.selfHostedRate)}</strong><small>当前 ${percentValue(c.selfHostedRate)}</small></article>`;
   $('impactRows').innerHTML = p.rows.map((row,i) => { const before=c.rows[i], changed=before.model!==row.model; return `<tr><td><strong>${row.label}</strong><br><small>${taskCN(row.task)}</small></td><td>${Math.round(row.complexity*100)} · ${tierCN(row.tier)}</td><td>${before.model}</td><td>${row.model}</td><td><span class="pill ${changed?'bad':'good'}">${changed?'切换':'不变'}</span></td></tr>`; }).join('');
+  renderSensitivity(result.sensitivity);
+}
+// 敏感度分析：每个滑条「再拉多少才会变 / 拉到头也变不了的原因」
+function renderSensitivity(s) {
+  const box = $('sensitivityBox');
+  if (!box) return;
+  if (!s) { box.hidden = true; return; }
+  const fmt = (v) => Number(v).toFixed(2);
+  const cards = Object.values(s).map((axis) => {
+    const head = `<div class="sens-head"><b>${axis.label}</b><span class="pill muted">当前 ${fmt(axis.currentValue)} · 范围 ${fmt(axis.range.min)}~${fmt(axis.range.max)}</span></div>`;
+    if (axis.nextFlip) {
+      const dir = axis.nextFlip.at > axis.currentValue ? '再拉高' : '再拉低';
+      const gap = Math.abs(axis.nextFlip.at - axis.currentValue);
+      return `<article class="sens-card"><div class="sens-head"><b>${axis.label}</b><span class="pill ${gap <= .1 ? 'warn' : 'muted'}">${dir}到 ${fmt(axis.nextFlip.at)} 触发切换</span></div><p>调整幅度 <b>${gap.toFixed(2)}</b> 后，${axis.nextFlip.count} 个代表任务从「${axis.nextFlip.from}」切换到「${axis.nextFlip.to}」。当前值附近 ${(axis.flips || []).length ? `首个翻转点 ${fmt(axis.flips[0].at)}` : '尚无翻转'}。</p></article>`;
+    }
+    const why = axis.dominated ? `<p class="sens-why">${axis.dominated}</p>` : '<p class="sens-why">全程扫描未发现模型切换。</p>';
+    return `<article class="sens-card">${head}${why}</article>`;
+  }).join('');
+  box.innerHTML = `<p class="sens-title">敏感度分析 <span class="help" data-help="回答「滑条再拉多少才会改变路由」。若拉满全程都无变化，会给出原因（通常是某模型全面领先，怎么调权重都是它最优）。">?</span></p><div class="sens-grid">${cards}</div>`;
+  box.hidden = false;
 }
 async function simulate() { if (!config) return; readForm(); const result = await api('/admin/api/simulate',{method:'POST',body:JSON.stringify({proposedConfig:config})}); renderSimulation(result); renderBaselines(); return result; }
 function scheduleSimulation(){ clearTimeout(simulateTimer); simulateTimer=setTimeout(()=>simulate().catch(()=>{}),350); }

@@ -207,6 +207,81 @@ function simulatePolicy(policyConfig) {
   return { rows, distribution, averageQuality: average('quality'), averageCostIndex: average('costIndex'), averageLatencyIndex: average('latencyIndex'), averageCostYuan: average('costYuan'), averageLatencyMs: average('latencyMs'), selfHostedRate: Number((rows.filter((row) => selfIds.has(row.model)).length / rows.length).toFixed(3)), paretoFrontier: paretoFrontier(policyConfig.models).map((m) => m.id), baselines };
 }
 
+// 敏感度分析：对三个运营滑条（成本敏感度/速度敏感度/最低质量目标）各做一次翻转点扫描。
+// 回答运营的两个问题：「这个滑条再拉多少才会改变路由？」「拉到头也变不了，是为什么？」
+// 实现：以 proposed 为基线，单变量步进（step=0.02），记录每个代表样本的模型翻转点；
+// 若扫完全程 12 个样本零翻转，再诊断原因——某模型在当前任务分布下 Pareto 支配（质量/成本/时延全优），
+// 此时任何权重组合都选它，滑条自然「无感」。
+function simulateSensitivity(proposed) {
+  const axes = [
+    { key: 'costWeight', label: '成本敏感度', min: 0, max: 0.6 },
+    { key: 'latencyWeight', label: '速度敏感度', min: 0, max: 0.6 },
+    { key: 'qualityFloor', label: '最低质量目标', min: 0.6, max: 0.95 }
+  ];
+  const STEP = 0.02;
+  const proposedAt = (cfg) => SIMULATION_SAMPLES.map((sample) => {
+    try { return routeRequest({ model: 'auto', ...sample.body }, cfg, { health: {}, trafficBucket: 0 }).suggestedModel; } catch { return null; }
+  });
+  const basePicks = proposedAt(proposed);
+  const result = {};
+  for (const axis of axes) {
+    const flips = []; // { at, from, to, count }
+    let prevPicks = basePicks;
+    let prevValue = Number(proposed.routing[axis.key]);
+    const lo = Math.min(axis.min, prevValue), hi = Math.max(axis.max, prevValue);
+    for (let v = lo; v <= hi + 1e-9; v += STEP) {
+      const value = Number(v.toFixed(2));
+      if (Math.abs(value - prevValue) < 1e-9) continue;
+      const cfg = structuredClone(proposed);
+      cfg.routing[axis.key] = value;
+      const picks = proposedAt(cfg);
+      const changedIdx = [];
+      picks.forEach((m, i) => { if (m !== prevPicks[i]) changedIdx.push(i); });
+      if (changedIdx.length) {
+        const from = prevPicks[changedIdx[0]], to = picks[changedIdx[0]];
+        flips.push({ at: value, from, to, count: changedIdx.length, labels: changedIdx.map((i) => SIMULATION_SAMPLES[i].label) });
+      }
+      prevPicks = picks; prevValue = value;
+    }
+    const currentValue = Number(proposed.routing[axis.key]);
+    const nextFlip = flips.find((f) => f.at > currentValue);
+    result[axis.key] = {
+      label: axis.label,
+      currentValue,
+      range: { min: axis.min, max: axis.max },
+      totalFlips: flips.reduce((s, f) => s + f.count, 0),
+      flips: flips.slice(0, 8),
+      nextFlip: nextFlip ? { at: nextFlip.at, from: nextFlip.from, to: nextFlip.to, count: nextFlip.count } : null,
+      dominated: !flips.length ? proposeDominanceReason(proposed) : null
+    };
+  }
+  return result;
+}
+
+// 无翻转时的原因诊断：找当前分布下被选中次数最多的模型，验证它是否对所有启用模型 Pareto 支配
+function proposeDominanceReason(cfg) {
+  const enabled = cfg.models.filter((m) => m.enabled !== false);
+  if (enabled.length < 2) return '启用模型不足 2 个，无切换空间';
+  const picks = {};
+  for (const sample of SIMULATION_SAMPLES) {
+    try { const m = routeRequest({ model: 'auto', ...sample.body }, cfg, { health: {}, trafficBucket: 0 }).suggestedModel; picks[m] = (picks[m] || 0) + 1; } catch {}
+  }
+  const top = Object.entries(picks).sort((a, b) => b[1] - a[1])[0];
+  if (!top) return null;
+  const [topId, topCount] = top;
+  const topModel = enabled.find((m) => m.id === topId);
+  if (!topModel) return null;
+  // 逐任务验证：top 模型的质量分是否对每个对手全面 ≥，且成本/时延也更低（全任务支配才是真支配）
+  const tasks = ['default', ...Object.keys(topModel.quality || {})];
+  const dominating = enabled.filter((other) => other.id !== topId).every((other) =>
+    tasks.every((t) => Number(topModel.quality?.[t] ?? topModel.quality.default) >= Number(other.quality?.[t] ?? other.quality.default))
+    && Number(topModel.costIndex) <= Number(other.costIndex)
+    && Number(topModel.latencyIndex) <= Number(other.latencyIndex));
+  if (dominating) return `「${topModel.displayName || topId}」质量/成本/时延全面领先（Pareto 支配），调权重不会改变选择——这是阵容现状，不是配置问题`;
+  return null;
+}
+
+
 function updateHealth(model, ok, latencyMs) {
   const state = health[model] ||= { circuitState: 'closed', probeInFlight: false, consecutiveFailures: 0, successes: 0, failures: 0, ewmaLatencyMs: 0, circuitOpenUntil: 0 };
   state.ewmaLatencyMs = state.ewmaLatencyMs ? Math.round(state.ewmaLatencyMs * 0.8 + latencyMs * 0.2) : latencyMs;
@@ -621,7 +696,7 @@ const server = http.createServer(async (req, res) => {
       const current = simulatePolicy(config);
       const proposed = simulatePolicy(proposedConfig);
       const changed = proposed.rows.filter((row, index) => row.model !== current.rows[index].model).length;
-      return json(res, 200, { sampleCount: SIMULATION_SAMPLES.length, changed, changedRate: Number((changed / SIMULATION_SAMPLES.length).toFixed(3)), current, proposed });
+      return json(res, 200, { sampleCount: SIMULATION_SAMPLES.length, changed, changedRate: Number((changed / SIMULATION_SAMPLES.length).toFixed(3)), current, proposed, sensitivity: simulateSensitivity(proposedConfig) });
     } catch (error) { return errorJson(res, 400, error.message, 'invalid_simulation'); }
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/feedback') {

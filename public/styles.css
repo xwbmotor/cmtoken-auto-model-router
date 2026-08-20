@@ -118,3 +118,16 @@ body:not(.simple-view) .simple-only{display:none!important}
 .capability-matrix-panel .cap-model small{color:#98a2b3;font-weight:400}
 .capability-matrix-panel .dim{opacity:.45}
 .capability-matrix-panel .cap-input{color:#344054}
+
+/* 敏感度分析卡片 */
+.sensitivity-box { margin: 12px 0; }
+.sens-title { font-size: 12px; font-weight: 600; color: #5c6470; margin-bottom: 8px; }
+.sens-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+.sens-card { background: #fafbfc; border: 1px solid #e3e6eb; border-radius: 8px; padding: 10px 12px; }
+.sens-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.sens-head b { font-size: 13px; }
+.sens-head .pill { font-size: 11px; }
+.pill.warn { background: #fff4e0; color: #9a6a1a; border-color: #f0d9b0; }
+.sens-card p { font-size: 12px; color: #5c6470; margin: 0; line-height: 1.5; }
+.sens-card p b { color: #1f2429; }
+.sens-why { font-size: 12px; color: #8a5524; background: #fff8ef; border: 1px dashed #e8cfa5; border-radius: 6px; padding: 6px 8px; margin: 0; line-height: 1.5; }
