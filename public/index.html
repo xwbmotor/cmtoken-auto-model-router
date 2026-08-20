@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Auto Model Router · 管理台</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/operations.css"><link rel="stylesheet" href="/help.css"></head>
 <body>
-  <header><div><p class="eyebrow">模型路由 · 运行管理</p><h1>Auto Model Router</h1><p class="subtitle">用业务目标配置路由，发布前先看全局影响。</p></div><div class="view-switch" title="简单模式只保留日常运营页面；专家模式开放全部页面与参数。"><button id="btnSimple">简单模式</button><button id="btnExpert" class="active">专家模式</button></div><a class="manual-link" href="/models" target="_blank" rel="noopener" title="给调用方看的模型广场（能力与价值介绍，新标签页打开）"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg>模型广场</a><div class="auth"><label>Admin Token<input id="token" type="password" placeholder="填写 ADMIN_TOKEN"></label><button id="connect" class="secondary">连接</button><span id="status" class="pill muted">未连接</span></div></header>
+  <header><div><p class="eyebrow">模型路由 · 运行管理</p><h1>Auto Model Router</h1><p class="subtitle">用业务目标配置路由，发布前先看全局影响。</p></div><div class="view-switch" title="简单模式只保留日常运营页面；专家模式开放全部页面与参数。"><button id="btnSimple">简单模式</button><button id="btnExpert" class="active">专家模式</button></div><div class="auth"><label>Admin Token<input id="token" type="password" placeholder="填写 ADMIN_TOKEN"></label><button id="connect" class="secondary">连接</button><span id="status" class="pill muted">未连接</span></div></header>
   <nav class="tabs" id="tabs" aria-label="页面分区">
     <button data-tab="overview" class="active">总览</button>
     <button data-tab="policy">业务策略<span id="tabDirtyDot" class="tab-dot" hidden></span></button>

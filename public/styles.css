@@ -166,7 +166,7 @@ body:not(.simple-view) .simple-only{display:none!important}
 .tabs button:hover { color: var(--text, #1f2937); }
 .tabs button.active { color: var(--brand, #5e6ad2); font-weight: 600; border-bottom-color: var(--brand, #5e6ad2); }
 .tab-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #d92d20; margin-left: 6px; vertical-align: 2px; }
-.tab-page { display: block; }
+.tab-page { display: block; overflow: visible; }
 .tab-page[hidden] { display: none !important; }
 /* 手册 iframe */
 .manual-frame { width: 100%; height: calc(100vh - 260px); min-height: 480px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: #fff; }
@@ -219,3 +219,7 @@ body:not(.simple-view) .simple-only{display:none!important}
 .dist-row small { color: var(--muted2); text-align: right; }
 @media (max-width: 1100px) { .tier-picker { grid-template-columns: repeat(3, 1fr); } .debug-split { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { .tier-picker { grid-template-columns: repeat(2, 1fr); } .snapshot-grid { grid-template-columns: repeat(2, 1fr); } }
+
+/* 帮助（手册）tab：让 iframe 自管滚动，外层不参与 */
+.tab-page#help > .panel { display: flex; flex-direction: column; }
+.tab-page#help iframe { flex: 1; }

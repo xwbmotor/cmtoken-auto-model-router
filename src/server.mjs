@@ -12,6 +12,7 @@ import { FeedbackLog } from './feedback.mjs';
 import { DecisionLog } from './decision-log.mjs';
 import { logger } from './logger.mjs';
 import { renderPrometheusMetrics } from './metrics.mjs';
+import { renderMarkdown } from './markdown.mjs';
 import { createShutdownManager, installCrashHandlers } from './shutdown.mjs';
 import { createRateLimiter } from './rate-limiter.mjs';
 import { shouldPromoteVerified } from './calibration.mjs';
@@ -79,8 +80,6 @@ function buildRoutingReport() {
 }
 
 const counters = { startedAt: new Date().toISOString(), total: 0, auto: 0, explicit: 0, success: 0, errors: 0, fallback: 0, selected: {}, selectedBy: {}, suggested: {}, task: {}, outcome: { auto: { success: 0, error: 0 }, explicit: { success: 0, error: 0 } }, semantic: { eligible: 0, attempted: 0, succeeded: 0, disagreed: 0, errors: 0, applied: 0 } };
-// 任务类型中文名（模型广场展示用）
-const TASK_CN = { default: '通用', coding: '代码', reasoning: '推理', extraction: '抽取', creative: '创意', simple: '轻量' };
 const SIMULATION_SAMPLES = [
   { id: 'weekday', label: '直接事实', body: { messages: [{ role: 'user', content: '今天星期几？' }], max_tokens: 64 } },
   { id: 'classification', label: '工单分类', body: { messages: [{ role: 'user', content: '把“商品破损申请退款”分类为售前、售后或咨询，只返回标签。' }], max_tokens: 64 } },
@@ -722,32 +721,6 @@ const server = http.createServer(async (req, res) => {
     return json(res, ready ? 200 : 503, { ready, status: ready ? 'ready' : 'not_ready', upstreamReachable: probe.reachable, upstreamStatus: probe.status ?? null, upstreamError: probe.error ?? null, configVersion: config.version, checkedAt: new Date().toISOString() });
   }
   if (req.method === 'GET' && url.pathname === '/v1/models') return json(res, 200, { object: 'list', data: [{ id: 'auto', object: 'model', owned_by: 'router' }, ...config.models.filter((m) => m.enabled).map((m) => ({ id: m.id, object: 'model', owned_by: m.ownership }))] });
-  // 公开「模型广场」数据（免 token 只读）：给调用方看 auto 能力/价值介绍页用。
-  // 只透出已启用模型的展示信息，不含部署资源、密钥、管理配置等敏感内容。
-  if (req.method === 'GET' && url.pathname === '/api/models') {
-    const report = buildRoutingReport();
-    const cards = config.models.filter((m) => m.enabled !== false).map((m) => ({
-      id: m.id,
-      displayName: m.displayName || m.id,
-      ownership: m.ownership === 'self_hosted' ? '自建部署' : '生态伙伴',
-      quality: Number(m.quality?.default ?? 0),
-      strengths: Object.entries(m.quality || {})
-        .filter(([k, v]) => k !== 'default' && Number(v) >= Math.max(...Object.entries(m.quality || {}).filter(([k2]) => k2 !== 'default').map(([, v2]) => Number(v2))) - 0.02)
-        .sort((a, b) => Number(b[1]) - Number(a[1])).map(([k]) => TASK_CN[k] || k).slice(0, 3),
-      inputYuan: m.pricingYuanPerMillionTokens?.input ?? null,
-      outputYuan: m.pricingYuanPerMillionTokens?.output ?? null,
-      costIndex: Number(m.costIndex ?? 0),
-      latencyIndex: Number(m.latencyIndex ?? 0),
-      contextWindow: m.contextWindow ?? null,
-      calibration: m.calibrationStatus === 'verified' ? '已验证' : m.calibrationStatus === 'pilot' ? '试点中' : '待校准'
-    }));
-    return json(res, 200, {
-      service: { version: config.version, autoTrafficPercent: config.routing?.activeTrafficPercent ?? 100, tier: config.routing?.costTier || 'balanced' },
-      models: cards,
-      report: { highlights: report.highlights, arms: report.arms },
-      doc: '/manual'
-    });
-  }
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') return proxyCompletion(req, res);
   if (url.pathname.startsWith('/admin/api/') && !authorized(req, 'ADMIN_TOKEN')) {
     // 鉴权失败也限流（独立更严的桶）：否则 ADMIN_TOKEN 可被无限暴力破解
@@ -786,7 +759,7 @@ const server = http.createServer(async (req, res) => {
   }
   // 任务榜单（OpenRouter「task-spend rankings」内网版）：按任务类型聚合决策日志，
   // 每类任务展示首选模型+使用份额+满意度——「大家把流量花在了哪」一目了然。
-  // 路由体检报表：见 buildRoutingReport()（admin 与公开模型广场共用）
+  // 路由体检报表：见 buildRoutingReport()
   if (req.method === 'GET' && url.pathname === '/admin/api/routing-report') {
     return json(res, 200, buildRoutingReport());
   }
@@ -873,21 +846,21 @@ const server = http.createServer(async (req, res) => {
     try { config = await loadConfig(); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); return json(res, 200, { ok: true, version: config.version }); }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
   }
-  // 模型广场（公开页，免 token）：给调用方看 auto 能力与价值的介绍页
-  if (url.pathname === '/models') {
-    try {
-      const html = await readFile(join(projectRoot, 'public', 'models.html'), 'utf8');
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      return res.end(html);
-    } catch { return errorJson(res, 404, '页面不存在', 'not_found'); }
-  }
   if (url.pathname === '/manual') {
-    // 使用手册页：读 docs/使用说明.md 渲染（服务启动目录固定，路径穿越已被 normalize 防住）
+    // 使用手册页：服务端把 docs/使用说明.md 预渲染成 HTML 注入模板（客户端 JS 只做目录/高亮，失败也可见）
     try {
       const md = await readFile(join(projectRoot, 'docs', '使用说明.md'), 'utf8');
-      const html = await readFile(join(projectRoot, 'public', 'manual.html'), 'utf8');
+      const tpl = await readFile(join(projectRoot, 'public', 'manual.html'), 'utf8');
+      // markdown → HTML：给 h2/h3 加 id 便于 TOC 锚点；body 内的 " 等无需转义（它已是 DOM 内容）
+      const body = renderMarkdown(md).replace(/<(h[23])>([^<]+)<\/>/g, (_, t, txt) => {
+        const id = 'sec-' + txt.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40) + '-' + Math.random().toString(36).slice(2,6);
+        return '<' + t + ' id="' + id + '">' + txt + '</' + t + '>';
+      });
+      const html = tpl
+        .replace('__MANUAL_VERSION__', () => String(config.version).replace(/[^0-9a-zA-Z.\-]/g, ''))
+        .replace('__MANUAL_BODY__', () => body);
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(html.replace('__MANUAL_CONTENT__', () => md.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')));
+      res.end(html);
       return;
     } catch { return errorJson(res, 404, '手册不存在', 'not_found'); }
   }

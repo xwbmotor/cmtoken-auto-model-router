@@ -2,76 +2,83 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>使用手册 · Auto Model Router</title>
 <style>
-  :root { --bg:#fafafa; --panel:#fff; --text:#1f2937; --muted:#6b7280; --border:#e5e7eb; --brand:#3538cd; }
+  :root { --bg:#fafafa; --panel:#fff; --text:#1f2937; --muted:#6b7280; --border:#e5e7eb; --brand:#3538cd; --brand-soft:#eef2ff; }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
-  .wrap { max-width: 920px; margin: 0 auto; padding: 32px 24px 80px; }
-  header.top { position:sticky; top:0; z-index:5; background:rgba(250,250,250,.95); border-bottom:1px solid var(--border); backdrop-filter:blur(6px); }
-  header.top .inner { max-width:920px; margin:0 auto; padding:12px 24px; display:flex; align-items:center; gap:14px; }
-  header.top h1 { font-size:16px; margin:0; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.8 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  /* ── 顶栏 ── */
+  header.top { position:sticky; top:0; z-index:9; background:rgba(250,250,250,.96); border-bottom:1px solid var(--border); backdrop-filter:blur(6px); }
+  header.top .inner { max-width:1180px; margin:0 auto; padding:10px 24px; display:flex; align-items:center; gap:14px; }
+  header.top h1 { font-size:15px; margin:0; }
+  header.top .ver { color:var(--muted); font-size:12px; }
   header.top .back { color:var(--brand); text-decoration:none; font-size:13px; margin-left:auto; }
-  .doc { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:32px 36px; box-shadow:0 1px 3px rgba(16,24,40,.05); }
-  /* 手册正文由 JS 把转义后的 markdown 文本解析成 HTML（零依赖轻量解析：标题/表格/代码/列表/粗体/链接） */
-  pre code { background:var(--bg); border:1px solid var(--border); border-radius:8px; display:block; padding:12px 14px; overflow:auto; font-size:12.5px; }
-  code { background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-size:.92em; }
-  table { border-collapse:collapse; width:100%; margin:14px 0; font-size:13px; }
-  th,td { border:1px solid var(--border); padding:7px 10px; text-align:left; }
-  th { background:#f3f4f6; font-weight:600; }
-  h2 { font-size:19px; margin:28px 0 10px; padding-top:16px; border-top:1px solid var(--border); }
-  h3 { font-size:16px; margin:22px 0 8px; }
-  blockquote { margin:12px 0; padding:10px 16px; border-left:3px solid var(--brand); background:#eef2ff66; border-radius:0 8px 8px 0; color:#374151; }
+  /* ── 布局：左 TOC + 右正文 ── */
+  .layout { max-width:1180px; margin:0 auto; padding:24px 24px 80px; display:flex; gap:36px; align-items:flex-start; }
+  nav.toc { width:210px; flex:none; position:sticky; top:64px; max-height:calc(100vh - 88px); overflow:auto; padding:4px 0; }
+  nav.toc .toc-title { font-size:11px; font-weight:600; letter-spacing:.08em; color:var(--muted); text-transform:uppercase; padding:6px 10px; }
+  nav.toc a { display:block; padding:5px 10px 5px 16px; color:#4b5563; text-decoration:none; font-size:13px; border-left:2px solid transparent; border-radius:0 6px 6px 0; line-height:1.5; }
+  nav.toc a:hover { color:var(--brand); background:var(--brand-soft); }
+  nav.toc a.active { color:var(--brand); border-left-color:var(--brand); font-weight:600; background:var(--brand-soft); }
+  main.doc { flex:1; min-width:0; background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:36px 44px; box-shadow:0 1px 3px rgba(16,24,40,.05); }
+  /* ── 正文排版 ── */
+  main.doc > h1 { font-size:24px; margin:0 0 6px; }
+  main.doc > p:first-of-type { color:var(--muted); font-size:14.5px; margin-top:0; }
+  h2 { font-size:19px; margin:34px 0 10px; padding-bottom:8px; border-bottom:1px solid var(--border); scroll-margin-top:76px; }
+  h3 { font-size:15.5px; margin:22px 0 8px; scroll-margin-top:76px; }
+  h2, h3 { scroll-margin-top:80px; }
+  code { background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-size:.9em; font-family:ui-monospace,Consolas,monospace; }
+  pre { background:#0f172a; color:#e2e8f0; border-radius:10px; padding:16px 18px; overflow:auto; margin:12px 0; }
+  pre code { background:none; border:none; color:inherit; padding:0; font-size:12.5px; line-height:1.7; }
+  table { border-collapse:collapse; width:100%; margin:14px 0; font-size:13.5px; }
+  th,td { border:1px solid var(--border); padding:8px 12px; text-align:left; vertical-align:top; }
+  th { background:#f8fafc; font-weight:600; }
+  tr:nth-child(even) td { background:#fcfcfd; }
+  blockquote { margin:14px 0; padding:10px 16px; border-left:3px solid var(--brand); background:var(--brand-soft); border-radius:0 8px 8px 0; color:#374151; }
   a { color:var(--brand); }
+  ul,ol { padding-left:22px; }
+  li { margin:4px 0; }
+  /* ── embed 模式（管理页 tab iframe 内）── */
+  body.embed header.top { display:none; }
+  body.embed .layout { max-width:none; padding:0 4px 40px; gap:28px; }
+  body.embed nav.toc { top:8px; max-height:calc(100vh - 24px); }
+  body.embed main.doc { border:none; box-shadow:none; border-radius:0; padding:24px 30px; }
+  /* 窄屏收起 TOC */
+  @media (max-width: 900px) { nav.toc { display:none; } .layout { padding:16px; } main.doc { padding:22px 20px; } }
 </style></head>
 <body>
-<header class="top"><div class="inner"><h1>使用手册</h1><span style="color:var(--muted);font-size:12px">随服务发布 · docs/使用说明.md</span><a class="back" href="/">← 返回管理页</a></div></header>
-<div class="wrap"><article class="doc" id="doc"><pre id="raw" style="display:none">__MANUAL_CONTENT__</pre><div id="out">正在加载…</div></article></div>
+<header class="top"><div class="inner"><h1>使用手册</h1><span class="ver" id="ver"></span><a class="back" href="/">← 返回管理页</a></div></header>
+<div class="layout"><nav class="toc" id="toc"></nav><main class="doc" id="doc">__MANUAL_BODY__</main></div>
 <script>
-// 零依赖 markdown 渲染（覆盖手册用到的语法子集：标题/表格/代码块/行内代码/列表/粗体/链接/引用）
-const esc = (s) => s; // 服务端已转义
-function inline(s) {
-  return s
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-}
-function render(md) {
-  const lines = md.split('\n'); const out = []; let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (line.startsWith('```')) { // 代码块
-      const buf = []; i++;
-      while (i < lines.length && !lines[i].startsWith('```')) { buf.push(lines[i]); i++; }
-      i++; out.push('<pre><code>' + buf.join('\n') + '</code></pre>'); continue;
-    }
-    if (/^\|.*\|$/.test(line) && i + 1 < lines.length && /^\|[\s:|-]+\|$/.test(lines[i+1])) { // 表格
-      const rows = []; let j = i + 2;
-      while (j < lines.length && /^\|.*\|$/.test(lines[j])) { rows.push(lines[j]); j++; }
-      const cells = (r) => r.split('|').slice(1, -1).map((c) => c.trim());
-      out.push('<table><thead><tr>' + cells(line).map((c) => `<th>${inline(c)}</th>`).join('') + '</tr></thead><tbody>'
-        + rows.map((r) => '<tr>' + cells(r).map((c) => `<td>${inline(c)}</td>`).join('') + '</tr>').join('') + '</tbody></table>');
-      i = j; continue;
-    }
-    if (/^#{1,3}\s/.test(line)) { const level = line.match(/^#+/)[0].length; out.push(`<h${level+1}>${inline(line.replace(/^#+\s*/, ''))}</h${level+1}>`); i++; continue; }
-    if (/^&gt;\s?/.test(line)) { out.push('<blockquote>' + inline(line.replace(/^&gt;\s?/, '')) + '</blockquote>'); i++; continue; }
-    if (/^[-*]\s/.test(line) || /^\d+\.\s/.test(line)) { // 列表
-      const ordered = /^\d+\.\s/.test(line); const items = []; let j = i;
-      while (j < lines.length && (/^[-*]\s/.test(lines[j]) || /^\d+\.\s/.test(lines[j]))) { items.push('<li>' + inline(lines[j].replace(/^([-*]|\d+\.)\s*/, '')) + '</li>'); j++; }
-      out.push(`<${ordered ? 'ol' : 'ul'}>${items.join('')}</${ordered ? 'ol' : 'ul'}>`); i = j; continue;
-    }
-    if (!line.trim()) { i++; continue; }
-    out.push('<p>' + inline(line) + '</p>'); i++;
+// 服务端已把整篇 markdown 渲染为 HTML 注入 __MANUAL_HTML__（含 esc 转义）；
+// 本脚本只负责：还原正文 + 生成左侧目录 + 滚动高亮。即使 JS 失败，正文也已可见。
+(function () {
+  // 正文已由服务端预渲染到 <main id="doc">；脚本只生成左侧目录与滚动高亮，失败也不影响阅读
+  var ver = "__MANUAL_VERSION__";
+  document.getElementById('ver').textContent = ver && ver.indexOf('__') !== 0 ? ('v' + ver) : '';
+  if (location.search.indexOf('embed=1') !== -1) document.body.className = 'embed';
+  // 目录：抓 <main> 内的 h2/h3（main 已服务端注入）
+  var heads = Array.prototype.slice.call(document.querySelectorAll('main.doc h2, main.doc h3'));
+  var toc = document.getElementById('toc');
+  var frag = document.createDocumentFragment();
+  var title = document.createElement('div');
+  title.className = 'toc-title'; title.textContent = '目录';
+  frag.appendChild(title);
+  heads.forEach(function (h, i) {
+    if (!h.id) h.id = 'sec-' + i;
+    var a = document.createElement('a');
+    a.href = '#' + h.id; a.textContent = h.textContent;
+    if (h.tagName === 'H3') a.style.paddingLeft = '30px';
+    frag.appendChild(a);
+  });
+  toc.appendChild(frag);
+  // 滚动高亮当前节
+  var links = Array.prototype.slice.call(toc.querySelectorAll('a'));
+  function onScroll() {
+    var cur = null;
+    heads.forEach(function (h) { if (h.getBoundingClientRect().top < 100) cur = h.id; });
+    links.forEach(function (a) { a.className = a.getAttribute('href') === '#' + cur ? 'active' : ''; });
   }
-  return out.join('\n');
-}
-document.getElementById('out').innerHTML = render(document.getElementById('raw').textContent);
-  // 嵌入模式（管理页 tab iframe）：放宽限宽、去掉双层卡片边框
-  if (location.search.includes('embed=1')) {
-    document.querySelector('.wrap').style.maxWidth = 'none';
-    document.querySelector('.wrap').style.padding = '8px 4px 40px';
-    const doc = document.querySelector('.doc');
-    if (doc) { doc.style.border = 'none'; doc.style.boxShadow = 'none'; doc.style.padding = '6px 10px'; doc.style.borderRadius = '0'; }
-    const top = document.querySelector('header.top');
-    if (top) top.style.display = 'none';
-  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+})();
 </script>
 </body></html>
