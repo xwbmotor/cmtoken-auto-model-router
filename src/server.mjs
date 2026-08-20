@@ -41,7 +41,46 @@ const health = {};
 const sessions = new Map();
 const recent = [];
 const semanticReviews = [];
+// 路由体检（OpenRouter 评测叙事模板的内网版）：同一批代表任务上，auto 路由 vs 每个单模型固定基线
+// 的加权质量/平均成本/平均时延对比——「auto 比 X 便宜多少/质量高多少」一句话有数可查。
+// 模拟口径（读配置跑分），不调模型、零成本。
+function buildRoutingReport() {
+  const rows = SIMULATION_SAMPLES.map((sample) => {
+    const decision = routeRequest(sample.body, config, { health, preview: true });
+    return { sample: sample.id, task: decision.analysis.task, model: decision.selectedModel,
+      quality: decision.candidates[0]?.quality ?? 0,
+      costIndex: decision.candidates[0]?.costIndex ?? 0, latencyIndex: decision.candidates[0]?.latencyIndex ?? 0 };
+  });
+  const enabled = config.models.filter((m) => m.enabled !== false);
+  const estimate = (modelId) => {
+    const m = enabled.find((x) => x.id === modelId);
+    return rows.map((r) => {
+      const q = Number(m?.quality?.[r.task] ?? m?.quality?.default ?? 0);
+      return { quality: q, costIndex: Number(m?.costIndex ?? 0), latencyIndex: Number(m?.latencyIndex ?? 0) };
+    });
+  };
+  const avg = (xs) => xs.reduce((a, b) => a + b, 0) / (xs.length || 1);
+  const auto = { name: 'auto 路由', rows: rows.map((r) => ({ quality: r.quality, costIndex: r.costIndex, latencyIndex: r.latencyIndex })) };
+  const baselines = enabled.map((m) => ({ name: `固定 ${m.displayName || m.id}`, rows: estimate(m.id) }));
+  const summarize = (arm) => {
+    const q = avg(arm.rows.map((r) => r.quality));
+    const c = avg(arm.rows.map((r) => r.costIndex));
+    const l = avg(arm.rows.map((r) => r.latencyIndex));
+    return { name: arm.name, quality: Number(q.toFixed(3)), costIndex: Number(c.toFixed(3)), latencyIndex: Number(l.toFixed(3)) };
+  };
+  const arms = [auto, ...baselines].map(summarize);
+  const base = arms.find((a) => a.name.startsWith('auto'));
+  const strongest = arms.filter((a) => a !== base).sort((a, b) => b.quality - a.quality)[0];
+  const cheapest = arms.filter((a) => a !== base).sort((a, b) => a.costIndex - b.costIndex)[0];
+  const highlights = [];
+  if (strongest) highlights.push(`对比最强单模型 ${strongest.name}：质量 ${base.quality} vs ${strongest.quality}（${base.quality >= strongest.quality ? '+' : ''}${(base.quality - strongest.quality).toFixed(3)}），成本指数 ${base.costIndex} vs ${strongest.costIndex}（省 ${(((strongest.costIndex - base.costIndex) / (strongest.costIndex || 1)) * 100).toFixed(0)}%）`);
+  if (cheapest) highlights.push(`对比最便宜单模型 ${cheapest.name}：成本接近（${base.costIndex} vs ${cheapest.costIndex}），质量 ${base.quality} vs ${cheapest.quality}（${base.quality >= cheapest.quality ? '高' : '低'} ${Math.abs(base.quality - cheapest.quality).toFixed(3)}）`);
+  return { sampleCount: rows.length, arms, highlights, perSample: rows };
+}
+
 const counters = { startedAt: new Date().toISOString(), total: 0, auto: 0, explicit: 0, success: 0, errors: 0, fallback: 0, selected: {}, selectedBy: {}, suggested: {}, task: {}, outcome: { auto: { success: 0, error: 0 }, explicit: { success: 0, error: 0 } }, semantic: { eligible: 0, attempted: 0, succeeded: 0, disagreed: 0, errors: 0, applied: 0 } };
+// 任务类型中文名（模型广场展示用）
+const TASK_CN = { default: '通用', coding: '代码', reasoning: '推理', extraction: '抽取', creative: '创意', simple: '轻量' };
 const SIMULATION_SAMPLES = [
   { id: 'weekday', label: '直接事实', body: { messages: [{ role: 'user', content: '今天星期几？' }], max_tokens: 64 } },
   { id: 'classification', label: '工单分类', body: { messages: [{ role: 'user', content: '把“商品破损申请退款”分类为售前、售后或咨询，只返回标签。' }], max_tokens: 64 } },
@@ -683,6 +722,32 @@ const server = http.createServer(async (req, res) => {
     return json(res, ready ? 200 : 503, { ready, status: ready ? 'ready' : 'not_ready', upstreamReachable: probe.reachable, upstreamStatus: probe.status ?? null, upstreamError: probe.error ?? null, configVersion: config.version, checkedAt: new Date().toISOString() });
   }
   if (req.method === 'GET' && url.pathname === '/v1/models') return json(res, 200, { object: 'list', data: [{ id: 'auto', object: 'model', owned_by: 'router' }, ...config.models.filter((m) => m.enabled).map((m) => ({ id: m.id, object: 'model', owned_by: m.ownership }))] });
+  // 公开「模型广场」数据（免 token 只读）：给调用方看 auto 能力/价值介绍页用。
+  // 只透出已启用模型的展示信息，不含部署资源、密钥、管理配置等敏感内容。
+  if (req.method === 'GET' && url.pathname === '/api/models') {
+    const report = buildRoutingReport();
+    const cards = config.models.filter((m) => m.enabled !== false).map((m) => ({
+      id: m.id,
+      displayName: m.displayName || m.id,
+      ownership: m.ownership === 'self_hosted' ? '自建部署' : '生态伙伴',
+      quality: Number(m.quality?.default ?? 0),
+      strengths: Object.entries(m.quality || {})
+        .filter(([k, v]) => k !== 'default' && Number(v) >= Math.max(...Object.entries(m.quality || {}).filter(([k2]) => k2 !== 'default').map(([, v2]) => Number(v2))) - 0.02)
+        .sort((a, b) => Number(b[1]) - Number(a[1])).map(([k]) => TASK_CN[k] || k).slice(0, 3),
+      inputYuan: m.pricingYuanPerMillionTokens?.input ?? null,
+      outputYuan: m.pricingYuanPerMillionTokens?.output ?? null,
+      costIndex: Number(m.costIndex ?? 0),
+      latencyIndex: Number(m.latencyIndex ?? 0),
+      contextWindow: m.contextWindow ?? null,
+      calibration: m.calibrationStatus === 'verified' ? '已验证' : m.calibrationStatus === 'pilot' ? '试点中' : '待校准'
+    }));
+    return json(res, 200, {
+      service: { version: config.version, autoTrafficPercent: config.routing?.activeTrafficPercent ?? 100, tier: config.routing?.costTier || 'balanced' },
+      models: cards,
+      report: { highlights: report.highlights, arms: report.arms },
+      doc: '/manual'
+    });
+  }
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') return proxyCompletion(req, res);
   if (url.pathname.startsWith('/admin/api/') && !authorized(req, 'ADMIN_TOKEN')) {
     // 鉴权失败也限流（独立更严的桶）：否则 ADMIN_TOKEN 可被无限暴力破解
@@ -721,42 +786,9 @@ const server = http.createServer(async (req, res) => {
   }
   // 任务榜单（OpenRouter「task-spend rankings」内网版）：按任务类型聚合决策日志，
   // 每类任务展示首选模型+使用份额+满意度——「大家把流量花在了哪」一目了然。
-  // 路由体检报表（OpenRouter 评测叙事模板的内网版）：同一批代表任务上，
-  // auto 路由 vs 每个单模型固定基线的加权质量/平均成本/平均时延对比——
-  // 「auto 比 X 便宜多少/质量高多少」一句话有数可查。模拟口径（读配置跑分），不调模型、零成本。
+  // 路由体检报表：见 buildRoutingReport()（admin 与公开模型广场共用）
   if (req.method === 'GET' && url.pathname === '/admin/api/routing-report') {
-    const rows = SIMULATION_SAMPLES.map((sample) => {
-      const decision = routeRequest(sample.body, config, { health, preview: true });
-      return { sample: sample.id, task: decision.analysis.task, model: decision.selectedModel,
-        quality: decision.candidates[0]?.quality ?? 0,
-        costIndex: decision.candidates[0]?.costIndex ?? 0, latencyIndex: decision.candidates[0]?.latencyIndex ?? 0 };
-    });
-    const enabled = config.models.filter((m) => m.enabled !== false);
-    const estimate = (modelId) => {
-      const m = enabled.find((x) => x.id === modelId);
-      return rows.map((r) => {
-        const q = Number(m?.quality?.[r.task] ?? m?.quality?.default ?? 0);
-        return { quality: q, costIndex: Number(m?.costIndex ?? 0), latencyIndex: Number(m?.latencyIndex ?? 0) };
-      });
-    };
-    const avg = (xs) => xs.reduce((a, b) => a + b, 0) / (xs.length || 1);
-    const auto = { name: 'auto 路由', rows: rows.map((r) => ({ quality: r.quality, costIndex: r.costIndex, latencyIndex: r.latencyIndex })) };
-    const baselines = enabled.map((m) => ({ name: `固定 ${m.displayName || m.id}`, rows: estimate(m.id) }));
-    const summarize = (arm) => {
-      const q = avg(arm.rows.map((r) => r.quality));
-      const c = avg(arm.rows.map((r) => r.costIndex));
-      const l = avg(arm.rows.map((r) => r.latencyIndex));
-      return { name: arm.name, quality: Number(q.toFixed(3)), costIndex: Number(c.toFixed(3)), latencyIndex: Number(l.toFixed(3)) };
-    };
-    const arms = [auto, ...baselines].map(summarize);
-    const base = arms.find((a) => a.name.startsWith('auto'));
-    // 金句生成：auto vs 最强单模型 / auto vs 最便宜单模型
-    const strongest = arms.filter((a) => a !== base).sort((a, b) => b.quality - a.quality)[0];
-    const cheapest = arms.filter((a) => a !== base).sort((a, b) => a.costIndex - b.costIndex)[0];
-    const highlights = [];
-    if (strongest) highlights.push(`对比最强单模型 ${strongest.name}：质量 ${base.quality} vs ${strongest.quality}（${base.quality >= strongest.quality ? '+' : ''}${(base.quality - strongest.quality).toFixed(3)}），成本指数 ${base.costIndex} vs ${strongest.costIndex}（省 ${(((strongest.costIndex - base.costIndex) / (strongest.costIndex || 1)) * 100).toFixed(0)}%）`);
-    if (cheapest) highlights.push(`对比最便宜单模型 ${cheapest.name}：成本接近（${base.costIndex} vs ${cheapest.costIndex}），质量 ${base.quality} vs ${cheapest.quality}（${base.quality >= cheapest.quality ? '高' : '低'} ${Math.abs(base.quality - cheapest.quality).toFixed(3)}）`);
-    return json(res, 200, { sampleCount: rows.length, arms, highlights, perSample: rows });
+    return json(res, 200, buildRoutingReport());
   }
   // 市场信号状态：各任务的信号覆盖（激活/休眠）与每模型的份额/调整值——飞轮健康度一览
   if (req.method === 'GET' && url.pathname === '/admin/api/market-signal') {
@@ -840,6 +872,14 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/admin/api/reload') {
     try { config = await loadConfig(); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); return json(res, 200, { ok: true, version: config.version }); }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
+  }
+  // 模型广场（公开页，免 token）：给调用方看 auto 能力与价值的介绍页
+  if (url.pathname === '/models') {
+    try {
+      const html = await readFile(join(projectRoot, 'public', 'models.html'), 'utf8');
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      return res.end(html);
+    } catch { return errorJson(res, 404, '页面不存在', 'not_found'); }
   }
   if (url.pathname === '/manual') {
     // 使用手册页：读 docs/使用说明.md 渲染（服务启动目录固定，路径穿越已被 normalize 防住）

@@ -90,10 +90,23 @@ function stableStringify(value) {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
   return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
 }
-function syncDirty() { if (!config || !savedConfig) return; readForm(); const badge = $('dirtyBadge'); if (badge) badge.hidden = stableStringify(config) === stableStringify(savedConfig); }
+function syncDirty() { if (!config || !savedConfig) return; readForm(); const dirty = stableStringify(config) !== stableStringify(savedConfig); const badge = $('dirtyBadge'); if (badge) badge.hidden = !dirty; const dot = $('tabDirtyDot'); if (dot) dot.hidden = !dirty; }
 // 基线规范化：savedConfig 必须与 readForm 之后的 config 同形状（readForm 会补 pricingYuan…/performance 等默认键），
 // 否则 diff 永不相等。凡重建基线（connect/发布成功）处，先 render 表单再 readForm 再 snapshot。
 function snapshotBaseline() { bindPolicy(); renderModels(); renderCapabilityMatrix(); renderDeployment(); readForm(); savedConfig = structuredClone(config); clearDirty(); }
+// —— 页面 Tab 切换 ——
+const TABS = ['overview','policy','models','insights','semantic','debug','help'];
+function applyTab(name) {
+  if (!TABS.includes(name)) name = 'overview';
+  document.querySelectorAll('.tab-page').forEach(p => { p.hidden = p.dataset.tab !== name; });
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  history.replaceState(null, '', '#' + name);
+  sessionStorage.setItem('routerTab', name);
+}
+document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => applyTab(b.dataset.tab); });
+// 初始 tab：URL hash > 上次停留 > overview
+applyTab((location.hash || '').slice(1) || sessionStorage.getItem('routerTab') || 'overview');
+
 function clearDirty() { const badge = $('dirtyBadge'); if (badge) badge.hidden = true; }
 function bindPolicy() {
   const r = config.routing; $('mode').value = r.mode; $('activeTrafficPercent').value = r.activeTrafficPercent ?? 100; $('qualityFloor').value = r.qualityFloor; $('selfBonus').value = r.selfHostedBonus; $('qualityWeight').value = r.qualityWeight; $('costWeight').value = r.costWeight; $('latencyWeight').value = r.latencyWeight; $('uncertaintyPenalty').value = r.uncertaintyPenalty; $('complexQualityMargin').value = r.complexQualityMargin ?? .04; $('maxAttempts').value = r.maxAttempts; $('preferSelf').checked = r.preferSelfHosted;
@@ -225,6 +238,8 @@ document.addEventListener('mouseout', (e) => { if (e.target.closest('.help')) he
 function applyView(mode) {
   const simple = mode === 'simple';
   document.body.classList.toggle('simple-view', simple);
+  document.querySelectorAll('.expert-tab').forEach(t => { t.style.display = simple ? 'none' : ''; });
+  if (simple && ['models','semantic','debug'].includes(sessionStorage.getItem('routerTab'))) applyTab('overview');
   $('btnSimple').classList.toggle('active', simple);
   $('btnExpert').classList.toggle('active', !simple);
   localStorage.setItem('routerAdminView', mode);

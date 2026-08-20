@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>模型广场 · Auto Model Router</title>
+<style>
+  :root { --bg:#fafafa; --panel:#fff; --text:#1f2937; --muted:#6b7280; --border:#e5e7eb; --brand:#3538cd; --good:#067647; --warn:#b54708; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  .wrap { max-width:1040px; margin:0 auto; padding:28px 24px 72px; }
+  header.top { border-bottom:1px solid var(--border); background:linear-gradient(180deg,#eef0ff, #fafafa); }
+  header.top .inner { max-width:1040px; margin:0 auto; padding:34px 24px 26px; }
+  .eyebrow { color:var(--brand); font-size:12px; font-weight:600; letter-spacing:.08em; margin:0 0 6px; }
+  h1 { font-size:27px; margin:0 0 8px; }
+  .sub { color:var(--muted); margin:0; max-width:640px; }
+  .admin-link { float:right; font-size:13px; color:var(--brand); text-decoration:none; margin-top:6px; }
+  h2 { font-size:18px; margin:34px 0 12px; }
+  /* 三步接入 */
+  .steps { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:16px 0 4px; }
+  .step { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
+  .step b { display:block; font-size:13px; color:var(--brand); margin-bottom:6px; }
+  .step code { display:block; background:#f4f5f7; border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:12px; overflow:auto; margin-top:8px; white-space:pre; }
+  /* 金句 */
+  .highlights { display:flex; flex-direction:column; gap:8px; margin:12px 0; }
+  .highlights .hl { padding:12px 16px; border-left:3px solid var(--brand); background:#eef2ff66; border-radius:0 10px 10px 0; font-size:13.5px; }
+  /* 模型卡 */
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:18px 20px; transition:box-shadow .15s; }
+  .card:hover { box-shadow:0 4px 16px rgba(16,24,40,.08); }
+  .card .name { font-size:16px; font-weight:700; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .badge { font-size:11px; font-weight:600; padding:2px 8px; border-radius:99px; }
+  .badge.self { background:#e6f4ea; color:var(--good); }
+  .badge.eco { background:#fef3e2; color:var(--warn); }
+  .badge.cal-verified { background:#e6f4ea; color:var(--good); }
+  .badge.cal-pilot { background:#eef2ff; color:var(--brand); }
+  .badge.cal-unverified { background:#f4f5f7; color:var(--muted); }
+  .strengths { margin:10px 0 6px; display:flex; gap:6px; flex-wrap:wrap; }
+  .strengths span { font-size:12px; background:#f4f5f7; border-radius:6px; padding:2px 8px; color:#374151; }
+  .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:12px; padding-top:12px; border-top:1px dashed var(--border); }
+  .metrics div { text-align:left; }
+  .metrics small { display:block; color:var(--muted); font-size:11px; }
+  .metrics b { font-size:14px; }
+  .bar { height:5px; background:#eef0f4; border-radius:99px; overflow:hidden; margin-top:4px; }
+  .bar i { display:block; height:100%; border-radius:99px; background:var(--brand); }
+  .bar i.cost { background:#b54708; }
+  .bar i.spd { background:#067647; }
+  /* 说明区 */
+  .how { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:20px 24px; margin-top:8px; }
+  .how ol { margin:8px 0 0; padding-left:20px; color:#374151; }
+  .how li { margin:6px 0; }
+  .tier-note { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+  .tier-note span { font-size:12.5px; background:#f4f5f7; border:1px solid var(--border); border-radius:8px; padding:4px 10px; color:#374151; }
+  footer { margin-top:44px; color:var(--muted); font-size:12.5px; border-top:1px solid var(--border); padding-top:16px; }
+  .empty { color:var(--muted); }
+  @media (max-width:760px){ .steps{grid-template-columns:1fr;} }
+</style></head>
+<body>
+<header class="top"><div class="inner">
+  <a class="admin-link" href="/">管理台 →</a>
+  <p class="eyebrow">AUTO ROUTING · 模型广场</p>
+  <h1>一个 model 名，自动选对模型</h1>
+  <p class="sub">调用时把 model 填成 <code style="background:#fff;border:1px solid var(--border);border-radius:6px;padding:1px 8px;font-size:13px">auto</code>，路由器按任务类型与难度自动挑最合适的模型：简单任务用便宜的快模型，复杂任务用最强模型——省钱、省心、不掉质量。</p>
+</div></header>
+<div class="wrap">
+  <h2>三步接入</h2>
+  <div class="steps">
+    <div class="step"><b>① 拿到接入密钥</b>向管理员申请 ROUTER_ACCESS_KEY（业务应用调用本路由用）。</div>
+    <div class="step"><b>② 改一个参数</b>把请求里的 model 从具体模型名换成 auto：<code>POST /v1/chat/completions
+{
+  "model": "auto",
+  "messages": [...]
+}</code></div>
+    <div class="step"><b>③ 完成</b>其余参数（messages/tools/stream/response_format）原样支持，OpenAI 兼容，业务代码零改动。</div>
+  </div>
+
+  <h2>auto 路由的实际效果</h2>
+  <div class="highlights" id="highlights"><div class="hl empty">正在加载实测数据…</div></div>
+
+  <h2>参与路由的模型</h2>
+  <div class="grid" id="cards"><div class="card empty">正在加载模型列表…</div></div>
+
+  <h2>auto 是怎么选模型的</h2>
+  <div class="how">
+    <ol>
+      <li><b>识别任务</b>：按请求内容把任务分为通用/代码/推理/抽取/创意/轻量六类，并评估难度（简单/均衡/复杂）。</li>
+      <li><b>查跑分</b>：每个模型在六个任务维度上有实测校准的质量分（eval gate 实测，非宣传数字）。</li>
+      <li><b>综合打分</b>：质量分为主，叠加成本与时延敏感度、质量底线过滤、自建优先偏好，选综合最优。</li>
+      <li><b>自动兜底</b>：首选模型调用失败自动切换备选；新模型先试点观察，跑够真实流量才全面接管。</li>
+    </ol>
+    <div class="tier-note">
+      <span>💡 管理员可用「成本档位」一键切换省钱/均衡/质量/顶配——档位是成本带，不是简单上限</span>
+      <span>🔒 每笔路由决策落盘可查（任务类型/候选得分/最终选择），响应头 x-router-* 透明可审计</span>
+    </div>
+  </div>
+
+  <footer>Auto Model Router · 内部服务 · 详细接入文档见<a href="/manual" style="color:var(--brand)">使用手册</a> · 数据来自本服务实测配置，实时渲染</footer>
+</div>
+<script type="module">
+const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const fmtYuan = (v) => (v == null) ? '—' : (v < 1 ? v.toFixed(3) : v.toFixed(2));
+try {
+  const data = await (await fetch('/api/models')).json();
+  document.getElementById('highlights').innerHTML =
+    (data.report?.highlights || []).map(h => `<div class="hl">${esc(h)}</div>`).join('')
+    || '<div class="hl empty">暂无对比数据</div>';
+  document.getElementById('cards').innerHTML =
+    data.models.map(m => `
+    <div class="card">
+      <div class="name">${esc(m.displayName)}
+        <span class="badge ${m.ownership === '自建部署' ? 'self' : 'eco'}">${m.ownership}</span>
+        <span class="badge cal-${m.calibration === '已验证' ? 'verified' : m.calibration === '试点中' ? 'pilot' : 'unverified'}">${m.calibration}</span>
+      </div>
+      <div class="strengths">${(m.strengths || []).map(s => `<span>${esc(s)}强</span>`).join('')}</div>
+      <div class="metrics">
+        <div><small>质量分</small><b>${m.quality.toFixed(2)}</b><div class="bar"><i style="width:${Math.round(m.quality*100)}%"></i></div></div>
+        <div><small>相对成本</small><b>${m.costIndex.toFixed(2)}</b><div class="bar"><i class="cost" style="width:${Math.round(m.costIndex*100)}%"></i></div></div>
+        <div><small>响应速度</small><b>${(1 - m.latencyIndex).toFixed(2)}</b><div class="bar"><i class="spd" style="width:${Math.round((1-m.latencyIndex)*100)}%"></i></div></div>
+      </div>
+      <div class="metrics" style="border-top:none;padding-top:6px">
+        <div><small>输入 ¥/百万Token</small><b>${fmtYuan(m.inputYuan)}</b></div>
+        <div><small>输出 ¥/百万Token</small><b>${fmtYuan(m.outputYuan)}</b></div>
+        <div><small>上下文窗口</small><b>${m.contextWindow ? (m.contextWindow/1024)+'K' : '—'}</b></div>
+      </div>
+    </div>`).join('');
+} catch (e) {
+  document.getElementById('cards').innerHTML = `<div class="card empty">加载失败：${esc(e.message)}</div>`;
+}
+</script>
+</body></html>
