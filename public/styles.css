@@ -223,3 +223,17 @@ body:not(.simple-view) .simple-only{display:none!important}
 /* 帮助（手册）tab：让 iframe 自管滚动，外层不参与 */
 .tab-page#help > .panel { display: flex; flex-direction: column; }
 .tab-page#help iframe { flex: 1; }
+
+/* ── 业务策略分区 + 只读锁 ── */
+.policy-section { margin-top: 18px; }
+.policy-section-title { font-size: 12px; font-weight: 600; color: var(--muted, #6b7280); margin: 0 0 10px; letter-spacing: .05em; }
+.lock-note { margin: 12px 0 4px; padding: 10px 14px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; color: #92400e; font-size: 13px; }
+.policy-locked .policy-section .lbl { color: #6b7280; }
+.probe-result { margin-top: 12px; padding: 12px 14px; border-radius: 8px; font-size: 13px; line-height: 1.6; }
+.probe-result.ok { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+.probe-result.bad { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+/* 手册直嵌（替代 iframe） */
+.manual-inline { display: block; }
+.manual-inline .manual-toc { position: sticky; top: 8px; }
+/* 任务分类大类+小类 */
+.task-cat { font-size: 11px; color: var(--muted, #6b7280); }

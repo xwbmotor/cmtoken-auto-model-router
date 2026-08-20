@@ -40,7 +40,8 @@
         "model": "qwen36-35b",
         "tolerance": 0.05
       }
-    }
+    },
+    "costTier": "custom"
   },
   "semanticRouter": {
     "enabled": true,
@@ -151,10 +152,11 @@
       "deployment": {
         "deviceType": "910B2",
         "machines": 12,
+        "cardsPerMachine": 1,
+        "tps": 412,
         "instances": 12,
         "concurrencyPerInstance": 15,
-        "totalConcurrency": 180,
-        "tps": 412
+        "totalConcurrency": 180
       }
     },
     {
@@ -219,10 +221,11 @@
       "deployment": {
         "deviceType": "910B2",
         "machines": 2,
+        "cardsPerMachine": 1,
+        "tps": 520,
         "instances": 4,
         "concurrencyPerInstance": 45,
-        "totalConcurrency": 180,
-        "tps": 520
+        "totalConcurrency": 180
       }
     },
     {
@@ -277,10 +280,11 @@
       "deployment": {
         "deviceType": "910B2",
         "machines": 10,
+        "cardsPerMachine": 1,
+        "tps": 300,
         "instances": 20,
         "concurrencyPerInstance": 15,
-        "totalConcurrency": 300,
-        "tps": 300
+        "totalConcurrency": 300
       }
     }
   ],

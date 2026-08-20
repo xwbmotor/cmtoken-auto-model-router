@@ -2,9 +2,11 @@ let config, savedConfig, metrics, lastSimulation, simulateTimer;
 const $ = (id) => document.getElementById(id);
 // —— 后台枚举 → 中文展示映射（只影响展示，不碰配置值）——
 const TASK_CN = { coding: '代码', reasoning: '推理', creative: '创意', extraction: '抽取', default: '通用' };
+const TASK_CATEGORIES = { default: { category: '通用问答', sub: '日常问答', icon: '💬' }, coding: { category: '技术工程', sub: '代码/SQL/工具', icon: '⚙️' }, reasoning: { category: '分析推理', sub: '推理/规划/架构', icon: '🧠' }, creative: { category: '内容创作', sub: '文案/营销/创意', icon: '✍️' }, extraction: { category: '数据结构化', sub: '抽取/分类/JSON', icon: '📋' }, unknown: { category: '未分类', sub: '—', icon: '·' } };
 const TIER_CN = { simple: '轻量', balanced: '均衡', complex: '复杂' };
 const METHOD_CN = { rules: '规则', semantic: '语义复核', 'rules+semantic': '规则+复核' };
 const taskCN = (t) => TASK_CN[t] || t;
+const escHtml = (x) => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const tierCN = (t) => TIER_CN[t] || t;
 // 成本档位（OpenRouter cost_tier 思路）：档位=参数预设+成本带双向过滤（服务端 COST_TIERS 同步生效）。
 // band 非 ceiling：质量/顶配档会把「过于便宜」的低端模型也排除，防止拉低整体质量。
@@ -39,7 +41,8 @@ async function renderTaskBoard() {
       const cells = [0, 1, 2].map((i) => b.picks[i]
         ? `<td>${b.picks[i].model} <span class="pill ${i === 0 ? 'good' : 'muted'}">${b.picks[i].share}%${b.picks[i].fails ? ` ·失败${b.picks[i].fails}` : ''}</span></td>`
         : '<td class="empty">—</td>').join('');
-      return `<tr><th>${TASK_LABELS[b.task] || b.task}</th><td>${b.total}</td>${cells}</tr>`;
+      const cat = TASK_CATEGORIES[b.task] || { category: '未分类', icon: '·' };
+      return `<tr><th>${cat.icon} ${TASK_LABELS[b.task] || b.task}<br><span class="task-cat">${cat.category}${cat.sub && cat.sub !== '—' ? ' · ' + cat.sub : ''}</span></th><td>${b.total}</td>${cells}</tr>`;
     }).join('');
   } catch (e) { rows.innerHTML = `<tr><td colspan="5" class="empty">${e.message}</td></tr>`; }
 }
@@ -138,10 +141,83 @@ function applyTab(name) {
   sessionStorage.setItem('routerTab', name);
 }
 document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => applyTab(b.dataset.tab); });
+
+// ── 业务策略只读锁：默认只读，点「解锁修改」才能调整 ──
+const POLICY_INPUTS = ['#mode', '#activeTrafficPercent', '#preferSelf', '#reasoningEnabled', '#decisionLogEnabled',
+  '#costTier', '#qualityFloor', '#costWeight', '#latencyWeight', '#budgetEnabled', '#dailyBudget',
+  '#budgetThreshold', '#selfBonus', '#qualityWeight', '#complexQualityMargin', '#uncertaintyPenalty', '#maxAttempts']
+  .flatMap(sel => Array.from(document.querySelectorAll(sel))).concat(
+    Array.from(document.querySelectorAll('#tierPicker input')));
+function setPolicyLock(locked) {
+  POLICY_INPUTS.forEach(el => { el.disabled = locked; });
+  const note = $('policyLockNote'); if (note) note.hidden = !locked;
+  const unlock = $('unlockEdit'); if (unlock) unlock.hidden = !locked;
+  const reload = $('reload'); if (reload) reload.hidden = locked && !isDirty();
+  const save = $('save'); if (save) save.hidden = locked;
+  document.body.classList.toggle('policy-locked', locked);
+}
+let policyUnlocked = false;
+if ($('unlockEdit')) $('unlockEdit').onclick = () => {
+  policyUnlocked = true;
+  setPolicyLock(false);
+  toast('已解锁——调整后记得「安全发布」');
+};
+function isDirty() { try { return config && savedConfig && stableStringify(config) !== stableStringify(savedConfig); } catch { return false; } }
 // 初始 tab：URL hash > 上次停留 > overview
 applyTab((location.hash || '').slice(1) || sessionStorage.getItem('routerTab') || 'overview');
+loadManual();
+if ($('gotoPolicy')) $('gotoPolicy').onclick = () => applyTab('policy');
+if ($('gotoInsights')) $('gotoInsights').onclick = () => applyTab('insights');
+// 手册直嵌（不再 iframe）：拉预渲染页，用 Shadow DOM 隔离样式（手册的全局选择器不污染管理页），
+// 目录 TOC 由这里手动生成（DOMParser 不执行页面脚本）。
+async function loadManual() {
+  const host = $('manualInline'); if (!host || host.dataset.loaded) return;
+  try {
+    const res = await fetch('/manual');
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const styleEl = doc.querySelector('style');
+    const layout = doc.querySelector('.layout');
+    if (!layout) throw new Error('手册模板结构变化');
+    const shadow = host.attachShadow({ mode: 'open' });
+    if (styleEl) {
+      const st = document.createElement('style');
+      // 嵌入模式适配：去顶栏、占满、TOC 粘滞
+      st.textContent = styleEl.textContent + '\nheader.top{display:none}body{background:transparent}.layout{max-width:none;padding:0;gap:24px}nav.toc{position:sticky;top:0;max-height:76vh}main.doc{border:none;box-shadow:none;border-radius:0;padding:6px 26px 24px}';
+      shadow.appendChild(st);
+    }
+    shadow.appendChild(document.importNode(layout, true));
+    // 生成目录（复刻 /manual 页内脚本逻辑）
+    const toc = shadow.querySelector('nav.toc');
+    const heads = Array.from(shadow.querySelectorAll('main.doc h2, main.doc h3'));
+    if (toc && heads.length) {
+      const title = document.createElement('div');
+      title.className = 'toc-title'; title.textContent = '目录';
+      toc.appendChild(title);
+      heads.forEach((h, i) => {
+        if (!h.id) h.id = 'sec-' + i;
+        const a = document.createElement('a');
+        a.href = '#' + h.id; a.textContent = h.textContent;
+        if (h.tagName === 'H3') a.style.paddingLeft = '30px';
+        toc.appendChild(a);
+      });
+      // 滚动高亮（监听管理页窗口滚动，按视口位置点亮当前节）
+      const links = Array.from(toc.querySelectorAll('a'));
+      const onScroll = () => {
+        let cur = null;
+        heads.forEach((h) => { if (h.getBoundingClientRect().top < 100) cur = h.id; });
+        links.forEach((a) => { a.className = a.getAttribute('href') === '#' + cur ? 'active' : ''; });
+      };
+      window.addEventListener('scroll', onScroll, { passive: true });
+      onScroll();
+    }
+    host.dataset.loaded = '1';
+  } catch (e) { host.innerHTML = '<p class="empty">手册加载失败：' + escHtml(e.message) + ' <a href="/manual" target="_blank" rel="noopener">在新窗口打开</a></p>'; }
+}
+if ($('gotoInsights')) $('gotoInsights').onclick = () => applyTab('insights');
 
 function clearDirty() { const badge = $('dirtyBadge'); if (badge) badge.hidden = true; }
+function applyPolicyLock() { setPolicyLock(!policyUnlocked); }
 function bindPolicy() {
   const r = config.routing; $('mode').value = r.mode; $('activeTrafficPercent').value = r.activeTrafficPercent ?? 100; $('qualityFloor').value = r.qualityFloor; $('selfBonus').value = r.selfHostedBonus; $('qualityWeight').value = r.qualityWeight; $('costWeight').value = r.costWeight; $('latencyWeight').value = r.latencyWeight; $('uncertaintyPenalty').value = r.uncertaintyPenalty; $('complexQualityMargin').value = r.complexQualityMargin ?? .04; $('maxAttempts').value = r.maxAttempts; $('preferSelf').checked = r.preferSelfHosted;
   $('semanticEnabled').checked = Boolean(config.semanticRouter?.enabled); $('semanticMode').value = config.semanticRouter?.mode || 'shadow'; $('semanticThreshold').value = config.semanticRouter?.confidenceThreshold ?? .7; $('semanticMinConfidence').value = config.semanticRouter?.minConfidence ?? 0; $('reasoningEnabled').checked = Boolean(config.reasoningControl?.enabled); $('budgetEnabled').checked = Boolean(config.budget?.enabled); $('dailyBudget').value = config.budget?.dailyBudgetYuan || 0; $('budgetThreshold').value = config.budget?.degradeThreshold ?? .9;
@@ -199,11 +275,11 @@ function metricDeltaMs(current, proposed, lower = false) { const delta = Math.ro
 function metricDeltaCost(current, proposed, lower = false) { const delta = proposed - current, good = lower ? delta <= 0 : delta >= 0, fmt = (v) => (v < 0.01 ? v.toFixed(4) : v.toFixed(2)); return `<strong>¥${fmt(proposed)}</strong><small class="${good ? 'positive' : 'negative'}">${delta >= 0 ? '+' : ''}${fmt(delta)}</small>`; }
 function renderSimulation(result) {
   lastSimulation = result; const c = result.current, p = result.proposed, risk = result.changedRate >= .5 ? 'high' : result.changedRate >= .2 ? 'medium' : 'low';
-  $('impactSummary').innerHTML = `<article class="impact ${risk}"><span>模型切换</span><strong>${result.changed}/${result.sampleCount}</strong><small>${percentValue(result.changedRate)} 代表任务改变</small></article><article><span>预计质量</span>${metricDelta(c.averageQuality,p.averageQuality)}</article>${(c.averageCostYuan!=null&&p.averageCostYuan!=null)?`<article><span>平均单次成本 <span class="help" data-help="按代表性任务的平均输入输出量估算的每次请求成本（元）。0.003 元 = 一千次请求约 3 元。">?</span></span>${metricDeltaCost(c.averageCostYuan,p.averageCostYuan,true)}</article>`:`<article><span>成本指数</span>${metricDelta(c.averageCostIndex,p.averageCostIndex,true)}</article>`}${(c.averageLatencyMs!=null&&p.averageLatencyMs!=null)?`<article><span>平均端到端时延 <span class="help" data-help="从发出请求到收完完整回答的总耗时（含模型思考时间），按代表性任务平均。">?</span></span>${metricDeltaMs(c.averageLatencyMs,p.averageLatencyMs,true)}</article>`:`<article><span>时延指数</span>${metricDelta(c.averageLatencyIndex,p.averageLatencyIndex,true)}</article>`}<article><span>自建比例</span><strong>${percentValue(p.selfHostedRate)}</strong><small>当前 ${percentValue(c.selfHostedRate)}</small></article>`;
+  $('impactSummary').innerHTML = `<article class="impact ${risk}"><span>模型切换</span><strong>${result.changed}/${result.sampleCount}</strong><small>${percentValue(result.changedRate)} 代表任务改变</small></article><article><span>预计质量</span>${metricDelta(c.averageQuality,p.averageQuality)}</article>${(c.averageCostYuan!=null&&p.averageCostYuan!=null)?`<article><span>平均单次成本 <span class="help" data-help="按代表性任务（含系统提示词+多轮上下文+业务文档，非单句提问）的平均输入输出量估算的每次请求成本（元）。">?</span></span>${metricDeltaCost(c.averageCostYuan,p.averageCostYuan,true)}</article>`:`<article><span>成本指数</span>${metricDelta(c.averageCostIndex,p.averageCostIndex,true)}</article>`}${(c.averageLatencyMs!=null&&p.averageLatencyMs!=null)?`<article><span>平均端到端时延 <span class="help" data-help="从发出请求到收完完整回答的总耗时（含模型思考时间），按代表性任务平均。">?</span></span>${metricDeltaMs(c.averageLatencyMs,p.averageLatencyMs,true)}</article>`:`<article><span>时延指数</span>${metricDelta(c.averageLatencyIndex,p.averageLatencyIndex,true)}</article>`}<article><span>自建比例</span><strong>${percentValue(p.selfHostedRate)}</strong><small>当前 ${percentValue(c.selfHostedRate)}</small></article>`;
   $('impactRows').innerHTML = p.rows.map((row,i) => { const before=c.rows[i], changed=before.model!==row.model; return `<tr><td><strong>${row.label}</strong><br><small>${taskCN(row.task)}</small></td><td>${Math.round(row.complexity*100)} · ${tierCN(row.tier)}</td><td>${before.model}</td><td>${row.model}</td><td><span class="pill ${changed?'bad':'good'}">${changed?'切换':'不变'}</span></td></tr>`; }).join('');
   renderSensitivity(result.sensitivity);
 }
-// 敏感度分析：每个滑条「再拉多少才会变 / 拉到头也变不了的原因」
+// 调整手感：每个滑条「再拉多少才会变 / 拉到头也变不了的原因」
 function renderSensitivity(s) {
   const box = $('sensitivityBox');
   if (!box) return;
@@ -216,18 +292,32 @@ function renderSensitivity(s) {
       const gap = Math.abs(axis.nextFlip.at - axis.currentValue);
       return `<article class="sens-card"><div class="sens-head"><b>${axis.label}</b><span class="pill ${gap <= .1 ? 'warn' : 'muted'}">${dir}到 ${fmt(axis.nextFlip.at)} 触发切换</span></div><p>调整幅度 <b>${gap.toFixed(2)}</b> 后，${axis.nextFlip.count} 个代表任务从「${axis.nextFlip.from}」切换到「${axis.nextFlip.to}」。当前值附近 ${(axis.flips || []).length ? `首个翻转点 ${fmt(axis.flips[0].at)}` : '尚无翻转'}。</p></article>`;
     }
-    const why = axis.dominated ? `<p class="sens-why">${axis.dominated}</p>` : '<p class="sens-why">全程扫描未发现模型切换。</p>';
+    const why = axis.dominated ? `<p class="sens-why">${axis.dominated}</p>` : '<p class="sens-why">拉满整条滑条都不会改变当前选择——现有配置下最优模型很稳定。</p>';
     return `<article class="sens-card">${head}${why}</article>`;
   }).join('');
-  box.innerHTML = `<p class="sens-title">敏感度分析 <span class="help" data-help="回答「滑条再拉多少才会改变路由」。若拉满全程都无变化，会给出原因（通常是某模型全面领先，怎么调权重都是它最优）。">?</span></p><div class="sens-grid">${cards}</div>`;
+  box.innerHTML = `<p class="sens-title">滑条手感 <span class="help" data-help="回答「滑条再拉多少才会改变路由」。若拉满也不变，说明现有配置下最优模型很稳定，怎么调权重都是它。">?</span></p><div class="sens-grid">${cards}</div>`;
   box.hidden = false;
 }
 async function simulate() { if (!config) return; readForm(); const result = await api('/admin/api/simulate',{method:'POST',body:JSON.stringify({proposedConfig:config})}); renderSimulation(result); renderBaselines(); return result; }
 function scheduleSimulation(){ clearTimeout(simulateTimer); simulateTimer=setTimeout(()=>simulate().catch(()=>{}),350); }
 function percent(n,d){ return d ? `${(n/d*100).toFixed(1)}%` : '0.0%'; }
 function renderMetrics(){ const c=metrics.counters; $('total').textContent=c.total; $('autoRate').textContent=percent(c.auto,c.total); const selfIds=new Set(config.models.filter(m=>m.ownership==='self_hosted').map(m=>m.id)); const self=Object.entries(c.selected).filter(([id])=>selfIds.has(id)).reduce((s,[,n])=>s+n,0); $('selfRate').textContent=percent(self,c.success); $('semanticRate').textContent=percent(c.semantic?.disagreed||0,c.semantic?.succeeded||0); $('budgetRate').textContent=metrics.budget?.enabled?percentValue(metrics.budget.pressure):'未启用'; $('fallback').textContent=c.fallback; $('errorRate').textContent=percent(c.errors,c.total); document.querySelectorAll('#models tr').forEach(row=>{const m=config.models[Number(row.dataset.index)],h=metrics.health[m.id],cell=row.querySelector('.health'); cell.innerHTML=!h?'<span class="pill muted">无数据</span>':h.circuitState==='half_open'?'<span class="pill muted">恢复探测</span>':h.circuitOpenUntil>Date.now()?'<span class="pill bad">熔断</span>':`<span class="pill good">${h.ewmaLatencyMs}ms · ${h.failures}错</span>`}); $('recent').innerHTML=metrics.recent.length?metrics.recent.map(x=>`<div class="recent-item"><time>${new Date(x.at).toLocaleTimeString()}</time><div><b>${x.selected}</b> <small>← ${x.requested} · ${taskCN(x.task)} · ${METHOD_CN[x.routeMethod]||x.routeMethod||'规则'} · 推理${x.reasoningLevel||'off'}${x.fallbackAttempt?` · fallback ${x.fallbackAttempt}`:''}</small></div><span class="pill ${x.ok?'good':'bad'}">${x.ok?`${x.latencyMs}ms`:'失败'}</span></div>`).join(''):'<p class="empty">暂无请求</p>'; }
-async function connect(){ try{sessionStorage.setItem('routerAdminToken',$('token').value); [config,metrics]=await Promise.all([api('/admin/api/config'),api('/admin/api/metrics')]);snapshotBaseline(); $('status').textContent=`已连接 · v${config.version}`; $('status').className='pill good'; renderMetrics(); renderOverview(); renderTaskBoard(); renderMarketSignal(); await simulate();}catch(error){$('status').textContent='连接失败';$('status').className='pill bad';toast(error.message,true)} }
+async function connect(){ try{sessionStorage.setItem('routerAdminToken',$('token').value); [config,metrics]=await Promise.all([api('/admin/api/config'),api('/admin/api/metrics')]);snapshotBaseline(); $('status').textContent=`已连接 · v${config.version}`; $('status').className='pill good'; renderMetrics(); renderOverview(); renderTaskBoard(); renderMarketSignal(); applyPolicyLock(); await simulate();}catch(error){$('status').textContent='连接失败';$('status').className='pill bad';toast(error.message,true)} }
 $('token').value=sessionStorage.getItem('routerAdminToken')||''; $('connect').onclick=connect; $('refresh').onclick=async()=>{try{metrics=await api('/admin/api/metrics');renderMetrics();renderOverview()}catch(e){toast(e.message,true)}}; $('reload').onclick=()=>{if(!savedConfig)return;config=structuredClone(savedConfig);snapshotBaseline();renderMetrics();simulate();toast('已恢复到当前线上版本')}; $('refreshBoard').onclick = () => { renderTaskBoard(); renderMarketSignal(); };
+if ($('probeSemantic')) $('probeSemantic').onclick = async () => {
+  const url = $('semanticHttpUrl')?.value?.trim();
+  const box = $('semanticProbeResult');
+  if (!url) { box.hidden = false; box.className = 'probe-result bad'; box.innerHTML = '请先填写小模型端点地址。'; return; }
+  box.hidden = false; box.className = 'probe-result'; box.textContent = '正在探测…';
+  try {
+    const r = await api('/admin/api/semantic/probe', { method: 'POST', body: JSON.stringify({ url }) });
+    if (r.ok) { box.className = 'probe-result ok'; box.innerHTML = `✅ 连通正常（${r.latencyMs}ms）——小模型返回：<code>${escHtml(JSON.stringify(r.assessment))}</code>，接口协议对得上。`; }
+    else {
+      const stageText = { http: '端点有响应但返回了错误状态', json: '端点通了，但返回的不是 JSON', schema: 'JSON 通了，但缺少约定字段', network: '网络不通（地址或端口错误）', timeout: '8 秒内无响应' }[r.stage] || '探测失败';
+      box.className = 'probe-result bad'; box.innerHTML = `❌ ${stageText}：<br>${escHtml(r.message || '')}`;
+    }
+  } catch (e) { box.className = 'probe-result bad'; box.textContent = '探测请求失败：' + e.message; }
+};
 $('runReport').onclick = () => renderRoutingReport();
 $('simulate').onclick=()=>simulate().catch(e=>toast(e.message,true));
 document.querySelectorAll('#tierPicker .tier').forEach((el) => el.addEventListener('click', () => {

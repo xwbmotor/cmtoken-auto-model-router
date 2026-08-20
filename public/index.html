@@ -16,41 +16,56 @@
     <section class="tab-page" data-tab="overview">
       <section class="cards"><article><span>总请求 <span class="help" data-help="经过本路由的总请求数（含 auto 与显式指定模型）。">?</span></span><strong id="total">—</strong></article><article><span>Auto 占比 <span class="help" data-help="model=auto 的请求占总请求的比例，其余为显式指定模型。">?</span></span><strong id="autoRate">—</strong></article><article><span>自建承载 <span class="help" data-help="自建模型处理的请求占成功请求的比例，越高越省成本。">?</span></span><strong id="selfRate">—</strong></article><article><span>语义复核分歧 <span class="help" data-help="语义复核与规则分类结论不一致的比例，分歧高说明规则分类需调整。">?</span></span><strong id="semanticRate">—</strong></article><article><span>今日预算使用 <span class="help" data-help="今日实际成本 ÷ 每日预算。达到保护阈值后自动提高成本敏感度（软保护，不拒绝请求）。">?</span></span><strong id="budgetRate">—</strong></article><article><span>Fallback <span class="help" data-help="首选模型调用失败后自动切换到备选模型的次数。">?</span></span><strong id="fallback">—</strong></article><article><span>错误率 <span class="help" data-help="上游调用失败（含重试后仍失败）占总请求的比例。">?</span></span><strong id="errorRate">—</strong></article></section>
       <section class="split overview-mid">
-        <article class="panel"><div class="panel-head"><div><p class="eyebrow">当前配置</p><h2>策略快照</h2></div><a href="#policy" class="link-btn" style="font-size:12px">调整策略 →</a></div><div id="policySnapshot" class="snapshot-grid"><p class="empty">连接后显示。</p></div></article>
-        <article class="panel"><div class="panel-head"><div><p class="eyebrow">路由透明度</p><h2>任务分布</h2></div><a href="#insights" class="link-btn" style="font-size:12px">完整榜单 →</a></div><div id="taskDist" class="task-dist"><p class="empty">连接后显示。</p></div></article>
+        <article class="panel"><div class="panel-head"><div><p class="eyebrow">当前配置</p><h2>策略快照</h2></div><button id="gotoPolicy" class="link-btn" style="font-size:12px">调整策略 →</button></div><div id="policySnapshot" class="snapshot-grid"><p class="empty">连接后显示。</p></div></article>
+        <article class="panel"><div class="panel-head"><div><p class="eyebrow">路由透明度</p><h2>任务分布</h2></div><button id="gotoInsights" class="link-btn" style="font-size:12px">完整榜单 →</button></div><div id="taskDist" class="task-dist"><p class="empty">连接后显示。</p></div></article>
       </section>
       <section class="panel"><div class="panel-head"><div><p class="eyebrow">运行监控</p><h2>最近请求</h2><p class="hint">最近的每笔路由决策：请求被分给哪个模型、为什么、耗时多少。</p></div><button id="refresh" class="secondary">刷新</button></div><div id="recent" class="recent"><p class="empty">暂无请求</p></div></section>
     </section>
     <section class="tab-page" data-tab="policy" hidden>
       <section class="panel">
-      <div class="panel-head"><div><p class="eyebrow">策略配置</p><h2>业务策略</h2><p class="hint">调整下面任何参数，右侧数值即时更新，影响会即时反映到下方「调整影响预估」，确认后再点「安全发布」。</p></div><div class="actions"><span id="dirtyBadge" class="pill bad dirty-badge" hidden>有未发布修改</span><button id="reload" class="secondary">放弃修改</button><button id="save">安全发布</button></div></div>
+      <div class="panel-head"><div><h2>业务策略</h2><p class="hint">默认只读。点「解锁修改」后可调整，改动即时反映到下方「调整影响预估」，确认后点「安全发布」。</p></div><div class="actions"><span id="dirtyBadge" class="pill bad dirty-badge" hidden>有未发布修改</span><button id="unlockEdit" class="secondary">🔓 解锁修改</button><button id="reload" class="secondary" hidden>放弃修改</button><button id="save" hidden>安全发布</button></div></div>
+      <div id="policyLockNote" class="lock-note">当前为只读视图——只看配置不改配置。要调整档位、开关或敏感度，请先点右上角「解锁修改」。</div>
       <div class="view-switch-panel simple-only"><span class="lbl">专家参数已隐藏，日常运营用上面的预设和开关即可。<button id="gotoExpert" class="link-btn">切换到专家模式</button></span></div>
-      <div class="policy-grid business-policy">
-        <label style="grid-column:1/-1"><span class="lbl">成本档位 <span class="help" data-help="学 OpenRouter cost_tier：档位是「带」不是「上限」——选质量档会连过于便宜的模型一起排除，防止低端模型拉低整体质量；选省钱档则排除超出预算带的贵模型。切换后自动联动下方三个滑条，仍可微调。">?</span></span><div class="tier-picker" id="tierPicker">
+            <div class="policy-section">
+        <p class="policy-section-title">① 运行开关</p>
+        <div class="policy-grid business-policy">
+          <label><span class="lbl">运行状态 <span class="help" data-help="「仅观察」=后台默默记录路由建议、不实际切换模型；「正式生效」=按建议选模型。">?</span></span><select id="mode"><option value="shadow">仅观察，不改变模型</option><option value="active">正式生效</option></select></label>
+          <label><span class="lbl">Auto 生效流量 <span class="help" data-help="灰度比例——N% 的 auto 请求采用路由建议，其余仍走固定兜底模型。">?</span></span><output id="trafficValue"></output><input id="activeTrafficPercent" type="range" min="0" max="100" step="5"></label>
+          <label class="check"><input id="preferSelf" type="checkbox"><span class="lbl">满足质量要求时优先自建 <span class="help" data-help="勾选后自建模型额外加分，同等条件下优先用自建而非生态模型。">?</span></span></label>
+          <label class="check"><input id="reasoningEnabled" type="checkbox"><span class="lbl">按难度自动调节思考深度 <span class="help" data-help="大模型回答前会先「思考」，思考越深质量越高但越慢越贵。开启后路由按难度自动带档位：复杂任务深思考、简单任务浅思考。仅对已实测验证过该参数的模型发送，其余模型不发送（避免上游报错）。">?</span></span></label>
+          <label class="check"><input id="decisionLogEnabled" type="checkbox"><span class="lbl">记录决策日志 <span class="help" data-help="每次路由决策脱敏落盘（不记录密钥和完整对话），用于质量分析和标注集采集。">?</span></span></label>
+        </div>
+      </div>
+      <div class="policy-section">
+        <p class="policy-section-title">② 成本档位</p>
+        <div class="tier-picker" id="tierPicker">
           <label class="tier" data-tier="budget"><input type="radio" name="costTier" value="budget"><strong>省钱</strong><small>低成本模型优先，跑简单任务最划算</small></label>
           <label class="tier" data-tier="balanced"><input type="radio" name="costTier" value="balanced"><strong>均衡</strong><small>质量成本兼顾，默认推荐</small></label>
           <label class="tier" data-tier="quality"><input type="radio" name="costTier" value="quality"><strong>质量</strong><small>排除低端模型，复杂任务更稳</small></label>
           <label class="tier" data-tier="max"><input type="radio" name="costTier" value="max"><strong>顶配</strong><small>只用最强模型，不计成本</small></label>
           <label class="tier" data-tier="custom"><input type="radio" name="costTier" value="custom"><strong>自定义</strong><small>手动微调滑条后的状态</small></label>
-        </div><small id="presetHelp"></small></label>
-        <label><span class="lbl">运行状态 <span class="help" data-help="「仅观察」=后台默默记录路由建议、不实际切换模型；「正式生效」=按建议选模型。">?</span></span><select id="mode"><option value="shadow">仅观察，不改变模型</option><option value="active">正式生效</option></select></label>
-        <label><span class="lbl">Auto 生效流量 <span class="help" data-help="灰度比例——N% 的 auto 请求采用路由建议，其余仍走固定兜底模型。">?</span></span><output id="trafficValue"></output><input id="activeTrafficPercent" type="range" min="0" max="100" step="5"></label>
-        <label class="check"><input id="preferSelf" type="checkbox"><span class="lbl">满足质量要求时优先自建 <span class="help" data-help="勾选后自建模型额外加分，同等条件下优先用自建而非生态模型。">?</span></span></label>
-        <label><span class="lbl">最低质量目标 <span class="help" data-help="质量分低于该门槛的模型直接淘汰，不参与本轮选择。数值越高对质量要求越严。">?</span></span><output id="qualityFloorValue"></output><input id="qualityFloor" type="range" min="0.6" max="0.95" step="0.01"></label>
-        <label><span class="lbl">成本敏感度 <span class="help" data-help="越高越倾向选低成本模型（评分时成本项扣分越重）。范围 0~0.6，0.22 左右为均衡，0.4 以上明显省钱但可能牺牲质量。">?</span></span><output id="costWeightValue"></output><input id="costWeight" type="range" min="0" max="0.6" step="0.01"></label>
-        <label><span class="lbl">速度敏感度 <span class="help" data-help="越高越倾向选低时延模型。范围 0~0.6，交互式场景建议调高。">?</span></span><output id="latencyWeightValue"></output><input id="latencyWeight" type="range" min="0" max="0.6" step="0.01"></label>
-        <label><span class="lbl">自建模型加分 <span class="help" data-help="自建模型的额外加分值（0~0.5），鼓励优先使用自建算力。">?</span></span><output id="selfBonusValue"></output><input id="selfBonus" type="range" min="0" max="0.5" step="0.01"></label>
+        </div>
+        <small id="presetHelp" style="display:block;margin-top:6px"></small>
       </div>
-      <div class="policy-grid" style="margin-top:12px">
-        <label class="check"><input id="budgetEnabled" type="checkbox"><span class="lbl">启用每日预算软保护 <span class="help" data-help="预算告急时自动提高成本敏感度，引导流量转向便宜模型（软保护，不直接拒绝请求）。">?</span></span></label>
-        <label><span class="lbl">每日预算（元） <span class="help" data-help="每日成本上限（元），用于软保护估算。">?</span></span><input id="dailyBudget" type="number" min="0" step="1"></label>
-        <label><span class="lbl">开始保护的预算比例 <span class="help" data-help="预算使用达到该比例时开始降级控制，如 0.9 = 用到九成开始干预。">?</span></span><input id="budgetThreshold" type="number" min="0.1" max="1" step="0.05"></label>
-        <label class="check"><input id="reasoningEnabled" type="checkbox"><span class="lbl">按任务难度自动调节思考深度 <span class="help" data-help="大模型回答前会先「思考」，思考越深质量越高但越慢越贵。开启后路由按难度自动带档位：复杂任务深思考、简单任务浅思考。仅对已实测验证过该参数的模型发送，其余模型不发送（避免上游报错）。">?</span></span></label>
-        <label class="check"><input id="decisionLogEnabled" type="checkbox"><span class="lbl">记录决策日志 <span class="help" data-help="每次路由决策脱敏落盘（不记录密钥和完整对话），用于质量分析和标注集采集。">?</span></span></label>
+      <div class="policy-section">
+        <p class="policy-section-title">③ 细调参数</p>
+        <div class="policy-grid business-policy">
+          <label><span class="lbl">最低质量目标 <span class="help" data-help="质量分低于该门槛的模型直接淘汰，不参与本轮选择。数值越高对质量要求越严。">?</span></span><output id="qualityFloorValue"></output><input id="qualityFloor" type="range" min="0.6" max="0.95" step="0.01"></label>
+          <label><span class="lbl">成本敏感度 <span class="help" data-help="越高越倾向选低成本模型（评分时成本项扣分越重）。范围 0~0.6，0.22 左右为均衡，0.4 以上明显省钱但可能牺牲质量。">?</span></span><output id="costWeightValue"></output><input id="costWeight" type="range" min="0" max="0.6" step="0.01"></label>
+          <label><span class="lbl">速度敏感度 <span class="help" data-help="越高越倾向选低时延模型。范围 0~0.6，交互式场景建议调高。">?</span></span><output id="latencyWeightValue"></output><input id="latencyWeight" type="range" min="0" max="0.6" step="0.01"></label>
+        </div>
       </div>
-      <details class="advanced"><summary>高级参数（建议由算法负责人维护）</summary><div class="policy-grid"><label><span class="lbl">质量权重 <span class="help" data-help="质量分在总评分中的基础权重，越高越看重模型效果。">?</span></span><input id="qualityWeight" type="number" min="0" max="3" step="0.01"></label><label><span class="lbl">复杂任务质量加严 <span class="help" data-help="复杂任务临时提高质量门槛（0~0.3），防止难题被发到较弱模型。">?</span></span><input id="complexQualityMargin" type="number" min="0" max="0.3" step="0.01"><small>复杂任务额外增加的质量门槛。</small></label><label><span class="lbl">新模型观察期扣分 <span class="help" data-help="对尚未跑够真实流量的新模型扣分，防止高估其能力；积累足够真实表现后自动解除。">?</span></span><input id="uncertaintyPenalty" type="number" min="0" max="1" step="0.01"></label><label><span class="lbl">最多尝试次数 <span class="help" data-help="首选模型失败后，最多再尝试几个备选模型。">?</span></span><input id="maxAttempts" type="number" min="1" max="5"></label></div></details>
+      <div class="policy-section">
+        <p class="policy-section-title">④ 预算保护</p>
+        <div class="policy-grid business-policy">
+          <label class="check"><input id="budgetEnabled" type="checkbox"><span class="lbl">启用每日预算软保护 <span class="help" data-help="预算告急时自动提高成本敏感度，引导流量转向便宜模型（软保护，不直接拒绝请求）。">?</span></span></label>
+          <label><span class="lbl">每日预算（元） <span class="help" data-help="每日成本上限（元），用于软保护估算。">?</span></span><input id="dailyBudget" type="number" min="0" step="1"></label>
+          <label><span class="lbl">开始保护的预算比例 <span class="help" data-help="预算使用达到该比例时开始降级控制，如 0.9 = 用到九成开始干预。">?</span></span><input id="budgetThreshold" type="number" min="0.1" max="1" step="0.05"></label>
+          <label><span class="lbl">自建模型加分 <span class="help" data-help="自建模型的额外加分值（0~0.5），鼓励优先使用自建算力。">?</span></span><output id="selfBonusValue"></output><input id="selfBonus" type="range" min="0" max="0.5" step="0.01"></label>
+        </div>
+      </div><details class="advanced"><summary>高级参数（建议由算法负责人维护）</summary><div class="policy-grid"><label><span class="lbl">质量权重 <span class="help" data-help="质量分在总评分中的基础权重，越高越看重模型效果。">?</span></span><input id="qualityWeight" type="number" min="0" max="3" step="0.01"></label><label><span class="lbl">复杂任务质量加严 <span class="help" data-help="复杂任务临时提高质量门槛（0~0.3），防止难题被发到较弱模型。">?</span></span><input id="complexQualityMargin" type="number" min="0" max="0.3" step="0.01"><small>复杂任务额外增加的质量门槛。</small></label><label><span class="lbl">新模型观察期扣分 <span class="help" data-help="对尚未跑够真实流量的新模型扣分，防止高估其能力；积累足够真实表现后自动解除。">?</span></span><input id="uncertaintyPenalty" type="number" min="0" max="1" step="0.01"></label><label><span class="lbl">最多尝试次数 <span class="help" data-help="首选模型失败后，最多再尝试几个备选模型。">?</span></span><input id="maxAttempts" type="number" min="1" max="5"></label></div></details>
     </section>
-    <section class="panel impact-panel"><div class="panel-head"><div><p class="eyebrow">策略配置</p><h2>调整影响预估</h2><p class="hint">上面策略的任何调整都会即时反映在这里：多少任务的模型会切换、质量/成本/时延怎么变。基于 10 类代表性任务计算，不调用模型、不产生费用。</p></div><button id="simulate" class="secondary">重新模拟</button></div><div id="impactSummary" class="impact-summary"><p class="empty">连接后自动计算调整前后的影响。</p></div><div id="sensitivityBox" class="sensitivity-box" hidden></div><div class="table-wrap"><table><thead><tr><th>代表任务</th><th>难度</th><th>当前模型</th><th>调整后模型</th><th>变化</th></tr></thead><tbody id="impactRows"></tbody></table></div>
+    <section class="panel impact-panel"><div class="panel-head"><div><h2>调整影响预估</h2><p class="hint">上面策略的任何调整都会即时反映在这里：多少任务的模型会切换、质量/成本/时延怎么变。基于 10 类代表性任务计算，不调用模型、不产生费用。</p></div><button id="simulate" class="secondary">重新模拟</button></div><div id="impactSummary" class="impact-summary"><p class="empty">连接后自动计算调整前后的影响。</p></div><div id="sensitivityBox" class="sensitivity-box" hidden></div><div class="table-wrap"><table><thead><tr><th>代表任务</th><th>难度</th><th>当前模型</th><th>调整后模型</th><th>变化</th></tr></thead><tbody id="impactRows"></tbody></table></div>
       <details class="advanced baseline-details"><summary>基线对照（随机基线 / 事后最优）<span class="help" data-help="随机基线=把请求随机分给成本-时延都不吃亏的模型（打不过它说明任务区分度不够）；事后最优=每题都选到理论最优模型（理论上界）。当前路由应落在两者之间。">?</span></summary><div id="baselineRows" class="baseline-grid"><p class="empty">连接后自动计算。</p></div></details></section>
       <section class="panel danger-note"><strong>安全发布</strong><span>每次发布前自动模拟影响并保存上一版本。高影响调整需要二次确认；建议先把 Auto 生效流量设为 5%–10%，观察后逐步放量。</span></section>
     </section>
@@ -73,14 +88,30 @@
     <section class="tab-page" data-tab="semantic" hidden>
       <section class="panel">
       <div class="panel-head"><div><p class="eyebrow">质量复核</p><h2>复核组件选择与体检</h2><p class="hint">先在上面选择用哪种方式复核任务类型，再用「体检」验证它的实际效果——换组件前后各跑一次，数字直接对比。</p></div></div>
-      <div class="policy-grid business-policy">
-        <label class="check"><input id="semanticEnabled" type="checkbox"><span class="lbl">低置信度任务启用语义复核 <span class="help" data-help="规则分类器把握不足时，再调一个评估模型重新判断任务类型和难度，减少分错档。">?</span></span></label>
-        <label><span class="lbl">复核运行方式 <span class="help" data-help="「仅观察」=后台默默对比小模型与规则的分歧、不改变线上路由；「正式采用」=按小模型复核结果选模型（可配采纳门槛）。">?</span></span><select id="semanticMode"><option value="shadow">仅观察分歧，不改变路由</option><option value="active">正式采用复核结果</option></select><small>建议至少观察一周再正式生效。</small></label>
-        <label class="expert-only"><span class="lbl">复核组件类型 <span class="help" data-help="用哪种模型来判断任务类型：「大模型分类」=用 MaaS 大模型判断；「自训练小模型」=我们自己训练的小模型（更快更省）；「不使用」=关闭语义复核，只靠关键词规则。">?</span></span><select id="semanticProvider"><option value="openai-chat">大模型分类（MaaS chat）</option><option value="http-json">自训练小模型（HTTP 端点）</option><option value="disabled">不使用复核</option></select><small>切换组件后用下方「体检」验证效果。</small></label>
-        <label class="expert-only"><span class="lbl">大模型分类用的模型 <span class="help" data-help="选「大模型分类」方式时实际调用的模型。">?</span></span><select id="semanticModel"></select><small>用于大模型分类方式；自训练小模型时忽略。</small></label>
-        <label class="expert-only"><span class="lbl">小模型端点地址 <span class="help" data-help="选「自训练小模型」方式时，小模型服务的 HTTP 地址（发文本、返回分类结果）。">?</span></span><input id="semanticHttpUrl" type="text" placeholder="http://127.0.0.1:9000/classify"><small>POST text，返回 {"task","tier","complexity","confidence","reason"}。</small></label>
-        <label class="expert-only"><span class="lbl">触发复核的置信度 <span class="help" data-help="规则分类置信度低于该阈值时才触发语义复核（避免每条都复核的开销）。">?</span></span><input id="semanticThreshold" type="number" min="0" max="1" step="0.05"><small>规则置信度低于该值时调用复核。</small></label>
-        <label class="expert-only"><span class="lbl">小模型采纳门槛 <span class="help" data-help="「正式采用」模式下，小模型对自己的判断不够自信时（低于此值）就不采纳、仍按规则路由，防止小模型瞎猜带偏。0=全部采纳（最激进）。">?</span></span><input id="semanticMinConfidence" type="number" min="0" max="1" step="0.05" value="0"><small>低于此值退回规则层。</small></label>
+            <div class="policy-section">
+        <p class="policy-section-title">① 运行开关</p>
+        <div class="policy-grid business-policy">
+          <label class="check"><input id="semanticEnabled" type="checkbox"><span class="lbl">低置信度任务启用语义复核 <span class="help" data-help="规则分类器把握不足时，再调一个评估模型重新判断任务类型和难度，减少分错档。">?</span></span></label>
+          <label><span class="lbl">复核运行方式 <span class="help" data-help="「仅观察」=后台默默对比小模型与规则的分歧、不改变线上路由；「正式采用」=按小模型复核结果选模型（可配采纳门槛）。">?</span></span><select id="semanticMode"><option value="shadow">仅观察分歧，不改变路由</option><option value="active">正式采用复核结果</option></select><small>建议至少观察一周再正式生效。</small></label>
+        </div>
+      </div>
+      <div class="policy-section">
+        <p class="policy-section-title">② 复核组件</p>
+        <div class="policy-grid business-policy">
+          <label class="expert-only"><span class="lbl">复核组件类型 <span class="help" data-help="用哪种模型来判断任务类型：「大模型分类」=用 MaaS 大模型判断；「自训练小模型」=我们自己训练的小模型（更快更省）；「不使用」=关闭语义复核，只靠关键词规则。">?</span></span><select id="semanticProvider"><option value="openai-chat">大模型分类（MaaS chat）</option><option value="http-json">自训练小模型（HTTP 端点）</option><option value="disabled">不使用复核</option></select><small>切换组件后用下方「体检」验证效果。</small></label>
+          <label class="expert-only"><span class="lbl">大模型分类用的模型 <span class="help" data-help="选「大模型分类」方式时实际调用的模型。">?</span></span><select id="semanticModel"></select><small>用于大模型分类方式；自训练小模型时忽略。</small></label>
+          <label class="expert-only"><span class="lbl">小模型端点地址 <span class="help" data-help="选「自训练小模型」方式时，小模型服务的 HTTP 地址（发文本、返回分类结果）。">?</span></span><input id="semanticHttpUrl" type="text" placeholder="http://127.0.0.1:9000/classify"><small>POST 一条工单分类样例，返回 {"task","tier","complexity","confidence","reason"}。</small></label>
+        </div>
+        <div id="semanticProbeResult" class="probe-result" hidden></div>
+      </div>
+      <div class="policy-section">
+        <p class="policy-section-title">③ 复核门槛</p>
+        <div class="policy-grid business-policy">
+          <label class="expert-only"><span class="lbl">触发复核的置信度 <span class="help" data-help="规则分类置信度低于该阈值时才触发语义复核（避免每条都复核的开销）。">?</span></span><input id="semanticThreshold" type="number" min="0" max="1" step="0.05"><small>规则置信度低于该值时调用复核。</small></label>
+          <label class="expert-only"><span class="lbl">小模型采纳门槛 <span class="help" data-help="「正式采用」模式下，小模型对自己的判断不够自信时（低于此值）就不采纳、仍按规则路由，防止小模型瞎猜带偏。0=全部采纳（最激进）。">?</span></span><input id="semanticMinConfidence" type="number" min="0" max="1" step="0.05" value="0"><small>低于此值退回规则层。</small>
+            <button id="probeSemantic" class="secondary" style="margin-top:8px">🔌 测试小模型连通性</button>
+          </label>
+        </div>
       </div>
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border,#e5e7eb)">
         <div class="panel-head"><div><p class="eyebrow">质量复核</p><h2>组件体检</h2><p class="hint">换复核组件前后各跑一次，数字直接对比：准确率、与规则层的分歧、切换到正式采用后的全局影响。</p></div><div class="actions"><button id="evalClassifier" class="secondary">评测分类器</button><button id="replaySwitch" class="secondary">切换影响预估</button></div></div>
@@ -96,7 +127,7 @@
       </section>
     </section>
     <section class="tab-page" data-tab="help" hidden>
-      <section class="panel"><div class="panel-head"><div><p class="eyebrow">参考</p><h2>使用手册</h2><p class="hint">完整配置与使用说明（与服务一同发布的 docs/使用说明.md）。需要独立窗口时<a href="/manual" target="_blank" rel="noopener">点这里打开</a>。</p></div></div><iframe src="/manual?embed=1" title="使用手册" class="manual-frame" loading="lazy"></iframe></section>
+      <section class="panel"><div class="panel-head"><div><h2>使用手册</h2><p class="hint">完整配置与使用说明，随服务一同发布。需要独立窗口时<a href="/manual" target="_blank" rel="noopener">点这里打开</a>。</p></div></div><div class="manual-inline" id="manualInline">加载中…</div></section>
     </section>
   </main><div id="toast" role="status"></div><script type="module" src="/app.js"></script>
 </body></html>

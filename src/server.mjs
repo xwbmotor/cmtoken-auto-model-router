@@ -80,19 +80,36 @@ function buildRoutingReport() {
 }
 
 const counters = { startedAt: new Date().toISOString(), total: 0, auto: 0, explicit: 0, success: 0, errors: 0, fallback: 0, selected: {}, selectedBy: {}, suggested: {}, task: {}, outcome: { auto: { success: 0, error: 0 }, explicit: { success: 0, error: 0 } }, semantic: { eligible: 0, attempted: 0, succeeded: 0, disagreed: 0, errors: 0, applied: 0 } };
+// 真实业务规模输入构造器：模拟样本不再是「一句话玩具提问」，而是带系统提示词+多轮上下文的真实调用形态。
+// 用户侧输入 token 是模拟成本失真的主因（真实调用输入常为几十~上千 token，而一句话提问只有几个）。
+const SYS_TPL = (role) => `你是广东移动内部${role}助手。请基于以下知识库内容回答，不要编造，引用请标注来源段落编号。知识库：{
+  "营业厅业务规范": "……（约2000字业务规范节选）……",
+  "计费系统接口文档": "……（约1500字接口说明）……",
+  "客服话术库": "……（约1200字标准话术）……"
+}。回答需分层：先一句话结论，再展开分析，最后给行动建议。`;
+const HISTORY_TPL = (n) => Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `第${i + 1}轮：业务背景与追问（每轮约120字，含工单号、地市、时间、客户等级等上下文）。${'背景细节填充。'.repeat(6)}` }));
+const withContext = (question, { sysRole = '客服', turns = 2, docChars = 0 } = {}) => {
+  const messages = [];
+  messages.push({ role: 'system', content: SYS_TPL(sysRole) + (docChars ? `
+附文档：${'业务文档内容。'.repeat(Math.ceil(docChars / 7))}` : '') });
+  if (turns) messages.push(...HISTORY_TPL(turns));
+  messages.push({ role: 'user', content: question });
+  return messages;
+};
+
 const SIMULATION_SAMPLES = [
-  { id: 'weekday', label: '直接事实', body: { messages: [{ role: 'user', content: '今天星期几？' }], max_tokens: 64 } },
-  { id: 'classification', label: '工单分类', body: { messages: [{ role: 'user', content: '把“商品破损申请退款”分类为售前、售后或咨询，只返回标签。' }], max_tokens: 64 } },
-  { id: 'extraction', label: '结构化抽取', body: { messages: [{ role: 'user', content: '抽取姓名和城市并严格输出 JSON：张晓明居住在广州。' }], response_format: { type: 'json_object' }, max_tokens: 256 } },
-  { id: 'summary', label: '普通摘要', body: { messages: [{ role: 'user', content: '将一份800字会议纪要压缩为五条行动项，并标明负责人和截止时间。' }], max_tokens: 512 } },
-  { id: 'coding', label: '代码分析', body: { messages: [{ role: 'user', content: '分析 Java 计数器 n++ 的并发安全问题，给出最小修复和单元测试。' }], max_tokens: 1024 } },
-  { id: 'sql', label: 'SQL生成', body: { messages: [{ role: 'user', content: '编写 PostgreSQL 查询，统计最近30天每个用户的订单金额并按金额降序。' }], max_tokens: 512 } },
-  { id: 'reasoning', label: '复杂推理', body: { messages: [{ role: 'user', content: '比较 Saga、TCC 和本地消息表三种分布式事务方案，从一致性、成本、复杂度和恢复能力给出取舍。' }], max_tokens: 4096 } },
-  { id: 'architecture', label: '架构设计', body: { messages: [{ role: 'user', content: '设计一个每秒一万请求的幂等支付回调系统，说明去重、事务、重试、监控、成本和扩容方案。' }], max_tokens: 4096 } },
-  { id: 'creative', label: '创意文案', body: { messages: [{ role: 'user', content: '为企业内部 AI 助手写三条简洁宣传语，每条不超过18字。' }], max_tokens: 512 } },
-  { id: 'tools', label: '工具调用', body: { messages: [{ role: 'user', content: '查询订单状态并总结异常原因。' }], tools: [{ type: 'function', function: { name: 'get_order', parameters: { type: 'object' } } }], max_tokens: 512 } },
-  { id: 'deep-consult', label: '深度咨询', body: { messages: [{ role: 'user', content: '我们是省级运营商，需要为全省 21 个地市的营业厅设计一套智能问答系统的落地方案。请完整回答以下问题：第一，系统架构如何分层，渠道侧、应用侧、模型侧、数据侧各自的职责边界是什么，如何避免重复建设；第二，模型选型上自建与采购如何权衡，涉及成本、数据安全、迭代速度、可控性四个维度，并给出量化依据；第三，知识库建设分几期，每期的目标、范围、验收标准和风险是什么；第四，全省推广的节奏怎么安排，试点、扩容、全面上线三个阶段的准入门槛和退出条件分别是什么；第五，运营保障体系怎么建，包括监控指标、告警阈值、值班响应、故障演练的具体要求。回答必须同时满足：给出明确结论、每条结论有依据、标注关键假设、控制总篇幅在两千字以内。' }], max_tokens: 8192 } },
-  { id: 'code-refactor', label: '代码重构', body: { messages: [{ role: 'user', content: '我们有一个 30 万行的 Java 单体系统，交易核心模块每到大促就出现数据库连接池耗尽和慢 SQL 告警。请做一次完整的重构设计：1）先用三段论分析根因，区分架构问题、代码问题和容量问题，并说明验证方法；2）给出目标架构，要求读写分离、热点数据本地缓存、异步削峰，同时保证分布式事务一致性，说明每种一致性方案（强一致、最终一致、补偿）的适用场景和代价；3）制定分步迁移计划，每一步要可回滚，给出灰度策略和观察指标；4）列出迁移过程中的十大风险及对应预案；5）给出容量估算模型：假设峰值 QPS 从当前 2000 涨到 12000，按读写比 8:2、缓存命中率 90% 目标推演数据库、缓存、应用层的扩容需求。要求所有结论标注置信度。' }], max_tokens: 8192 } }
+  { id: 'weekday', label: '直接事实', body: { messages: withContext('今天星期几？', { turns: 0 }), max_tokens: 64 } },
+  { id: 'classification', label: '工单分类', body: { messages: withContext('把“商品破损申请退款”分类为售前、售后或咨询，只返回标签。', { sysRole: '工单', turns: 3 }), max_tokens: 64 } },
+  { id: 'extraction', label: '结构化抽取', body: { messages: withContext('抽取姓名和城市并严格输出 JSON：张晓明居住在广州。', { sysRole: '数据', turns: 1, docChars: 1400 }), response_format: { type: 'json_object' }, max_tokens: 256 } },
+  { id: 'summary', label: '普通摘要', body: { messages: withContext('将一份800字会议纪要压缩为五条行动项，并标明负责人和截止时间。', { sysRole: '办公', turns: 2, docChars: 800 }), max_tokens: 512 } },
+  { id: 'coding', label: '代码分析', body: { messages: withContext('分析 Java 计数器 n++ 的并发安全问题，给出最小修复和单元测试。', { sysRole: '研发', turns: 2 }), max_tokens: 1024 } },
+  { id: 'sql', label: 'SQL生成', body: { messages: withContext('编写 PostgreSQL 查询，统计最近30天每个用户的订单金额并按金额降序。', { sysRole: '研发', turns: 1, docChars: 600 }), max_tokens: 512 } },
+  { id: 'reasoning', label: '复杂推理', body: { messages: withContext('比较 Saga、TCC 和本地消息表三种分布式事务方案，从一致性、成本、复杂度和恢复能力给出取舍。', { sysRole: '架构', turns: 3 }), max_tokens: 4096 } },
+  { id: 'architecture', label: '架构设计', body: { messages: withContext('设计一个每秒一万请求的幂等支付回调系统，说明去重、事务、重试、监控、成本和扩容方案。', { sysRole: '架构', turns: 2, docChars: 2000 }), max_tokens: 4096 } },
+  { id: 'creative', label: '创意文案', body: { messages: withContext('为企业内部 AI 助手写三条简洁宣传语，每条不超过18字。', { sysRole: '办公', turns: 1 }), max_tokens: 512 } },
+  { id: 'tools', label: '工具调用', body: { messages: withContext('查询订单状态并总结异常原因。', { sysRole: '客服', turns: 2 }), tools: [{ type: 'function', function: { name: 'get_order', parameters: { type: 'object' } } }], max_tokens: 512 } },
+  { id: 'deep-consult', label: '深度咨询', body: { messages: withContext('我们是省级运营商，需要为全省 21 个地市的营业厅设计一套智能问答系统的落地方案。请完整回答以下问题：第一，系统架构如何分层，渠道侧、应用侧、模型侧、数据侧各自的职责边界是什么，如何避免重复建设；第二，模型选型上自建与采购如何权衡，涉及成本、数据安全、迭代速度、可控性四个维度，并给出量化依据；第三，知识库建设分几期，每期的目标、范围、验收标准和风险是什么；第四，全省推广的节奏怎么安排，试点、扩容、全面上线三个阶段的准入门槛和退出条件分别是什么；第五，运营保障体系怎么建，包括监控指标、告警阈值、值班响应、故障演练的具体要求。回答必须同时满足：给出明确结论、每条结论有依据、', { sysRole: '咨询', turns: 3 }), max_tokens: 8192 } },
+  { id: 'code-refactor', label: '代码重构', body: { messages: withContext('我们有一个 30 万行的 Java 单体系统，交易核心模块每到大促就出现数据库连接池耗尽和慢 SQL 告警。请做一次完整的重构设计：1）先用三段论分析根因，区分架构问题、代码问题和容量问题，并说明验证方法；2）给出目标架构，要求读写分离、热点数据本地缓存、异步削峰，同时保证分布式事务一致性，说明每种一致性方案（强一致、最终一致、补偿）的适用场景和代价；3）制定分步迁移计划，每一步要可回滚，给出灰度策略和观察指标；4）列出迁移过程中的十大风险及对应预案；5）给出容量估算模型：假设峰值 QPS 从当前 2000 涨到 12000，按读写比 8:2、缓存命中率 90% 目标推演数据库、缓存、应用层的扩容需求。', { sysRole: '架构', turns: 2, docChars: 3000 }), max_tokens: 8192 } }
 ];
 
 if (!['127.0.0.1', 'localhost', '::1'].includes(host) && (!process.env.ADMIN_TOKEN || !process.env.ROUTER_ACCESS_KEY)) {
@@ -757,7 +774,17 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     } catch (error) { return errorJson(res, 400, error.message, 'invalid_feedback'); }
   }
-  // 任务榜单（OpenRouter「task-spend rankings」内网版）：按任务类型聚合决策日志，
+  // 任务分类体系（参考 OpenRouter 大类+小类）：路由层仍是 5 任务（打分键），展示层归大类。
+const TASK_CATEGORIES = {
+  default:    { category: '通用问答', sub: '日常问答', icon: '💬' },
+  coding:     { category: '技术工程', sub: '代码/SQL/工具', icon: '⚙️' },
+  reasoning:  { category: '分析推理', sub: '推理/规划/架构', icon: '🧠' },
+  creative:   { category: '内容创作', sub: '文案/营销/创意', icon: '✍️' },
+  extraction: { category: '数据结构化', sub: '抽取/分类/JSON', icon: '📋' },
+  unknown:    { category: '未分类', sub: '—', icon: '·' }
+};
+
+// 任务榜单（OpenRouter「task-spend rankings」内网版）：按任务类型聚合决策日志，
   // 每类任务展示首选模型+使用份额+满意度——「大家把流量花在了哪」一目了然。
   // 路由体检报表：见 buildRoutingReport()
   if (req.method === 'GET' && url.pathname === '/admin/api/routing-report') {
@@ -767,6 +794,33 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/admin/api/market-signal') {
     marketSignal.rebuild().catch(() => {});
     return json(res, 200, { status: marketSignal.status(), signals: marketSignal.signals });
+  }
+  // 小模型端点连通测试：对配置的 http-json 端点发一条真实探测请求，验证「地址通/协议对/返回合法」
+  if (req.method === 'POST' && url.pathname === '/admin/api/semantic/probe') {
+    try {
+      const body = await readJson(req);
+      const url_ = String(body.url || '').trim();
+      if (!/^https?:\/\//.test(url_)) return errorJson(res, 400, '端点地址必须以 http:// 或 https:// 开头', 'bad_url');
+      const started = Date.now();
+      const probeBody = { text: '把"商品破损申请退款"分类为售前、售后或咨询，只返回标签。' };
+      const response = await fetch(url_, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(probeBody),
+        signal: AbortSignal.timeout(8000)
+      });
+      const text = await response.text();
+      const latencyMs = Date.now() - started;
+      if (!response.ok) return json(res, 200, { ok: false, stage: 'http', latencyMs, httpStatus: response.status, message: `HTTP ${response.status}：${text.slice(0, 200)}` });
+      let parsed;
+      try { parsed = JSON.parse(text); } catch { return json(res, 200, { ok: false, stage: 'json', latencyMs, httpStatus: response.status, message: `返回不是 JSON：${text.slice(0, 200)}` }); }
+      const missing = ['task', 'tier', 'complexity', 'confidence'].filter((k) => !(k in parsed));
+      if (missing.length) return json(res, 200, { ok: false, stage: 'schema', latencyMs, httpStatus: response.status, message: `缺少字段：${missing.join('、')}（要求 {task,tier,complexity,confidence,reason}）`, sample: text.slice(0, 200) });
+      return json(res, 200, { ok: true, stage: 'ok', latencyMs, httpStatus: 200, assessment: parsed });
+    } catch (error) {
+      const timeout = String(error).includes('Timeout') || String(error).includes('abort');
+      return json(res, 200, { ok: false, stage: timeout ? 'timeout' : 'network', message: timeout ? '8 秒内无响应（连接超时）' : `网络不通：${error.message}` });
+    }
   }
   if (req.method === 'GET' && url.pathname === '/admin/api/task-board') {
     const recent = await decisionLog.recent(2000).catch(() => []);
@@ -782,6 +836,8 @@ const server = http.createServer(async (req, res) => {
     }
     const board = Object.values(byTask).map((slot) => ({
       task: slot.task,
+      category: TASK_CATEGORIES[slot.task]?.category || '未分类',
+      sub: TASK_CATEGORIES[slot.task]?.sub || '—',
       total: slot.total,
       picks: Object.entries(slot.models)
         .sort((a, b) => b[1] - a[1])
