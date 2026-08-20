@@ -82,6 +82,40 @@ async function renderRoutingReport() {
     hl.innerHTML = (data.highlights || []).map((t) => `<div class="highlight">${t}</div>`).join('');
   } catch (e) { rows.innerHTML = `<tr><td colspan="4" class="empty">${e.message}</td></tr>`; }
 }
+// 总览 · 策略快照 + 任务分布（撑起总览信息密度）
+const TIER_SNAP = { budget: '省钱', balanced: '均衡', quality: '质量', max: '顶配', custom: '自定义' };
+function renderOverview() {
+  if (!config) return;
+  // 策略快照
+  const snap = $('policySnapshot');
+  if (snap) {
+    const r = config.routing || {};
+    const rows = [
+      ['成本档位', TIER_SNAP[r.costTier] || '均衡'],
+      ['运行状态', r.mode === 'active' ? '正式生效' : '仅观察'],
+      ['Auto 生效流量', (r.activeTrafficPercent ?? 100) + '%'],
+      ['最低质量目标', (r.qualityFloor ?? 0.82).toFixed(2)],
+      ['成本敏感度', (r.costWeight ?? 0.22).toFixed(2)],
+      ['速度敏感度', (r.latencyWeight ?? 0.1).toFixed(2)]
+    ];
+    snap.innerHTML = rows.map(([k, v]) => `<div><small>${k}</small><b>${v}</b></div>`).join('');
+  }
+  // 任务分布（用决策日志 metrics.counters.task）
+  const dist = $('taskDist');
+  if (dist) {
+    const t = metrics?.counters?.task || {};
+    const entries = Object.entries(t).sort((a, b) => b[1] - a[1]);
+    const total = entries.reduce((a, [, v]) => a + v, 0) || 1;
+    if (!entries.length) { dist.innerHTML = '<p class="empty">暂无任务数据。</p>'; }
+    else {
+      dist.innerHTML = entries.slice(0, 6).map(([k, v]) => {
+        const pct = (v / total * 100);
+        return `<div class="dist-row"><span>${TASK_LABELS[k] || k}</span><div class="bar"><i style="width:${pct}%"></i></div><b>${v}</b><small>${pct.toFixed(0)}%</small></div>`;
+      }).join('');
+    }
+  }
+}
+
 function updateRangeLabels() { $('trafficValue').textContent = `${$('activeTrafficPercent').value}%`; $('qualityFloorValue').textContent = `≥ ${percentValue($('qualityFloor').value)}`; $('costWeightValue').textContent = sensLabel($('costWeight').value); $('latencyWeightValue').textContent = sensLabel($('latencyWeight').value); $('selfBonusValue').textContent = `+${Number($('selfBonus').value).toFixed(2)}`; $('presetHelp').textContent = PRESETS[document.querySelector('input[name="costTier"]:checked')?.value]?.label || PRESETS.custom.label; }
 // 脏标记：表单与已发布版本不一致时提示「有未发布修改」，避免不知道改没改成
 // diff 驱动而非交互驱动——拖回原值/改了又撤销会自动熄灭；键序无关深比较，server 端规范化重排键也不误报
@@ -192,8 +226,8 @@ async function simulate() { if (!config) return; readForm(); const result = awai
 function scheduleSimulation(){ clearTimeout(simulateTimer); simulateTimer=setTimeout(()=>simulate().catch(()=>{}),350); }
 function percent(n,d){ return d ? `${(n/d*100).toFixed(1)}%` : '0.0%'; }
 function renderMetrics(){ const c=metrics.counters; $('total').textContent=c.total; $('autoRate').textContent=percent(c.auto,c.total); const selfIds=new Set(config.models.filter(m=>m.ownership==='self_hosted').map(m=>m.id)); const self=Object.entries(c.selected).filter(([id])=>selfIds.has(id)).reduce((s,[,n])=>s+n,0); $('selfRate').textContent=percent(self,c.success); $('semanticRate').textContent=percent(c.semantic?.disagreed||0,c.semantic?.succeeded||0); $('budgetRate').textContent=metrics.budget?.enabled?percentValue(metrics.budget.pressure):'未启用'; $('fallback').textContent=c.fallback; $('errorRate').textContent=percent(c.errors,c.total); document.querySelectorAll('#models tr').forEach(row=>{const m=config.models[Number(row.dataset.index)],h=metrics.health[m.id],cell=row.querySelector('.health'); cell.innerHTML=!h?'<span class="pill muted">无数据</span>':h.circuitState==='half_open'?'<span class="pill muted">恢复探测</span>':h.circuitOpenUntil>Date.now()?'<span class="pill bad">熔断</span>':`<span class="pill good">${h.ewmaLatencyMs}ms · ${h.failures}错</span>`}); $('recent').innerHTML=metrics.recent.length?metrics.recent.map(x=>`<div class="recent-item"><time>${new Date(x.at).toLocaleTimeString()}</time><div><b>${x.selected}</b> <small>← ${x.requested} · ${taskCN(x.task)} · ${METHOD_CN[x.routeMethod]||x.routeMethod||'规则'} · 推理${x.reasoningLevel||'off'}${x.fallbackAttempt?` · fallback ${x.fallbackAttempt}`:''}</small></div><span class="pill ${x.ok?'good':'bad'}">${x.ok?`${x.latencyMs}ms`:'失败'}</span></div>`).join(''):'<p class="empty">暂无请求</p>'; }
-async function connect(){ try{sessionStorage.setItem('routerAdminToken',$('token').value); [config,metrics]=await Promise.all([api('/admin/api/config'),api('/admin/api/metrics')]);snapshotBaseline(); $('status').textContent=`已连接 · v${config.version}`; $('status').className='pill good'; renderMetrics(); renderTaskBoard(); renderMarketSignal(); await simulate();}catch(error){$('status').textContent='连接失败';$('status').className='pill bad';toast(error.message,true)} }
-$('token').value=sessionStorage.getItem('routerAdminToken')||''; $('connect').onclick=connect; $('refresh').onclick=async()=>{try{metrics=await api('/admin/api/metrics');renderMetrics()}catch(e){toast(e.message,true)}}; $('reload').onclick=()=>{if(!savedConfig)return;config=structuredClone(savedConfig);snapshotBaseline();renderMetrics();simulate();toast('已恢复到当前线上版本')}; $('refreshBoard').onclick = () => { renderTaskBoard(); renderMarketSignal(); };
+async function connect(){ try{sessionStorage.setItem('routerAdminToken',$('token').value); [config,metrics]=await Promise.all([api('/admin/api/config'),api('/admin/api/metrics')]);snapshotBaseline(); $('status').textContent=`已连接 · v${config.version}`; $('status').className='pill good'; renderMetrics(); renderOverview(); renderTaskBoard(); renderMarketSignal(); await simulate();}catch(error){$('status').textContent='连接失败';$('status').className='pill bad';toast(error.message,true)} }
+$('token').value=sessionStorage.getItem('routerAdminToken')||''; $('connect').onclick=connect; $('refresh').onclick=async()=>{try{metrics=await api('/admin/api/metrics');renderMetrics();renderOverview()}catch(e){toast(e.message,true)}}; $('reload').onclick=()=>{if(!savedConfig)return;config=structuredClone(savedConfig);snapshotBaseline();renderMetrics();simulate();toast('已恢复到当前线上版本')}; $('refreshBoard').onclick = () => { renderTaskBoard(); renderMarketSignal(); };
 $('runReport').onclick = () => renderRoutingReport();
 $('simulate').onclick=()=>simulate().catch(e=>toast(e.message,true));
 document.querySelectorAll('#tierPicker .tier').forEach((el) => el.addEventListener('click', () => {

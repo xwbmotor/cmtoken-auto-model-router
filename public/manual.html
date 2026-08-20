@@ -64,5 +64,14 @@ function render(md) {
   return out.join('\n');
 }
 document.getElementById('out').innerHTML = render(document.getElementById('raw').textContent);
+  // 嵌入模式（管理页 tab iframe）：放宽限宽、去掉双层卡片边框
+  if (location.search.includes('embed=1')) {
+    document.querySelector('.wrap').style.maxWidth = 'none';
+    document.querySelector('.wrap').style.padding = '8px 4px 40px';
+    const doc = document.querySelector('.doc');
+    if (doc) { doc.style.border = 'none'; doc.style.boxShadow = 'none'; doc.style.padding = '6px 10px'; doc.style.borderRadius = '0'; }
+    const top = document.querySelector('header.top');
+    if (top) top.style.display = 'none';
+  }
 </script>
 </body></html>

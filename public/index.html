@@ -15,6 +15,10 @@
   <main>
     <section class="tab-page" data-tab="overview">
       <section class="cards"><article><span>总请求 <span class="help" data-help="经过本路由的总请求数（含 auto 与显式指定模型）。">?</span></span><strong id="total">—</strong></article><article><span>Auto 占比 <span class="help" data-help="model=auto 的请求占总请求的比例，其余为显式指定模型。">?</span></span><strong id="autoRate">—</strong></article><article><span>自建承载 <span class="help" data-help="自建模型处理的请求占成功请求的比例，越高越省成本。">?</span></span><strong id="selfRate">—</strong></article><article><span>语义复核分歧 <span class="help" data-help="语义复核与规则分类结论不一致的比例，分歧高说明规则分类需调整。">?</span></span><strong id="semanticRate">—</strong></article><article><span>今日预算使用 <span class="help" data-help="今日实际成本 ÷ 每日预算。达到保护阈值后自动提高成本敏感度（软保护，不拒绝请求）。">?</span></span><strong id="budgetRate">—</strong></article><article><span>Fallback <span class="help" data-help="首选模型调用失败后自动切换到备选模型的次数。">?</span></span><strong id="fallback">—</strong></article><article><span>错误率 <span class="help" data-help="上游调用失败（含重试后仍失败）占总请求的比例。">?</span></span><strong id="errorRate">—</strong></article></section>
+      <section class="split overview-mid">
+        <article class="panel"><div class="panel-head"><div><p class="eyebrow">当前配置</p><h2>策略快照</h2></div><a href="#policy" class="link-btn" style="font-size:12px">调整策略 →</a></div><div id="policySnapshot" class="snapshot-grid"><p class="empty">连接后显示。</p></div></article>
+        <article class="panel"><div class="panel-head"><div><p class="eyebrow">路由透明度</p><h2>任务分布</h2></div><a href="#insights" class="link-btn" style="font-size:12px">完整榜单 →</a></div><div id="taskDist" class="task-dist"><p class="empty">连接后显示。</p></div></article>
+      </section>
       <section class="panel"><div class="panel-head"><div><p class="eyebrow">运行监控</p><h2>最近请求</h2><p class="hint">最近的每笔路由决策：请求被分给哪个模型、为什么、耗时多少。</p></div><button id="refresh" class="secondary">刷新</button></div><div id="recent" class="recent"><p class="empty">暂无请求</p></div></section>
     </section>
     <section class="tab-page" data-tab="policy" hidden>
@@ -56,7 +60,7 @@
       <section class="panel deployment-panel"><div class="panel-head"><div><p class="eyebrow">成本管理</p><h2>成本与定价</h2></div><span class="hint">优先按「真实单价」计算成本指数（推荐）；没有真实单价的自建模型可用「部署资源估算」。生态模型由平台提供、不是我们部署的，无需填部署资源。修改后需到「业务策略」页安全发布。</span></div>
       <div class="policy-grid">
         <label><span class="lbl">成本指数来源 <span class="help" data-help="真实单价=按模型单价归一（推荐，已在「模型参数」录入单价的模型生效）；部署资源=按自建部署的硬件和吞吐估算（无真实单价时用）。">?</span></span><select id="costSource"><option value="pricing">真实单价（元/百万Token）</option><option value="deployment">部署资源估算</option></select></label>
-        <label><span class="lbl">定价流量构成（输入:输出） <span class="help" data-help="用于加权单价计算的输入输出 token 比例，如 10:1（典型问答场景输入远多于输出）。">?</span></span><input id="pricingMixInput" type="number" min="0" step="0.5" style="width:70px"> : <input id="pricingMixOutput" type="number" min="0" step="0.5" style="width:70px"><small>成本指数 = (输入占比×输入价 + 输出占比×输出价) 归一化。</small></label>
+        <label><span class="lbl">定价流量构成（输入 : 输出） <span class="help" data-help="用于加权单价计算的输入输出 token 比例，如 10:1（典型问答场景输入远多于输出）。">?</span></span><div class="mix-row"><input id="pricingMixInput" type="number" min="0" step="0.5"><span class="mix-sep">:</span><input id="pricingMixOutput" type="number" min="0" step="0.5"></div><small>成本指数 = (输入占比×输入价 + 输出占比×输出价) 归一化。</small></label>
         <label><span class="lbl">算力豆汇率（豆/元） <span class="help" data-help="内网平台按算力豆扣费，1 元 = 70 豆（由兑换表反推）。">?</span></span><input id="beansPerYuan" type="number" min="0" step="1"><small>用于预算与观测的算力豆换算。</small></label>
       </div>
       <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>模型</th><th>卡型 <span class="help" data-help="自建部署所用昇腾芯片型号，相对权重在成本模型里配置。">?</span></th><th>设备数 <span class="help" data-help="该实例部署的服务器/设备台数。">?</span></th><th>单机卡数 <span class="help" data-help="每台设备上的昇腾卡数。">?</span></th><th>实例数 <span class="help" data-help="部署的推理服务实例数（vLLM/SGLang 进程数）。">?</span></th><th>单实例并发 <span class="help" data-help="每个实例能同时处理的请求数。">?</span></th><th>总并发 <span class="help" data-help="实例数×单实例并发，该模型能承载的总并发请求量。">?</span></th><th>吞吐 TPS <span class="help" data-help="该实例实测吞吐（tokens/秒）。吞吐越高，单位成本越低。">?</span></th><th>→ 成本指数</th></tr></thead><tbody id="deployment"></tbody></table></div></section>
@@ -86,13 +90,13 @@
     </section>
     </section>
     <section class="tab-page" data-tab="debug" hidden>
-      <section class="split">
+      <section class="split debug-split">
       <article class="panel route-preview-panel"><div class="panel-head"><div><p class="eyebrow">调试工具</p><h2>单题路由解释</h2></div><button id="preview">计算选择</button></div><textarea id="prompt" rows="8">我现在有一个 MaaS 服务，希望根据任务难度、效果、成本和时延自动选择模型，应该如何设计路由层？</textarea><div class="preview-options"><label class="check"><input id="tools" type="checkbox"><span class="lbl">工具调用 <span class="help" data-help="请求是否携带函数调用（tools）。">?</span></span></label><label class="check"><input id="jsonMode" type="checkbox"><span class="lbl">严格 JSON <span class="help" data-help="是否要求输出 JSON（response_format）。">?</span></span></label><label class="check"><input id="stream" type="checkbox" checked><span class="lbl">流式输出 <span class="help" data-help="是否 SSE 流式返回。">?</span></span></label></div><pre id="decision">等待预演…</pre></article>
       <article class="panel"><div class="panel-head"><div><p class="eyebrow">使用指引</p><h2>怎么用这一页</h2></div></div><div class="policy-grid" style="grid-template-columns:1fr"><span class="hint">粘贴任意一段真实业务请求文案，点「计算选择」，即可看到路由器把它识别成什么任务、每个候选的得分明细、最终选谁、为什么——用于排查「为什么我的请求被分给了模型 X」。<br><br>排查线上问题时，可对照「总览 → 最近请求」里的实际决策记录（含各候选得分），定位分类或打分偏差。</span></div></article>
       </section>
     </section>
     <section class="tab-page" data-tab="help" hidden>
-      <section class="panel"><div class="panel-head"><div><p class="eyebrow">参考</p><h2>使用手册</h2><p class="hint">完整配置与使用说明（与服务一同发布的 docs/使用说明.md）。需要独立窗口时<a href="/manual" target="_blank" rel="noopener">点这里打开</a>。</p></div></div><iframe src="/manual" title="使用手册" class="manual-frame" loading="lazy"></iframe></section>
+      <section class="panel"><div class="panel-head"><div><p class="eyebrow">参考</p><h2>使用手册</h2><p class="hint">完整配置与使用说明（与服务一同发布的 docs/使用说明.md）。需要独立窗口时<a href="/manual" target="_blank" rel="noopener">点这里打开</a>。</p></div></div><iframe src="/manual?embed=1" title="使用手册" class="manual-frame" loading="lazy"></iframe></section>
     </section>
   </main><div id="toast" role="status"></div><script type="module" src="/app.js"></script>
 </body></html>

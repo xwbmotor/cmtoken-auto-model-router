@@ -171,3 +171,51 @@ body:not(.simple-view) .simple-only{display:none!important}
 /* 手册 iframe */
 .manual-frame { width: 100%; height: calc(100vh - 260px); min-height: 480px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: #fff; }
 @media (max-width: 720px) { .tabs { padding: 0 16px; } }
+
+/* ═══ UI 精修（2026-08-20 五处反馈） ═══ */
+/* 1) 手册 iframe：撑满可用高度 */
+.manual-frame { width: 100%; height: calc(100vh - 300px); min-height: 640px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+
+/* 2) 调试页 2:1 比例：工具为主，指引为辅 */
+.debug-split { grid-template-columns: 1.8fr 1fr; }
+.debug-split .route-preview-panel textarea { min-height: 200px; }
+
+/* 3) 跑分一览：大字号清晰版 */
+.capability-matrix-panel .cap-cell input { width: 72px; padding: 6px 5px; font-size: 14px; font-variant-numeric: tabular-nums; border: 1px solid transparent; background: transparent; text-align: center; }
+.capability-matrix-panel .cap-cell input:hover, .capability-matrix-panel .cap-cell input:focus { border-color: #d0d5dd; background: #fff; }
+.capability-matrix-panel table { font-size: 14px; }
+.capability-matrix-panel th { font-size: 12px; }
+.capability-matrix-panel .cap-model strong { font-size: 14px; }
+.capability-matrix-panel .cap-model small { font-size: 12px; }
+.capability-matrix-panel th:first-child { width: 220px; }
+
+/* 3b) 定价流量构成：单行不换行 */
+.mix-row { display: flex; align-items: center; gap: 8px; }
+.mix-row input { width: 84px; }
+.mix-sep { color: var(--muted); font-weight: 600; }
+
+/* 4) 档位选择器：等宽 grid 一行排齐 */
+.tier-picker { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.tier-picker .tier { min-width: 0; padding: 12px 14px; }
+.tier-picker .tier small { line-height: 1.45; }
+
+/* 4b) 滑条组：标签行内值右对齐同一行 */
+.policy-grid label > .lbl { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.business-policy output { position: static; font-size: 13px; }
+.policy-grid label > output { text-align: right; }
+
+/* 5) 总览：策略快照 + 任务分布 */
+.overview-mid { margin-bottom: 14px; }
+.snapshot-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 18px; }
+.snapshot-grid div { display: flex; flex-direction: column; gap: 2px; }
+.snapshot-grid small { color: var(--muted); font-size: 12px; }
+.snapshot-grid b { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.task-dist { display: flex; flex-direction: column; gap: 8px; }
+.dist-row { display: grid; grid-template-columns: 64px 1fr 48px 44px; align-items: center; gap: 10px; font-size: 13px; }
+.dist-row span { color: var(--text); }
+.dist-row .bar { height: 8px; background: #eef0f4; border-radius: 99px; overflow: hidden; }
+.dist-row .bar i { display: block; height: 100%; background: var(--brand); border-radius: 99px; }
+.dist-row b { text-align: right; font-variant-numeric: tabular-nums; }
+.dist-row small { color: var(--muted2); text-align: right; }
+@media (max-width: 1100px) { .tier-picker { grid-template-columns: repeat(3, 1fr); } .debug-split { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .tier-picker { grid-template-columns: repeat(2, 1fr); } .snapshot-grid { grid-template-columns: repeat(2, 1fr); } }

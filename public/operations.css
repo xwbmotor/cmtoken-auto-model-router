@@ -1,5 +1,5 @@
 /* 业务策略/影响模拟 · 浅色（Linear 风格输出值/滑杆，AWS 风格影响卡） */
-.business-policy label{position:relative}.business-policy output{position:absolute;right:0;color:var(--brand);font-weight:650;font-variant-numeric:tabular-nums}
+.business-policy label{position:relative}.business-policy output{color:var(--brand);font-weight:650;font-variant-numeric:tabular-nums;font-size:13px}
 .business-policy small{min-height:34px;color:var(--muted);font-size:11px}
 .business-policy input[type=range]{padding:0;accent-color:var(--brand);height:26px}
 .advanced{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
