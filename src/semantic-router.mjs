@@ -4,6 +4,9 @@
 // provider 由 config.semanticRouter.provider 选择：
 //   - openai-chat：现有行为，用 chat-completions 模型 + 分类 prompt（向后兼容：无 provider 字段且有 model 时默认）
 //   - http-json  ：POST 到自训练小模型的 HTTP 端点，直接返回合同 JSON
+//   - cascade    ：级联复核——先问自训练小模型；小模型失败或自身置信度不足时升级 MaaS 大模型；
+//                  大模型也不行才把错误抛给调用方（由上层退回规则层决策）。
+//                  成本逻辑：大部分请求小模型能定，只有拿不准的少数才付大模型的调用成本。
 //   - disabled   ：不复核（等价 semanticRouter.enabled=false，显式声明用）
 import { requestText } from './router.mjs';
 
@@ -106,10 +109,43 @@ async function classifyViaHttpJson(body, config, options) {
   }
 }
 
+// —— provider: cascade（小模型 → 大模型级联） ——
+// 升级条件：小模型调用失败（网络/超时/schema 不合法）或 小模型自身 confidence < 升级阈值。
+// 升级阈值用 config.semanticRouter.minConfidence（与管理页「复核采纳门槛」同字段），
+// 默认 0.5：小模型置信度一半以上才直接采纳，否则升级大模型兜底。
+export async function classifyViaCascade(body, config, options) {
+  const policy = config.semanticRouter || {};
+  const escalateThreshold = Number(policy.minConfidence ?? 0.5);
+  // 第一级：自训练小模型。失败或低置信都记录，但低置信时小模型的判断要带给大模型做参照
+  let small = null;
+  let smallError = null;
+  try {
+    small = await classifyViaHttpJson(body, config, options);
+  } catch (error) {
+    smallError = error;
+  }
+  if (small && Number(small.confidence) >= escalateThreshold) return small;
+  // 第二级：升级 MaaS 大模型（小模型挂了兜底 / 小模型拿不准复核）
+  let escalated;
+  try {
+    escalated = await classifyViaOpenAIChat(body, config, options);
+  } catch (largeError) {
+    // 两个都挂才整体失败：抛合并错误（信息量取两级），由上层退回规则层决策
+    const merged = new Error(`级联复核两级均失败：小模型 ${smallError ? smallError.message : '低置信未采纳'}；大模型 ${largeError.message}`);
+    merged.cause = largeError;
+    throw merged;
+  }
+  const meta = { escalatedFrom: 'http-json' };
+  if (small) meta.smallAttempt = { task: small.task, tier: small.tier, confidence: small.confidence };
+  if (smallError) meta.smallError = String(smallError.message).slice(0, 200);
+  return { ...escalated, ...meta };
+}
+
 // —— 分发入口：签名与原 classifySemantically 兼容 ——
 export async function classifySemantically(body, config, options = {}) {
   const provider = semanticProvider(config);
   if (provider === 'http-json') return classifyViaHttpJson(body, config, options);
+  if (provider === 'cascade') return classifyViaCascade(body, config, options);
   if (provider === 'disabled') throw new Error('语义复核 provider 已禁用');
   return classifyViaOpenAIChat(body, config, options);
 }

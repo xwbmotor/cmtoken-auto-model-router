@@ -68,6 +68,91 @@ test('disabled provider never triggers semantic routing', () => {
   assert.equal(shouldUseSemanticRouter(analysis, body, custom), false);
 });
 
+// —— cascade 级联（小模型 → 大模型兜底）——
+
+const ASSESS_OK = { task: 'reasoning', tier: 'complex', complexity: 0.8, confidence: 0.92, reason: '多步权衡' };
+const ASSESS_LOWCONF = { task: 'default', tier: 'balanced', complexity: 0.5, confidence: 0.3, reason: '拿不准' };
+const chatResponse = (assessment) => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify(assessment) } }] }) });
+
+function cascadeConfig(overrides = {}) {
+  const custom = structuredClone(config);
+  custom.semanticRouter = {
+    ...custom.semanticRouter,
+    provider: 'cascade',
+    minConfidence: 0.5,
+    model: 'deepseekv4-flash',
+    httpJson: { url: 'http://127.0.0.1:9/classify', timeoutMs: 500 },
+    ...overrides
+  };
+  return custom;
+}
+
+test('cascade: 小模型高置信 → 直接采纳，不调大模型', async () => {
+  const calls = [];
+  const fakeFetch = async (url) => {
+    calls.push(String(url));
+    return { ok: true, status: 200, json: async () => ASSESS_OK };
+  };
+  const result = await classifySemantically({ messages: [{ role: 'user', content: '帮我权衡这几个方案' }] }, cascadeConfig(), { fetchImpl: fakeFetch, apiKey: 'test' });
+  assert.equal(result.provider, 'http-json');
+  assert.equal(result.task, 'reasoning');
+  assert.equal(calls.length, 1, '只应调用小模型一次');
+  assert.ok(calls[0].includes('/classify'));
+});
+
+test('cascade: 小模型低置信 → 升级大模型，结果带 escalatedFrom + smallAttempt', async () => {
+  const calls = [];
+  const fakeFetch = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes('/classify')) return { ok: true, status: 200, json: async () => ASSESS_LOWCONF };
+    return chatResponse({ task: 'coding', tier: 'complex', complexity: 0.75, confidence: 0.88, reason: '代码重构' });
+  };
+  const result = await classifySemantically({ messages: [{ role: 'user', content: '看看这段代码怎么改' }] }, cascadeConfig(), { fetchImpl: fakeFetch, apiKey: 'test' });
+  assert.equal(result.provider, 'openai-chat');
+  assert.equal(result.escalatedFrom, 'http-json');
+  assert.equal(result.smallAttempt.task, 'default');
+  assert.equal(result.smallAttempt.confidence, 0.3);
+  assert.equal(result.task, 'coding');
+  assert.equal(calls.length, 2, '先小模型后大模型');
+});
+
+test('cascade: 小模型端点挂 → 兜底大模型成功，smallError 记录原因', async () => {
+  const fakeFetch = async (url) => {
+    if (String(url).includes('/classify')) throw new Error('connect ECONNREFUSED');
+    return chatResponse({ task: 'extraction', tier: 'simple', complexity: 0.2, confidence: 0.9, reason: '格式转换' });
+  };
+  const result = await classifySemantically({ messages: [{ role: 'user', content: '把这段转成表格' }] }, cascadeConfig(), { fetchImpl: fakeFetch, apiKey: 'test' });
+  assert.equal(result.provider, 'openai-chat');
+  assert.equal(result.escalatedFrom, 'http-json');
+  assert.ok(result.smallError.includes('ECONNREFUSED'));
+  assert.equal(result.task, 'extraction');
+});
+
+test('cascade: 两级都挂 → 抛合并错误（上层退回规则层）', async () => {
+  const fakeFetch = async () => { throw new Error('network down'); };
+  await assert.rejects(
+    () => classifySemantically({ messages: [{ role: 'user', content: '随便看看' }] }, cascadeConfig(), { fetchImpl: fakeFetch, apiKey: 'test' }),
+    /级联复核两级均失败.*小模型.*大模型/
+  );
+});
+
+test('cascade: 升级线可用 minConfidence 配置（调高后小模型 0.6 也升级）', async () => {
+  const fakeFetch = async (url) => {
+    if (String(url).includes('/classify')) return { ok: true, status: 200, json: async () => { task: 'default' } };
+    return chatResponse(ASSESS_OK);
+  };
+  // minConfidence=0.7：小模型 0.6 < 0.7 应升级
+  const calls = [];
+  const fetch2 = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes('/classify')) return { ok: true, status: 200, json: async () => ({ task: 'default', tier: 'balanced', complexity: 0.5, confidence: 0.6, reason: '中等置信' }) };
+    return chatResponse(ASSESS_OK);
+  };
+  const result = await classifySemantically({ messages: [{ role: 'user', content: '这个怎么样' }] }, cascadeConfig({ minConfidence: 0.7 }), { fetchImpl: fetch2, apiKey: 'test' });
+  assert.equal(result.escalatedFrom, 'http-json');
+  assert.equal(calls.length, 2);
+});
+
 test('parseSemanticAssessment still accepts fenced JSON and validates ranges', () => {
   const ok = parseSemanticAssessment('{"task":"coding","tier":"balanced","complexity":0.5,"confidence":0.7,"reason":"代码"}');
   assert.equal(ok.task, 'coding');
@@ -91,6 +176,16 @@ test('config validation accepts provider forms and rejects invalid ones', () => 
   missingUrl.semanticRouter = { ...missingUrl.semanticRouter, provider: 'http-json' };
   delete missingUrl.semanticRouter.httpJson;  // 基础配置可能已带 url，显式移除以构造"缺 url"用例
   assert.throws(() => validateConfig(missingUrl), /httpJson\.url/);
+  // cascade：需同时配 httpJson.url + model
+  const cascadeOk = JSON.parse(JSON.stringify(config));
+  cascadeOk.semanticRouter = { enabled: true, mode: 'active', provider: 'cascade', confidenceThreshold: 0.7, minCharacters: 12, model: 'deepseekv4-flash', httpJson: { url: 'http://127.0.0.1:9000/classify' } };
+  validateConfig(cascadeOk);
+  const cascadeNoUrl = JSON.parse(JSON.stringify(config));
+  cascadeNoUrl.semanticRouter = { enabled: true, mode: 'active', provider: 'cascade', confidenceThreshold: 0.7, minCharacters: 12, model: 'deepseekv4-flash' };
+  assert.throws(() => validateConfig(cascadeNoUrl), /httpJson\.url/);
+  const cascadeNoModel = JSON.parse(JSON.stringify(config));
+  cascadeNoModel.semanticRouter = { enabled: true, mode: 'active', provider: 'cascade', confidenceThreshold: 0.7, minCharacters: 12, httpJson: { url: 'http://127.0.0.1:9000/classify' } };
+  assert.throws(() => validateConfig(cascadeNoModel), /openaiChat\.model|model/);
   const withLog = structuredClone(config);
   withLog.decisionLog = { enabled: true, dirPath: './data/decisions', maxFiles: 7 };
   validateConfig(withLog);

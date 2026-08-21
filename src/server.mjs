@@ -79,7 +79,7 @@ function buildRoutingReport() {
   return { sampleCount: rows.length, arms, highlights, perSample: rows };
 }
 
-const counters = { startedAt: new Date().toISOString(), total: 0, auto: 0, explicit: 0, success: 0, errors: 0, fallback: 0, selected: {}, selectedBy: {}, suggested: {}, task: {}, outcome: { auto: { success: 0, error: 0 }, explicit: { success: 0, error: 0 } }, semantic: { eligible: 0, attempted: 0, succeeded: 0, disagreed: 0, errors: 0, applied: 0 } };
+const counters = { startedAt: new Date().toISOString(), total: 0, auto: 0, explicit: 0, success: 0, errors: 0, fallback: 0, selected: {}, selectedBy: {}, suggested: {}, task: {}, outcome: { auto: { success: 0, error: 0 }, explicit: { success: 0, error: 0 } }, semantic: { eligible: 0, attempted: 0, succeeded: 0, disagreed: 0, errors: 0, applied: 0, escalated: 0 } };
 // 真实业务规模输入构造器：模拟样本不再是「一句话玩具提问」，而是带系统提示词+多轮上下文的真实调用形态。
 // 用户侧输入 token 是模拟成本失真的主因（真实调用输入常为几十~上千 token，而一句话提问只有几个）。
 const SYS_TPL = (role) => `你是广东移动内部${role}助手。请基于以下知识库内容回答，不要编造，引用请标注来源段落编号。知识库：{
@@ -517,6 +517,7 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true } =
   if (track) counters.semantic.attempted += 1;
   return classifySemantically(body, config, semanticOptions()).then((assessment) => {
     if (track) counters.semantic.succeeded += 1;
+    if (track && assessment?.escalatedFrom) counters.semantic.escalated = (counters.semantic.escalated || 0) + 1;
     const semanticAnalysis = mergeSemanticAssessment(baseAnalysis, assessment, true);
     const proposed = routeRequest(body, config, { health, analysisOverride: semanticAnalysis, budgetPressure: budgetTracker.pressure(), trafficBucket: baseDecision.rollout.trafficBucket });
     const disagreed = assessment.tier !== baseAnalysis.tier || assessment.task !== baseAnalysis.task || proposed.suggestedModel !== baseDecision.suggestedModel;
@@ -807,11 +808,19 @@ const server = http.createServer(async (req, res) => {
         const bs = item.benchmarkScores;
         if (!bs || typeof bs !== 'object') { skipped.push(`${item.id} 缺 benchmarkScores`); continue; }
         const cur = target.benchmarkScores ||= {};
-        if (bs.scores && typeof bs.scores === 'object') cur.scores = { ...cur.scores, ...bs.scores };
-        if (bs.scoresMeta && typeof bs.scoresMeta === 'object') cur.scoresMeta = { ...cur.scoresMeta, ...bs.scoresMeta };
-        if (bs.evalGate && typeof bs.evalGate === 'object') cur.evalGate = { ...cur.evalGate, ...bs.evalGate };
-        if (bs.subtasks && typeof bs.subtasks === 'object') cur.subtasks = { ...cur.subtasks, ...bs.subtasks };
-        if (bs.subtasksMeta && typeof bs.subtasksMeta === 'object') cur.subtasksMeta = { ...cur.subtasksMeta, ...bs.subtasksMeta };
+        // 合并语义：浅合并各层；值为 null 表示删除该键（用于修正录错的数据）
+        const mergeLayer = (layer, incoming) => {
+          if (!incoming || typeof incoming !== 'object') return;
+          const dst = cur[layer] ||= {};
+          for (const [k, v] of Object.entries(incoming)) {
+            if (v === null) delete dst[k]; else dst[k] = v;
+          }
+        };
+        mergeLayer('scores', bs.scores);
+        mergeLayer('scoresMeta', bs.scoresMeta);
+        mergeLayer('evalGate', bs.evalGate);
+        mergeLayer('subtasks', bs.subtasks);
+        mergeLayer('subtasksMeta', bs.subtasksMeta);
         if (bs.source) cur.source = String(bs.source);
         cur.updatedAt = new Date().toISOString().slice(0, 10);
         applied.push(item.id);

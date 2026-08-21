@@ -65,11 +65,13 @@ export function validateConfig(config) {
   if (config.semanticRouter) {
     if (!['shadow', 'active'].includes(config.semanticRouter.mode)) throw new Error('semanticRouter.mode 必须是 shadow 或 active');
     const provider = config.semanticRouter.provider || (config.semanticRouter.model ? 'openai-chat' : 'disabled');
-    if (!['openai-chat', 'http-json', 'disabled'].includes(provider)) throw new Error(`semanticRouter.provider 无效: ${provider}（可选 openai-chat / http-json / disabled）`);
+    if (!['openai-chat', 'http-json', 'cascade', 'disabled'].includes(provider)) throw new Error(`semanticRouter.provider 无效: ${provider}（可选 openai-chat / http-json / cascade / disabled）`);
     if (provider === 'http-json' && !config.semanticRouter.httpJson?.url) throw new Error('semanticRouter.httpJson.url 不能为空');
+    if (provider === 'cascade' && !config.semanticRouter.httpJson?.url) throw new Error('级联复核需要 semanticRouter.httpJson.url（第一级小模型端点）');
+    if (provider === 'cascade' && !config.semanticRouter.model && !config.semanticRouter.openaiChat?.model) throw new Error('级联复核需要 semanticRouter.model 或 openaiChat.model（第二级大模型）');
     if (provider === 'openai-chat' && !config.semanticRouter.model && !config.semanticRouter.openaiChat?.model) throw new Error('openai-chat 评估器必须配置 model 或 openaiChat.model');
-    if (provider === 'openai-chat' && config.semanticRouter.model && !ids.has(config.semanticRouter.model)) throw new Error('semanticRouter.model 不在模型列表中');
-    if (provider === 'openai-chat' && config.semanticRouter.openaiChat?.model && !ids.has(config.semanticRouter.openaiChat.model)) throw new Error('semanticRouter.openaiChat.model 不在模型列表中');
+    if ((provider === 'openai-chat' || provider === 'cascade') && config.semanticRouter.model && !ids.has(config.semanticRouter.model)) throw new Error('semanticRouter.model 不在模型列表中');
+    if ((provider === 'openai-chat' || provider === 'cascade') && config.semanticRouter.openaiChat?.model && !ids.has(config.semanticRouter.openaiChat.model)) throw new Error('semanticRouter.openaiChat.model 不在模型列表中');
     const threshold = Number(config.semanticRouter.confidenceThreshold);
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) throw new Error('semanticRouter.confidenceThreshold 必须在 0 到 1 之间');
     if (config.semanticRouter.minConfidence !== undefined) {

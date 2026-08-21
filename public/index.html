@@ -107,17 +107,17 @@
             <div class="policy-section">
         <p class="policy-section-title">① 复核方式</p>
         <div class="policy-grid business-policy">
-          <label><span class="lbl">由谁复核 <span class="help" data-help="选「不启用」时只靠关键词规则分类；选了任一复核方式后，规则置信度不足的请求都会触发复核。">?</span></span><select id="semanticProvider"><option value="disabled">不启用（只靠规则分类）</option><option value="http-json">自训练小模型（本网部署）</option><option value="openai-chat">MaaS 大模型</option></select><small>换组件后用下方「体检」验证效果。</small></label>
+          <label><span class="lbl">由谁复核 <span class="help" data-help="选「不启用」时只靠关键词规则分类；选了任一复核方式后，规则置信度不足的请求都会触发复核。「级联」先用自训练小模型，小模型失败或拿不准时再升级 MaaS 大模型兜底——大部分请求只花小模型的成本，分不准的少数才付大模型调用。">?</span></span><select id="semanticProvider"><option value="disabled">不启用（只靠规则分类）</option><option value="http-json">自训练小模型（本网部署）</option><option value="openai-chat">MaaS 大模型</option><option value="cascade">级联（小模型 → 大模型兜底）</option></select><small>换组件后用下方「体检」验证效果。</small></label>
           <label><span class="lbl">复核结果怎么用 <span class="help" data-help="「仅观察」=后台默默对比复核与规则的分歧、不改变线上路由；「正式采用」=低置信请求按复核结果选模型。">?</span></span><select id="semanticMode"><option value="shadow">仅观察分歧，不改变路由</option><option value="active">正式采用复核结果</option></select><small>建议先观察再采用。</small></label>
           <label><span class="lbl">复核触发阈值 <span class="help" data-help="规则分类置信度低于该阈值时才触发复核（避免每条都复核的开销）。">?</span></span><input id="semanticThreshold" type="number" min="0" max="1" step="0.05"><small>规则置信度低于该值时才复核。</small></label>
-          <label><span class="lbl">复核采纳阈值 <span class="help" data-help="「正式采用」模式下，复核模型对自己判断不够自信（低于此值）时不采纳、仍按规则路由。0=全部采纳（最激进）。">?</span></span><input id="semanticMinConfidence" type="number" min="0" max="1" step="0.05" value="0"><small>低于此值退回规则层。</small></label>
+          <label><span class="lbl">复核采纳阈值 <span class="help" data-help="复核模型对自己判断不够自信（低于此值）时不采纳、仍按规则路由。0=全部采纳。级联方式下此值兼任升级线：小模型置信度低于它就升级大模型。">?</span></span><input id="semanticMinConfidence" type="number" min="0" max="1" step="0.05" value="0"><small>低于此值退回规则层（级联=升级大模型）。</small></label>
         </div>
       </div>
       <div class="policy-section">
         <p class="policy-section-title">② 组件配置</p>
         <div class="policy-grid business-policy">
-          <label class="expert-only"><span class="lbl">分类模型 <span class="help" data-help="复核方式选「MaaS 大模型」时实际调用的模型。">?</span></span><select id="semanticModel"></select><small>仅「MaaS 大模型」方式使用；小模型方式忽略。</small></label>
-          <label class="expert-only"><span class="lbl">小模型端点地址 <span class="help" data-help="选「自训练小模型」方式时，小模型服务的 HTTP 地址（发文本、返回分类结果）。">?</span></span><input id="semanticHttpUrl" type="text" placeholder="http://127.0.0.1:9000/classify"><small>POST 一条工单分类样例，返回 {"task","tier","complexity","confidence","reason"}。</small></label>
+          <label class="expert-only"><span class="lbl">分类模型 <span class="help" data-help="复核方式选「MaaS 大模型」或「级联」时实际调用的大模型（级联时为第二级兜底）。">?</span></span><select id="semanticModel"></select><small>「MaaS 大模型」「级联」方式使用；纯小模型方式忽略。</small></label>
+          <label class="expert-only"><span class="lbl">小模型端点地址 <span class="help" data-help="选「自训练小模型」或「级联」方式时，小模型服务的 HTTP 地址（发文本、返回分类结果）。">?</span></span><input id="semanticHttpUrl" type="text" placeholder="http://127.0.0.1:9000/classify"><small>「自训练小模型」「级联」方式使用。POST 一条工单分类样例，返回 {"task","tier","complexity","confidence","reason"}。</small></label>
           <label class="expert-only probe-inline"><span class="lbl">连通性自检 <span class="help" data-help="向上面填写的端点地址发一条真实分类请求，逐层验证：网络通 → HTTP 200 → 返回 JSON → 字段齐全。">?</span></span><span><button id="probeSemantic" class="secondary">🔌 测试小模型连通性</button><small>本机开发需先启动 scripts/serve_classifier.bat（:8788）；compose 部署自动拉起。</small></span></label>
         </div>
         <div id="semanticProbeResult" class="probe-result" hidden></div>
