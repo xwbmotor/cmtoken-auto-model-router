@@ -136,7 +136,7 @@ function stableStringify(value) {
 function syncDirty() { if (!config || !savedConfig) return; readForm(); const dirty = stableStringify(config) !== stableStringify(savedConfig); const badge = $('dirtyBadge'); if (badge) badge.hidden = !dirty; const dot = $('tabDirtyDot'); if (dot) dot.hidden = !dirty; }
 // 基线规范化：savedConfig 必须与 readForm 之后的 config 同形状（readForm 会补 pricingYuan…/performance 等默认键），
 // 否则 diff 永不相等。凡重建基线（connect/发布成功）处，先 render 表单再 readForm 再 snapshot。
-function snapshotBaseline() { bindPolicy(); renderModels(); renderCapabilityMatrix(); renderDeployment(); readForm(); savedConfig = structuredClone(config); clearDirty(); }
+function snapshotBaseline() { bindPolicy(); bindProfile(); renderModels(); renderProfile(); renderCapabilityMatrix(); renderDeployment(); readForm(); savedConfig = structuredClone(config); clearDirty(); }
 // —— 页面 Tab 切换 ——
 const TABS = ['overview','policy','models','insights','semantic','debug','help'];
 function applyTab(name) {
@@ -174,6 +174,7 @@ applyTab((location.hash || '').slice(1) || sessionStorage.getItem('routerTab') |
 loadManual();
 if ($('gotoPolicy')) $('gotoPolicy').onclick = () => applyTab('policy');
 if ($('gotoInsights')) $('gotoInsights').onclick = () => applyTab('insights');
+for (const id of ['gotoManual', 'gotoManual2']) if ($(id)) $(id).onclick = () => applyTab('help');
 // 手册直嵌（不再 iframe）：拉预渲染页，用 Shadow DOM 隔离样式（手册的全局选择器不污染管理页），
 // 目录 TOC 由这里手动生成（DOMParser 不执行页面脚本）。
 function manualLegacyCopy(text) {
@@ -254,7 +255,7 @@ function clearDirty() { const badge = $('dirtyBadge'); if (badge) badge.hidden =
 function applyPolicyLock() { setPolicyLock(!policyUnlocked); }
 function bindPolicy() {
   const r = config.routing; $('mode').value = r.mode; $('activeTrafficPercent').value = r.activeTrafficPercent ?? 100; $('qualityFloor').value = r.qualityFloor; $('selfBonus').value = r.selfHostedBonus; $('qualityWeight').value = r.qualityWeight; $('costWeight').value = r.costWeight; $('latencyWeight').value = r.latencyWeight; $('uncertaintyPenalty').value = r.uncertaintyPenalty; $('complexQualityMargin').value = r.complexQualityMargin ?? .04; $('maxAttempts').value = r.maxAttempts; $('preferSelf').checked = r.preferSelfHosted;
-  $('semanticEnabled').checked = Boolean(config.semanticRouter?.enabled); $('semanticMode').value = config.semanticRouter?.mode || 'shadow'; $('semanticThreshold').value = config.semanticRouter?.confidenceThreshold ?? .7; $('semanticMinConfidence').value = config.semanticRouter?.minConfidence ?? 0; $('reasoningEnabled').checked = Boolean(config.reasoningControl?.enabled); $('budgetEnabled').checked = Boolean(config.budget?.enabled); $('dailyBudget').value = config.budget?.dailyBudgetYuan || 0; $('budgetThreshold').value = config.budget?.degradeThreshold ?? .9;
+  $('semanticMode').value = config.semanticRouter?.mode || 'shadow'; $('semanticThreshold').value = config.semanticRouter?.confidenceThreshold ?? .7; $('semanticMinConfidence').value = config.semanticRouter?.minConfidence ?? 0; $('reasoningEnabled').checked = Boolean(config.reasoningControl?.enabled); $('budgetEnabled').checked = Boolean(config.budget?.enabled); $('dailyBudget').value = config.budget?.dailyBudgetYuan || 0; $('budgetThreshold').value = config.budget?.degradeThreshold ?? .9;
   $('semanticProvider').value = config.semanticRouter?.provider || (config.semanticRouter?.model ? 'openai-chat' : 'disabled');
   const chatModel = config.semanticRouter?.openaiChat?.model || config.semanticRouter?.model;
   $('semanticModel').innerHTML = config.models.map((m) => `<option value="${m.id}" ${m.id === chatModel ? 'selected' : ''}>${m.displayName || m.id}</option>`).join('');
@@ -272,6 +273,55 @@ function computeCostIndexClient(models, cardPrice) { const costs = []; for (cons
 function computeCostIndexFromPricingClient(models, pricingMix) { const mix = pricingMix || { input: 10, output: 1 }; const total = Number(mix.input) + Number(mix.output); if (!(total > 0)) return null; const is = Number(mix.input) / total, os = Number(mix.output) / total; const costs = []; for (const m of models) { const p = m.pricingYuanPerMillionTokens; if (p?.input == null || p?.output == null) continue; const w = is * Number(p.input) + os * Number(p.output); if (w > 0) costs.push({ id: m.id, unitCost: w }); } if (costs.length < 2) return null; const anchor = Number(config?.costModel?.pricingAnchorYuan) > 0 ? Number(config.costModel.pricingAnchorYuan) : Math.max(...costs.map((c) => c.unitCost)); if (!(anchor > 0)) return null; return Object.fromEntries(costs.map((c) => [c.id, Number(Math.min(1, c.unitCost / anchor).toFixed(3))])); }
 // 跑分一览矩阵：行=模型 列=六维；色阶按列内相对高低，每列最强加皇冠标记；单元格失焦即写回 config（手工微调），未启用模型灰显
 const CAP_TASKS = ['default','coding','reasoning','extraction','creative','simple'];
+const CAP_TASK_LABEL = { default:'通用', coding:'代码', reasoning:'推理', extraction:'抽取', creative:'创意', simple:'轻量' };
+// SUB_CATEGORY 复用文件头已有定义（30 小类 → [中文大类, 英文大类, emoji, 中文小类]）
+function subHeat(v){ const h = Math.max(0, Math.min(1, (v - 0.6) / 0.4)); return `rgba(18,145,80,${(h*0.5).toFixed(3)})`; }
+function renderProfile() {
+  const tbody = $('profileRows'); if (!tbody) return;
+  if (!config.models?.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">暂无模型。</td></tr>'; return; }
+  tbody.innerHTML = config.models.map((m, i) => {
+    const bs = m.benchmarkScores || {};
+    const dim = m.enabled ? '' : ' dim';
+    // 官方榜单
+    const scores = bs.scores && Object.keys(bs.scores).length ? Object.entries(bs.scores).map(([k, v]) => `<span class="pill ${v >= 0.8 ? 'good' : 'muted'}" title="${k}">${k} ${Number(v).toFixed(3).replace(/0+$/,'').replace(/\.$/,'')}</span>`).join(' ') : '<span class="pill muted">未录入</span>';
+    // 六维实测（总分最高者 pill 加 good 强调）
+    const eg = bs.evalGate;
+    const bestTotal = Math.max(0, ...config.models.map((x) => Number(x.benchmarkScores?.evalGate?.total) || 0));
+    const gate = eg ? CAP_TASKS.filter(t => eg[t] != null).map(t => `<span class="pill ${eg[t] >= Math.max(...CAP_TASKS.map(k => Number(eg[k]) || 0)) - 1e-9 ? 'good' : ''}" title="${CAP_TASK_LABEL[t]} ${eg[t]}">${CAP_TASK_LABEL[t]} ${eg[t]}</span>`).join(' ') + (eg.total != null ? `<span class="pill ${eg.total >= bestTotal - 1e-9 && eg.total > 0 ? 'good' : ''}" title="总均分${eg.total >= bestTotal - 1e-9 && eg.total > 0 ? '（三模型最高）' : ''}">总 ${eg.total}</span>` : '') : '<span class="pill muted">未实测</span>';
+    // 30 小类：格子热力图
+    const subs = bs.subtasks && Object.keys(bs.subtasks).length ? Object.entries(bs.subtasks).sort((a,b)=>b[1].avg-a[1].avg).map(([k, v]) => `<span class="sub-cell${dim}" data-model="${i}" data-sub="${k}" style="background:${subHeat(v.avg)}" title="${(SUB_CATEGORY[k]||['',''])[1]||k} ${v.avg}（${v.n} 条）">${(SUB_CATEGORY[k]||['',''])[1]||k}<b>${v.avg}</b></span>`).join('') : '<span class="pill muted">未实测</span>';
+    return `<tr><th><div class="cap-model${dim}"><strong>${m.displayName || m.id}</strong><small>${m.id}</small></div></th><td>${scores}</td><td>${gate}</td><td class="sub-cells">${subs}</td></tr>`;
+  }).join('');
+}
+async function showSubDetail(modelIdx, subKey) {
+  const m = config.models[modelIdx]; if (!m) return;
+  const meta = m.benchmarkScores?.subtasksMeta || {};
+  const v = m.benchmarkScores?.subtasks?.[subKey]; if (!v) return;
+  const [catCn, catEn, catIcon, label] = SUB_CATEGORY[subKey] || ['', '', '', subKey];
+  $('profileDetail').hidden = false;
+  $('profileDetail').innerHTML = `<div class="panel-head"><div><p class="eyebrow">小类明细</p><h3>${label} <small>${cat}</small></h3></div><button class="secondary" onclick="document.getElementById('profileDetail').hidden=true">收起</button></div>
+  <p class="hint">模型 ${m.displayName || m.id} · ${label}（${cat}）均分 <strong>${v.avg}</strong> · 样本 ${v.n} 条 · 实测时间 ${meta.at || '—'} · 裁判 ${meta.judge || '—'}</p>`;
+}
+function bindProfile() {
+  const tb = $('profileRows');
+  if (tb && !tb._subBound) { tb.addEventListener('click', (e) => { const c = e.target.closest('.sub-cell'); if (c) showSubDetail(Number(c.dataset.model), c.dataset.sub); }); tb._subBound = true; }
+  const dl = $('dlProfileTpl');
+  if (dl && !dl._bound) { dl._bound = true; dl.onclick = async () => {
+    try { const tpl = await api('/admin/api/model-data/template'); const blob = new Blob([JSON.stringify(tpl, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'model-data-template.json'; a.click(); URL.revokeObjectURL(a.href); }
+    catch (e) { toast(e.message, true); }
+  }; }
+  const f = $('importProfileFile');
+  if (f && !f._bound) { f._bound = true; f.onchange = async () => {
+    const file = f.files?.[0]; if (!file) return; f.value = '';
+    try {
+      const text = await file.text(); const data = JSON.parse(text);
+      const r = await api('/admin/api/model-data/import', { method: 'POST', body: JSON.stringify(data) });
+      config = await api('/admin/api/config'); snapshotBaseline(); renderProfile();
+      $('profileImportMsg').textContent = `导入成功 ${r.applied.length} 个${r.skipped?.length ? `，跳过 ${r.skipped.length} 个（${r.skipped.join('；')}）` : ''}`;
+      toast(`模型数据已导入 ${r.applied.length} 个`);
+    } catch (e) { $('profileImportMsg').textContent = '导入失败'; toast(e.message, true); }
+  }; }
+}
 const CAP_CN = { default:'通用', coding:'代码', reasoning:'推理', extraction:'抽取', creative:'创意', simple:'轻量' };
 function renderCapabilityMatrix() {
   const tbody = $('capRows'); if (!tbody) return;
@@ -295,7 +345,7 @@ $('capRows').addEventListener('input', (e) => { if (!e.target.classList.contains
 function renderDeployment() { const cm = config.costModel || {}; const source = cm.source || 'deployment'; $('costSource').value = source; $('pricingMixInput').value = cm.pricingMix?.input ?? 10; $('pricingMixOutput').value = cm.pricingMix?.output ?? 1; $('beansPerYuan').value = config.budget?.beansPerYuan ?? ''; const cardPrice = cm.cardPrice || {}; const computed = source === 'pricing' ? (computeCostIndexFromPricingClient(config.models, cm.pricingMix) || {}) : (computeCostIndexClient(config.models, cardPrice) || {}); $('deployment').innerHTML = config.models.map((m, i) => { const d = m.deployment || {}; return `<tr data-index="${i}"><td><strong>${m.displayName || m.id}</strong></td><td><select class="device-type"><option value="910B2" ${d.deviceType === '910B2' ? 'selected' : ''}>910B2</option><option value="910B4" ${d.deviceType === '910B4' ? 'selected' : ''}>910B4</option></select></td><td><input class="machines" type="number" min="1" step="1" value="${d.machines ?? ''}" placeholder="设备数"></td><td><input class="cards" type="number" min="1" step="1" value="${d.cardsPerMachine ?? ''}" placeholder="单机卡数"></td><td><input class="instances" type="number" min="1" step="1" value="${d.instances ?? ''}" placeholder="实例数"></td><td><input class="concurrency" type="number" min="1" step="1" value="${d.concurrencyPerInstance ?? ''}" placeholder="单实例并发"></td><td>${d.instances && d.concurrencyPerInstance ? `<span class="pill good">${d.totalConcurrency ?? d.instances * d.concurrencyPerInstance}</span>` : '<span class="pill muted">—</span>'}</td><td><input class="tps" type="number" min="1" value="${d.tps ?? ''}" placeholder="tokens/s"></td><td><span class="cost-preview pill ${computed[m.id] != null ? 'good' : 'muted'}">${computed[m.id] ?? '待录入'}</span></td></tr>`; }).join(''); }
 function readForm() {
   const r = config.routing; r.costTier = document.querySelector('input[name="costTier"]:checked')?.value || 'custom'; r.mode = $('mode').value; r.activeTrafficPercent = Number($('activeTrafficPercent').value); r.qualityFloor = Number($('qualityFloor').value); r.selfHostedBonus = Number($('selfBonus').value); r.qualityWeight = Number($('qualityWeight').value); r.costWeight = Number($('costWeight').value); r.latencyWeight = Number($('latencyWeight').value); r.uncertaintyPenalty = Number($('uncertaintyPenalty').value); r.complexQualityMargin = Number($('complexQualityMargin').value); r.maxAttempts = Number($('maxAttempts').value); r.preferSelfHosted = $('preferSelf').checked;
-  config.semanticRouter.enabled = $('semanticEnabled').checked; config.semanticRouter.mode = $('semanticMode').value; config.semanticRouter.confidenceThreshold = Number($('semanticThreshold').value); config.semanticRouter.minConfidence = Number($('semanticMinConfidence').value); config.reasoningControl.enabled = $('reasoningEnabled').checked; config.budget.enabled = $('budgetEnabled').checked; config.budget.dailyBudgetYuan = Number($('dailyBudget').value); config.budget.degradeThreshold = Number($('budgetThreshold').value);
+  config.semanticRouter.enabled = $('semanticProvider').value !== 'disabled'; config.semanticRouter.mode = $('semanticMode').value; config.semanticRouter.confidenceThreshold = Number($('semanticThreshold').value); config.semanticRouter.minConfidence = Number($('semanticMinConfidence').value); config.reasoningControl.enabled = $('reasoningEnabled').checked; config.budget.enabled = $('budgetEnabled').checked; config.budget.dailyBudgetYuan = Number($('dailyBudget').value); config.budget.degradeThreshold = Number($('budgetThreshold').value);
   config.semanticRouter.provider = $('semanticProvider').value;
   if ($('semanticProvider').value === 'openai-chat') { config.semanticRouter.model = $('semanticModel').value; delete config.semanticRouter.httpJson; }
   else if ($('semanticProvider').value === 'http-json') { config.semanticRouter.httpJson = { ...(config.semanticRouter.httpJson || {}), url: $('semanticHttpUrl').value.trim() }; }
@@ -364,7 +414,7 @@ document.querySelectorAll('#tierPicker .tier').forEach((el) => el.addEventListen
 }));
 // 新增模型（运营流程第 1 步）：以 qwen36-35b 为模板的保守默认值 + enabled:false，录入后立即出现在表格中可继续编辑，发布走既有安全链路
 $('addModel').onclick=()=>{ if(!config) return toast('请先连接',true); const id=prompt('新模型 ID（MaaS 上的模型名，与现有模型同 URL，如 qwen38-27b）'); if(id===null) return; const trimmed=id.trim(); if(!trimmed) return toast('模型 ID 不能为空',true); if(config.models.some(m=>m.id===trimmed)) return toast(`模型 ${trimmed} 已存在`,true); config.models.push({ id:trimmed, displayName:trimmed, ownership:'self_hosted', enabled:false, calibrationStatus:'unverified', quality:{ default:0.80, simple:0.85, coding:0.75, reasoning:0.78, creative:0.82, extraction:0.85 }, costIndex:0.5, latencyIndex:0.5, pricingYuanPerMillionTokens:{ input:null, inputCached:null, output:null }, performance:{ totalP95Ms:null, ttftP50Ms:null, tokensPerSecond:null }, capabilities:{ chat:true, stream:true }, contextWindow:131072, reasoningControl:{ parameter:'reasoning_effort', verified:false } }); renderModels(); renderDeployment(); bindPolicy(); syncDirty(); scheduleSimulation(); toast(`已添加 ${trimmed}（未启用）——填定价/质量分后发布，再跑 eval gate 实测校准`); };
-for(const id of ['mode','activeTrafficPercent','qualityFloor','costWeight','latencyWeight','selfBonus','preferSelf','qualityWeight','complexQualityMargin','uncertaintyPenalty','maxAttempts','semanticEnabled','semanticMode','semanticProvider','semanticModel','semanticHttpUrl','semanticThreshold','semanticMinConfidence','decisionLogEnabled','reasoningEnabled','budgetEnabled','dailyBudget','budgetThreshold']) $(id).addEventListener('input',()=>{if(!['mode','activeTrafficPercent','preferSelf','semanticEnabled','semanticMode','semanticProvider','semanticModel','semanticHttpUrl','semanticThreshold','decisionLogEnabled','reasoningEnabled','budgetEnabled','dailyBudget','budgetThreshold'].includes(id))markTierCustom();updateRangeLabels();syncDirty();scheduleSimulation()}); $('models').addEventListener('input',()=>{syncDirty();scheduleSimulation()}); const refreshCostPreview = () => { const cm = config.costModel || {}; const computed = (cm.source === 'pricing' ? computeCostIndexFromPricingClient(config.models, cm.pricingMix) : computeCostIndexClient(config.models, cm.cardPrice || {})) || {}; document.querySelectorAll('#deployment tr').forEach(row => { const m = config.models[Number(row.dataset.index)]; const cell = row.querySelector('.cost-preview'); if (computed[m.id] != null) { cell.textContent = computed[m.id]; cell.className = 'cost-preview pill good'; } else { cell.textContent = '待录入'; cell.className = 'cost-preview pill muted'; } }); document.querySelectorAll('#models tr').forEach(row => { const m = config.models[Number(row.dataset.index)]; if (computed[m.id] != null) row.querySelector('.cost').value = computed[m.id]; }); };
+for(const id of ['mode','activeTrafficPercent','qualityFloor','costWeight','latencyWeight','selfBonus','preferSelf','qualityWeight','complexQualityMargin','uncertaintyPenalty','maxAttempts','semanticMode','semanticProvider','semanticModel','semanticHttpUrl','semanticThreshold','semanticMinConfidence','decisionLogEnabled','reasoningEnabled','budgetEnabled','dailyBudget','budgetThreshold']) $(id).addEventListener('input',()=>{if(!['mode','activeTrafficPercent','preferSelf','semanticMode','semanticProvider','semanticModel','semanticHttpUrl','semanticThreshold','decisionLogEnabled','reasoningEnabled','budgetEnabled','dailyBudget','budgetThreshold'].includes(id))markTierCustom();updateRangeLabels();syncDirty();scheduleSimulation()}); $('models').addEventListener('input',()=>{syncDirty();scheduleSimulation()}); const refreshCostPreview = () => { const cm = config.costModel || {}; const computed = (cm.source === 'pricing' ? computeCostIndexFromPricingClient(config.models, cm.pricingMix) : computeCostIndexClient(config.models, cm.cardPrice || {})) || {}; document.querySelectorAll('#deployment tr').forEach(row => { const m = config.models[Number(row.dataset.index)]; const cell = row.querySelector('.cost-preview'); if (computed[m.id] != null) { cell.textContent = computed[m.id]; cell.className = 'cost-preview pill good'; } else { cell.textContent = '待录入'; cell.className = 'cost-preview pill muted'; } }); document.querySelectorAll('#models tr').forEach(row => { const m = config.models[Number(row.dataset.index)]; if (computed[m.id] != null) row.querySelector('.cost').value = computed[m.id]; }); };
 $('deployment').addEventListener('input',()=>{readForm(); refreshCostPreview(); syncDirty(); scheduleSimulation();});
 for (const id of ['costSource','pricingMixInput','pricingMixOutput','beansPerYuan']) $(id).addEventListener('input',()=>{readForm(); refreshCostPreview(); syncDirty(); scheduleSimulation();});
 $('save').onclick=async()=>{try{const impact=await simulate(),qualityDrop=impact.proposed.averageQuality-impact.current.averageQuality,highRisk=impact.changedRate>=.4||qualityDrop<-.02||Number(config.routing.activeTrafficPercent)-Number(savedConfig.routing.activeTrafficPercent||0)>30;if(highRisk&&!window.confirm(`这次调整会改变 ${percentValue(impact.changedRate)} 的代表任务，预计质量变化 ${qualityDrop>=0?'+':''}${qualityDrop.toFixed(2)}。\n\n建议先小流量灰度。仍要发布吗？`))return;config=await api('/admin/api/config',{method:'PUT',body:JSON.stringify(config)});snapshotBaseline();$('status').textContent=`已连接 · v${config.version}`;toast(`配置已发布生效（v${config.version}），上一版本已自动备份`);await simulate()}catch(e){toast(e.message,true)}};

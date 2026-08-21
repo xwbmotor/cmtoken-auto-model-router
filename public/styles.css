@@ -224,6 +224,16 @@ body:not(.simple-view) .simple-only{display:none!important}
 .tab-page#help > .panel { display: flex; flex-direction: column; }
 /* 质量复核 tab：配置区与体检区分置两个面板，间隔拉开避免误读为一个区块 */
 .tab-page[data-tab="semantic"] > .panel { margin-bottom: 26px; }
+
+/* 总览「一图看懂」：五步流水线 */
+.arch-flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 4px 0 14px; }
+.arch-step { display: flex; gap: 10px; align-items: flex-start; padding: 12px 28px 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: #fbfcfe; position: relative; min-height: 110px; }
+.arch-step:not(:last-child)::after { content: '→'; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 13px; z-index: 1; }
+.arch-num { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--accent, #4f46e5); color: #fff; font-size: 12px; font-weight: 600; display: grid; place-items: center; margin-top: 1px; }
+.arch-step strong { font-size: 13.5px; display: block; margin-bottom: 4px; }
+.arch-step p { font-size: 12px; color: var(--ink-2, #64748b); line-height: 1.55; margin: 0; }
+.arch-note { font-size: 12px; color: var(--ink-2, #64748b); margin: 0; padding-top: 10px; border-top: 1px dashed var(--border); }
+@media (max-width: 1080px) { .arch-flow { grid-template-columns: 1fr 1fr; } .arch-step:not(:last-child)::after { display: none; } }
 .tab-page#help iframe { flex: 1; }
 
 /* ── 业务策略分区 + 只读锁 ── */
@@ -242,3 +252,15 @@ body:not(.simple-view) .simple-only{display:none!important}
 .manual-inline .manual-toc { position: sticky; top: 8px; }
 /* 任务分类大类+小类 */
 .task-cat { font-size: 11px; color: var(--muted, #6b7280); }
+
+/* ===== 能力档案（三层：官方benchmark / 六维实测 / 30小类实测）===== */
+.profile-panel .sub-cells{display:flex;flex-wrap:wrap;gap:4px;max-width:520px}
+.profile-panel .sub-cell{display:inline-flex;flex-direction:column;align-items:center;gap:1px;padding:3px 7px;border-radius:6px;font-size:11px;line-height:1.2;color:#1a2433;cursor:pointer;border:1px solid rgba(18,145,80,.15);transition:transform .08s}
+.profile-panel .sub-cell:hover{transform:translateY(-1px);border-color:#129150}
+.profile-panel .sub-cell b{font-size:12px;font-variant-numeric:tabular-nums}
+.profile-panel .sub-cell.dim{opacity:.45}
+.profile-panel .btn-like{display:inline-flex;align-items:center;padding:6px 12px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;cursor:pointer;font-size:12.5px;color:#1a2433}
+.profile-panel .btn-like:hover{border-color:#129150;color:#129150}
+.profile-detail{margin-top:12px;padding:14px 16px;border:1px solid #e3e8ee;border-radius:10px;background:#f8fafc}
+.profile-detail h3{margin:0;font-size:15px}
+.profile-detail h3 small{color:#67748a;font-weight:400;margin-left:6px}
