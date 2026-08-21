@@ -275,7 +275,32 @@ function computeCostIndexFromPricingClient(models, pricingMix) { const mix = pri
 const CAP_TASKS = ['default','coding','reasoning','extraction','creative','simple'];
 const CAP_TASK_LABEL = { default:'通用', coding:'代码', reasoning:'推理', extraction:'抽取', creative:'创意', simple:'轻量' };
 // SUB_CATEGORY 复用文件头已有定义（30 小类 → [中文大类, 英文大类, emoji, 中文小类]）
-function subHeat(v){ const h = Math.max(0, Math.min(1, (v - 0.6) / 0.4)); return `rgba(18,145,80,${(h*0.5).toFixed(3)})`; }
+// 4 大类在 sub-cells 内按固定顺序分组渲染（组内按均分降序）
+const SUB_GROUP_ORDER = ['代码', '智能体', '数据', '写作与对话'];
+const SUB_GROUP_ICON = { '代码': '⚙️', '智能体': '🤖', '数据': '📋', '写作与对话': '💬' };
+function groupedSubsHtml(subtasks, dim) {
+  if (!subtasks || !Object.keys(subtasks).length) return '<span class="pill muted">未实测</span>';
+  // 按大类分组
+  const groups = {};
+  for (const [k, v] of Object.entries(subtasks)) {
+    const cat = (SUB_CATEGORY[k] || [])[0] || '其他';
+    (groups[cat] ||= []).push([k, v]);
+  }
+  // 按固定顺序输出，组内按 avg 降序
+  return SUB_GROUP_ORDER.filter((g) => groups[g]?.length).map((g) => {
+    const cells = groups[g].sort((a, b) => b[1].avg - a[1].avg).map(([k, v]) =>
+      `<span class="sub-cell${dim}" data-sub="${k}" style="background:${subHeat(v.avg)}" title="${(SUB_CATEGORY[k] || ['', '', '', k])[3] || k} · ${v.avg}（${v.n} 条）">${(SUB_CATEGORY[k] || ['', '', '', k])[3] || k}<b>${v.avg}</b></span>`
+    ).join('');
+    return `<div class="sub-group"><span class="sub-group-label">${SUB_GROUP_ICON[g] || '·'} ${g}</span><div class="sub-group-cells">${cells}</div></div>`;
+  }).join('');
+}
+function subHeat(v){ // 双色梯度：低分偏红警示、中高分偏绿稳健；避免单调绿
+  if (v == null) return 'rgba(120,120,120,0.15)';
+  const x = Math.max(0, Math.min(1, v));
+  if (x < 0.7) { const t = x / 0.7; return `rgba(180,40,40,${(0.15 + 0.55 * (1 - t)).toFixed(3)})`; }
+  const t = (x - 0.7) / 0.3;
+  return `rgba(18,145,80,${(0.15 + 0.55 * t).toFixed(3)})`;
+}
 function renderProfile() {
   const tbody = $('profileRows'); if (!tbody) return;
   if (!config.models?.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">暂无模型。</td></tr>'; return; }
@@ -288,8 +313,8 @@ function renderProfile() {
     const eg = bs.evalGate;
     const bestTotal = Math.max(0, ...config.models.map((x) => Number(x.benchmarkScores?.evalGate?.total) || 0));
     const gate = eg ? CAP_TASKS.filter(t => eg[t] != null).map(t => `<span class="pill ${eg[t] >= Math.max(...CAP_TASKS.map(k => Number(eg[k]) || 0)) - 1e-9 ? 'good' : ''}" title="${CAP_TASK_LABEL[t]} ${eg[t]}">${CAP_TASK_LABEL[t]} ${eg[t]}</span>`).join(' ') + (eg.total != null ? `<span class="pill ${eg.total >= bestTotal - 1e-9 && eg.total > 0 ? 'good' : ''}" title="总均分${eg.total >= bestTotal - 1e-9 && eg.total > 0 ? '（三模型最高）' : ''}">总 ${eg.total}</span>` : '') : '<span class="pill muted">未实测</span>';
-    // 30 小类：格子热力图
-    const subs = bs.subtasks && Object.keys(bs.subtasks).length ? Object.entries(bs.subtasks).sort((a,b)=>b[1].avg-a[1].avg).map(([k, v]) => `<span class="sub-cell${dim}" data-model="${i}" data-sub="${k}" style="background:${subHeat(v.avg)}" title="${(SUB_CATEGORY[k]||['',''])[1]||k} ${v.avg}（${v.n} 条）">${(SUB_CATEGORY[k]||['',''])[1]||k}<b>${v.avg}</b></span>`).join('') : '<span class="pill muted">未实测</span>';
+    // 30 小类：按 4 大类分组的热力图
+    const subs = groupedSubsHtml(bs.subtasks, dim);
     return `<tr><th><div class="cap-model${dim}"><strong>${m.displayName || m.id}</strong><small>${m.id}</small></div></th><td>${scores}</td><td>${gate}</td><td class="sub-cells">${subs}</td></tr>`;
   }).join('');
 }
@@ -298,13 +323,14 @@ async function showSubDetail(modelIdx, subKey) {
   const meta = m.benchmarkScores?.subtasksMeta || {};
   const v = m.benchmarkScores?.subtasks?.[subKey]; if (!v) return;
   const [catCn, catEn, catIcon, label] = SUB_CATEGORY[subKey] || ['', '', '', subKey];
+  const cat = `${catIcon || ''} ${catCn}`;
   $('profileDetail').hidden = false;
   $('profileDetail').innerHTML = `<div class="panel-head"><div><p class="eyebrow">小类明细</p><h3>${label} <small>${cat}</small></h3></div><button class="secondary" onclick="document.getElementById('profileDetail').hidden=true">收起</button></div>
-  <p class="hint">模型 ${m.displayName || m.id} · ${label}（${cat}）均分 <strong>${v.avg}</strong> · 样本 ${v.n} 条 · 实测时间 ${meta.at || '—'} · 裁判 ${meta.judge || '—'}</p>`;
+  <p class="hint">模型 ${m.displayName || m.id} · ${label}（${catCn}）均分 <strong>${v.avg}</strong> · 样本 ${v.n} 条 · 实测时间 ${meta.at || '—'} · 裁判 ${meta.judge || '—'}</p>`;
 }
 function bindProfile() {
   const tb = $('profileRows');
-  if (tb && !tb._subBound) { tb.addEventListener('click', (e) => { const c = e.target.closest('.sub-cell'); if (c) showSubDetail(Number(c.dataset.model), c.dataset.sub); }); tb._subBound = true; }
+  if (tb && !tb._subBound) { tb.addEventListener('click', (e) => { const c = e.target.closest('.sub-cell'); if (!c) return; const tr = c.closest('tr'); const rowIdx = tr ? [...tr.parentElement.children].indexOf(tr) : 0; showSubDetail(rowIdx, c.dataset.sub); }); tb._subBound = true; }
   const dl = $('dlProfileTpl');
   if (dl && !dl._bound) { dl._bound = true; dl.onclick = async () => {
     try { const tpl = await api('/admin/api/model-data/template'); const blob = new Blob([JSON.stringify(tpl, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'model-data-template.json'; a.click(); URL.revokeObjectURL(a.href); }
