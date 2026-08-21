@@ -90,7 +90,7 @@ while i < len(lines):
             raw = lines[i].strip()
             if re.match(r'^\|[\s\-:|]+\|$', raw):
                 i += 1; continue
-            cells = [c.strip() for c in raw.strip('|').split('|')]
+            cells = [re.sub(r'\*\*(.+?)\*\*', r'\1', c.strip()).replace('`', '') for c in raw.strip('|').split('|')]
             rows.append(cells); i += 1
         if rows: add_table(doc, rows)
         continue
