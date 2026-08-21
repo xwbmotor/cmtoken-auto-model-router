@@ -3,7 +3,7 @@ const $ = (id) => document.getElementById(id);
 // —— 后台枚举 → 中文展示映射（只影响展示，不碰配置值）——
 const TASK_CN = { coding: '代码', reasoning: '推理', creative: '创意', extraction: '抽取', default: '通用' };
 // OpenRouter rankings TASK TYPE 官方 30 小类 → 4 大类（+Pinned）
-const SUB_CATEGORY = { 'code-generation': ['代码', 'CODE', '⚙️', '代码生成'], debugging: ['代码', 'CODE', '⚙️', '调试'], 'code-review': ['代码', 'CODE', '⚙️', '代码审查'], 'sql-database': ['代码', 'CODE', '⚙️', 'SQL 与数据库'], 'frontend-ui': ['代码', 'CODE', '⚙️', '前端与 UI'], 'devops-config': ['代码', 'CODE', '⚙️', 'DevOps 与配置'], 'shell-execution': ['代码', 'CODE', '⚙️', 'Shell 执行'], 'file-io': ['代码', 'CODE', '⚙️', '文件读写'], 'repo-scanning': ['代码', 'CODE', '⚙️', '仓库扫描'], 'multi-step-planning': ['智能体', 'AGENTS', '🤖', '多步规划'], 'tool-dispatch': ['智能体', 'AGENTS', '🤖', '工具调度'], 'workflow-execution': ['智能体', 'AGENTS', '🤖', '工作流执行'], 'web-search': ['智能体', 'AGENTS', '🤖', 'Web 搜索'], 'memory-extraction': ['智能体', 'AGENTS', '🤖', '记忆提取'], devops: ['智能体', 'AGENTS', '🤖', 'DevOps'], 'data-extraction': ['数据', 'DATA', '📋', '数据抽取'], 'data-transformation': ['数据', 'DATA', '📋', '数据转换'], classification: ['数据', 'DATA', '📋', '分类'], summarization: ['数据', 'DATA', '📋', '摘要'], translation: ['数据', 'DATA', '📋', '翻译'], math: ['数据', 'DATA', '📋', '数学'], 'content-writing': ['写作与对话', 'WRITING & CHAT', '💬', '内容写作'], 'research-reports': ['写作与对话', 'WRITING & CHAT', '💬', '研究与报告'], 'qa-knowledge': ['写作与对话', 'WRITING & CHAT', '💬', '问答与知识'], conversation: ['写作与对话', 'WRITING & CHAT', '💬', '对话'], 'customer-support': ['写作与对话', 'WRITING & CHAT', '💬', '客户支持'], 'roleplay-fiction': ['写作与对话', 'WRITING & CHAT', '💬', '角色扮演与虚构'], 'finance-trading': ['写作与对话', 'WRITING & CHAT', '💬', '金融与交易'], 'security-audit': ['写作与对话', 'WRITING & CHAT', '💬', '安全审计'], other: ['写作与对话', 'WRITING & CHAT', '💬', '其他'], pinned: ['指定模型', 'PINNED', '📌', '用户点名'] };
+const SUB_CATEGORY = { 'code-generation': ['代码', 'CODE', '⚙️', '代码生成'], debugging: ['代码', 'CODE', '⚙️', '调试'], 'code-review': ['代码', 'CODE', '⚙️', '代码审查'], 'sql-database': ['代码', 'CODE', '⚙️', 'SQL 与数据库'], 'frontend-ui': ['代码', 'CODE', '⚙️', '前端与 UI'], 'devops-config': ['代码', 'CODE', '⚙️', 'DevOps 与配置'], 'shell-execution': ['代码', 'CODE', '⚙️', 'Shell 执行'], 'file-io': ['代码', 'CODE', '⚙️', '文件读写'], 'repo-scanning': ['代码', 'CODE', '⚙️', '仓库扫描'], 'multi-step-planning': ['智能体', 'AGENTS', '🤖', '多步规划'], 'tool-dispatch': ['智能体', 'AGENTS', '🤖', '工具调度'], 'workflow-execution': ['智能体', 'AGENTS', '🤖', '工作流执行'], 'web-search': ['智能体', 'AGENTS', '🤖', 'Web 搜索'], 'memory-extraction': ['智能体', 'AGENTS', '🤖', '记忆提取'], 'devops-agent': ['智能体', 'AGENTS', '🤖', 'DevOps 智能体'], 'data-extraction': ['数据', 'DATA', '📋', '数据抽取'], 'data-transformation': ['数据', 'DATA', '📋', '数据转换'], classification: ['数据', 'DATA', '📋', '分类'], summarization: ['数据', 'DATA', '📋', '摘要'], translation: ['数据', 'DATA', '📋', '翻译'], math: ['数据', 'DATA', '📋', '数学'], 'content-writing': ['写作与对话', 'WRITING & CHAT', '💬', '内容写作'], 'research-reports': ['写作与对话', 'WRITING & CHAT', '💬', '研究与报告'], 'qa-knowledge': ['写作与对话', 'WRITING & CHAT', '💬', '问答与知识'], conversation: ['写作与对话', 'WRITING & CHAT', '💬', '对话'], 'customer-support': ['写作与对话', 'WRITING & CHAT', '💬', '客户支持'], 'roleplay-fiction': ['写作与对话', 'WRITING & CHAT', '💬', '角色扮演与虚构'], 'finance-trading': ['写作与对话', 'WRITING & CHAT', '💬', '金融与交易'], 'security-audit': ['写作与对话', 'WRITING & CHAT', '💬', '安全审计'], other: ['写作与对话', 'WRITING & CHAT', '💬', '其他'], pinned: ['指定模型', 'PINNED', '📌', '用户点名'] };
 function subCategoryOf(task, subTask) { if (task === 'explicit') return SUB_CATEGORY.pinned; if (SUB_CATEGORY[subTask]) return SUB_CATEGORY[subTask]; const fb = { default: 'qa-knowledge', coding: 'code-generation', reasoning: 'research-reports', creative: 'content-writing', extraction: 'data-extraction', agent: 'workflow-execution' }[task]; return SUB_CATEGORY[fb] || SUB_CATEGORY.other; }
 const TIER_CN = { simple: '轻量', balanced: '均衡', complex: '复杂' };
 const METHOD_CN = { rules: '规则', semantic: '语义复核', 'rules+semantic': '规则+复核' };
@@ -145,6 +145,8 @@ function applyTab(name) {
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   history.replaceState(null, '', '#' + name);
   sessionStorage.setItem('routerTab', name);
+  // 切 tab 后回到页首：否则从长页面（如总览底部）跳手册时，视口仍停在中后段
+  window.scrollTo({ top: 0 });
 }
 document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => applyTab(b.dataset.tab); });
 
@@ -158,6 +160,7 @@ function setPolicyLock(locked) {
   POLICY_INPUTS.forEach(el => { el.disabled = locked; });
   const note = $('policyLockNote'); if (note) note.hidden = !locked;
   const unlock = $('unlockEdit'); if (unlock) unlock.hidden = !locked;
+  const relock = $('relockEdit'); if (relock) relock.hidden = locked;
   const reload = $('reload'); if (reload) reload.hidden = locked && !isDirty();
   const save = $('save'); if (save) save.hidden = locked;
   document.body.classList.toggle('policy-locked', locked);
@@ -168,6 +171,17 @@ if ($('unlockEdit')) $('unlockEdit').onclick = () => {
   setPolicyLock(false);
   toast('已解锁——调整后记得「安全发布」');
 };
+// 重新锁定：改完不想发布（或只是看看），一键回到只读态并丢弃未发布修改
+if ($('relockEdit')) $('relockEdit').onclick = () => {
+  if (isDirty() && !window.confirm('有未发布的修改，重新锁定将丢弃这些修改。继续吗？')) return;
+  policyUnlocked = false;
+  if (savedConfig) { config = structuredClone(savedConfig); snapshotBaseline(); scheduleSimulation(); }
+  setPolicyLock(true);
+  toast('已回到只读视图');
+};
+// 发布成功后自动回锁：安全发布本身就是一次完整事务，结束后不需要继续编辑态
+const __origSave = $('save')?.onclick?.bind($('save'));
+if (__origSave) $('save').onclick = async () => { await __origSave(); if (!isDirty()) { policyUnlocked = false; setPolicyLock(true); } };
 function isDirty() { try { return config && savedConfig && stableStringify(config) !== stableStringify(savedConfig); } catch { return false; } }
 // 初始 tab：URL hash > 上次停留 > overview
 applyTab((location.hash || '').slice(1) || sessionStorage.getItem('routerTab') || 'overview');
@@ -431,10 +445,10 @@ function readForm() {
 }
 function metricDelta(current, proposed, lower = false) { const delta = proposed - current, good = lower ? delta <= 0 : delta >= 0; return `<strong>${proposed.toFixed(2)}</strong><small class="${good ? 'positive' : 'negative'}">${delta >= 0 ? '+' : ''}${delta.toFixed(2)}</small>`; }
 function metricDeltaMs(current, proposed, lower = false) { const delta = Math.round(proposed - current), good = lower ? delta <= 0 : delta >= 0; return `<strong>${Math.round(proposed)}ms</strong><small class="${good ? 'positive' : 'negative'}">${delta >= 0 ? '+' : ''}${delta}ms</small>`; }
-function metricDeltaCost(current, proposed, lower = false) { const delta = proposed - current, good = lower ? delta <= 0 : delta >= 0, fmt = (v) => (v < 0.01 ? v.toFixed(4) : v.toFixed(2)); return `<strong>¥${fmt(proposed)}</strong><small class="${good ? 'positive' : 'negative'}">${delta >= 0 ? '+' : ''}${fmt(delta)}</small>`; }
+function metricDeltaCost(current, proposed, lower = false) { const delta = proposed - current, good = lower ? delta <= 0 : delta >= 0; const fmt = (v) => { if (v < 0.0001) return v.toFixed(5); if (v < 0.01) return `${(v * 1000).toFixed(1)}厘`; return `¥${v.toFixed(2)}`; }; return `<strong>${fmt(proposed)}</strong><small class="${good ? 'positive' : 'negative'}">${delta >= 0 ? '+' : ''}${fmt(delta)}</small>`; }
 function renderSimulation(result) {
   lastSimulation = result; const c = result.current, p = result.proposed, risk = result.changedRate >= .5 ? 'high' : result.changedRate >= .2 ? 'medium' : 'low';
-  $('impactSummary').innerHTML = `<article class="impact ${risk}"><span>模型切换</span><strong>${result.changed}/${result.sampleCount}</strong><small>${percentValue(result.changedRate)} 代表任务改变</small></article><article><span>预计质量</span>${metricDelta(c.averageQuality,p.averageQuality)}</article>${(c.averageCostYuan!=null&&p.averageCostYuan!=null)?`<article><span>平均单次成本 <span class="help" data-help="按代表性任务（含系统提示词+多轮上下文+业务文档，非单句提问）的平均输入输出量估算的每次请求成本（元）。">?</span></span>${metricDeltaCost(c.averageCostYuan,p.averageCostYuan,true)}</article>`:`<article><span>成本指数</span>${metricDelta(c.averageCostIndex,p.averageCostIndex,true)}</article>`}${(c.averageLatencyMs!=null&&p.averageLatencyMs!=null)?`<article><span>平均端到端时延 <span class="help" data-help="从发出请求到收完完整回答的总耗时（含模型思考时间），按代表性任务平均。">?</span></span>${metricDeltaMs(c.averageLatencyMs,p.averageLatencyMs,true)}</article>`:`<article><span>时延指数</span>${metricDelta(c.averageLatencyIndex,p.averageLatencyIndex,true)}</article>`}<article><span>自建比例</span><strong>${percentValue(p.selfHostedRate)}</strong><small>当前 ${percentValue(c.selfHostedRate)}</small></article>`;
+  $('impactSummary').innerHTML = `<article class="impact ${risk}"><span>模型切换</span><strong>${result.changed}/${result.sampleCount}</strong><small>${percentValue(result.changedRate)} 代表任务改变</small></article><article><span>预计质量</span>${metricDelta(c.averageQuality,p.averageQuality)}</article>${(c.averageCostYuan!=null&&p.averageCostYuan!=null)?`<article><span>平均单次成本 <span class="help" data-help="按 12 个代表性任务（含系统提示词+多轮上下文+业务文档）的平均输入输出量、按厂商目录价5折结算价估算。DeepSeek V4 Flash 结算价输入 0.5 元/百万 token、输出 1 元/百万 token，因此单次多在 0.0001~0.012 元（1 厘~1 分）区间——这是真实结算价口径，不是市场价。">?</span></span>${metricDeltaCost(c.averageCostYuan,p.averageCostYuan,true)}</article>`:`<article><span>成本指数</span>${metricDelta(c.averageCostIndex,p.averageCostIndex,true)}</article>`}${(c.averageLatencyMs!=null&&p.averageLatencyMs!=null)?`<article><span>平均端到端时延 <span class="help" data-help="从发出请求到收完完整回答的总耗时（含模型思考时间），按代表性任务平均。">?</span></span>${metricDeltaMs(c.averageLatencyMs,p.averageLatencyMs,true)}</article>`:`<article><span>时延指数</span>${metricDelta(c.averageLatencyIndex,p.averageLatencyIndex,true)}</article>`}<article><span>自建比例</span><strong>${percentValue(p.selfHostedRate)}</strong><small>当前 ${percentValue(c.selfHostedRate)}</small></article>`;
   $('impactRows').innerHTML = p.rows.map((row,i) => { const before=c.rows[i], changed=before.model!==row.model; const sc3 = subCategoryOf(row.task, row.subTask); return `<tr><td><strong>${row.label}</strong><br><small>${sc3[2]} ${sc3[0]} · ${sc3[3]}</small></td><td>${Math.round(row.complexity*100)} · ${tierCN(row.tier)}</td><td>${before.model}</td><td>${row.model}</td><td><span class="pill ${changed?'bad':'good'}">${changed?'切换':'不变'}</span></td></tr>`; }).join('');
   renderSensitivity(result.sensitivity);
 }

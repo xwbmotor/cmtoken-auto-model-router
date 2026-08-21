@@ -133,18 +133,18 @@
       "benchmarkScores": {
         "scores": {
           "gpqa_diamond": 0.881,
-          "swe_bench": 0.526,
-          "model_data_test": 0
+          "swe_bench": 0.526
         },
         "evalGate": {
-          "at": "2026-08-19",
-          "judge": "glm-5.3(external)",
-          "coding": 0.88,
-          "creative": 0.881,
-          "default": 0.92,
-          "extraction": 0.85,
-          "reasoning": 0.919,
-          "total": 0.89
+          "at": "2026-08-21",
+          "judge": "https://api.z.ai/api/coding/paas/v4",
+          "total": 0.917,
+          "simple": 0.983,
+          "extraction": 0.945,
+          "reasoning": 0.932,
+          "default": 0.908,
+          "coding": 0.885,
+          "creative": 0.875
         },
         "source": "eval-gate-50cases-serial-glm53-judge",
         "updatedAt": "2026-08-21",
@@ -153,6 +153,22 @@
           "at": "2026-08-21"
         },
         "subtasks": {
+          "debugging": {
+            "avg": 0.839,
+            "n": 8
+          },
+          "code-generation": {
+            "avg": 0.785,
+            "n": 8
+          },
+          "code-review": {
+            "avg": 0.854,
+            "n": 8
+          },
+          "sql-database": {
+            "avg": 0.847,
+            "n": 8
+          },
           "frontend-ui": {
             "avg": 0.825,
             "n": 2
@@ -259,9 +275,9 @@
           }
         },
         "subtasksMeta": {
-          "at": "2026-08-21T00:12:20.423Z",
+          "at": "2026-08-21T05:41:34.418Z",
           "judge": "glm-5.3(外部)",
-          "source": "data/subtask-eval/full30.json"
+          "source": "data/subtask-eval/merged30.json"
         }
       },
       "calibrationStatus": "verified",
@@ -321,18 +337,35 @@
           "livecodebench": 0.804
         },
         "evalGate": {
-          "at": "2026-08-19",
-          "judge": "glm-5.3(external)",
-          "coding": 0.852,
-          "creative": 0.875,
-          "default": 0.833,
-          "extraction": 0.93,
-          "reasoning": 0.923,
-          "total": 0.883
+          "at": "2026-08-21",
+          "judge": "https://api.z.ai/api/coding/paas/v4",
+          "total": 0.908,
+          "simple": 0.95,
+          "extraction": 0.94,
+          "coding": 0.928,
+          "reasoning": 0.927,
+          "creative": 0.884,
+          "default": 0.835
         },
         "source": "eval-gate-50cases-serial-glm53-judge",
         "updatedAt": "2026-08-21",
         "subtasks": {
+          "debugging": {
+            "avg": 0.787,
+            "n": 8
+          },
+          "code-generation": {
+            "avg": 0.75,
+            "n": 8
+          },
+          "code-review": {
+            "avg": 0.9,
+            "n": 7
+          },
+          "sql-database": {
+            "avg": 0.729,
+            "n": 7
+          },
           "frontend-ui": {
             "avg": 0.75,
             "n": 2
@@ -439,9 +472,9 @@
           }
         },
         "subtasksMeta": {
-          "at": "2026-08-21T00:12:20.423Z",
+          "at": "2026-08-21T05:41:34.418Z",
           "judge": "glm-5.3(外部)",
-          "source": "data/subtask-eval/full30.json"
+          "source": "data/subtask-eval/merged30.json"
         }
       },
       "calibrationStatus": "verified",
@@ -496,18 +529,35 @@
       },
       "benchmarkScores": {
         "evalGate": {
-          "at": "2026-08-19",
-          "judge": "glm-5.3(external)",
-          "coding": 0.955,
-          "creative": 0.845,
-          "default": 0.92,
-          "extraction": 0.942,
-          "reasoning": 0.944,
-          "total": 0.921
+          "at": "2026-08-21",
+          "judge": "https://api.z.ai/api/coding/paas/v4",
+          "total": 0.92,
+          "simple": 0.958,
+          "extraction": 0.95,
+          "coding": 0.94,
+          "reasoning": 0.937,
+          "default": 0.895,
+          "creative": 0.854
         },
         "updatedAt": "2026-08-21",
         "source": "eval-gate-50cases-serial-glm53-judge",
         "subtasks": {
+          "debugging": {
+            "avg": 0.58,
+            "n": 5
+          },
+          "code-generation": {
+            "avg": 0.465,
+            "n": 8
+          },
+          "code-review": {
+            "avg": 0.47,
+            "n": 6
+          },
+          "sql-database": {
+            "avg": 0.75,
+            "n": 4
+          },
           "frontend-ui": {
             "avg": 0.9,
             "n": 1
@@ -614,10 +664,11 @@
           }
         },
         "subtasksMeta": {
-          "at": "2026-08-21T00:12:20.423Z",
+          "at": "2026-08-21T05:41:34.418Z",
           "judge": "glm-5.3(外部)",
-          "source": "data/subtask-eval/full30.json"
-        }
+          "source": "data/subtask-eval/merged30.json"
+        },
+        "scores": {}
       },
       "avgLatencyMs": 12502,
       "deployment": {

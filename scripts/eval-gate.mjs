@@ -18,7 +18,7 @@ import { loadConfig, projectRoot } from '../src/config.mjs';
 import { routeRequest } from '../src/router.mjs';
 
 function parseArgs(argv) {
-  const args = { cases: 'config/eval-gate.json', min: 0.7, limit: Infinity, judge: null, model: null, out: null, baseline: null };
+  const args = { cases: 'config/eval-gate.json', min: 0.7, limit: Infinity, judge: null, model: null, out: null, baseline: null, report: null };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--cases' || a === '-c') args.cases = argv[++i];
@@ -28,8 +28,9 @@ function parseArgs(argv) {
     else if (a === '--model' || a === '-m') args.model = argv[++i];
     else if (a === '--out') args.out = argv[++i];
     else if (a === '--baseline') args.baseline = argv[++i];
+    else if (a === '--report') args.report = argv[++i];
     else if (a === '--help' || a === '-h') {
-      console.log('eval gate 用法：npm run eval:gate -- [--model <id>] [--judge <id>] [--limit N] [--min 0.7] [--cases path] [--baseline 报告路径] [--out path]');
+      console.log('eval gate 用法：npm run eval:gate -- [--model <id>] [--judge <id>] [--limit N] [--min 0.7] [--cases path] [--baseline 报告路径] [--out path] [--report 旧报告路径(增量补跑失败条目)]');
       process.exit(0);
     }
   }
@@ -138,9 +139,20 @@ async function main() {
   const mode = args.model ? `单模型 ${args.model}` : '路由模式';
   console.log(`eval gate：${cases.length} 条用例 · ${mode} · 裁判 ${judgeModel} · 阈值 ${args.min}`);
 
+  // 增量补跑模式（--report）：只重跑报告中 score==null 的失败条目，结果合并回写
+  let casesToRun = cases;
+  if (args.report) {
+    const prev = JSON.parse(await readFile(resolve(projectRoot, args.report), 'utf8'));
+    const byId = new Map((prev.results || []).filter((r) => r.score != null).map((r) => [r.id, r]));
+    const failedIds = new Set((prev.results || []).filter((r) => r.score == null).map((r) => r.id));
+    const failedCases = cases.filter((c) => failedIds.has(c.id));
+    console.log(`增量补跑：报告 ${prev.results.length} 条中 ${failedCases.length} 条失败需重跑，${byId.size} 条已有分数直接复用`);
+    casesToRun = failedCases;
+  }
+
   const results = [];
-  for (let i = 0; i < cases.length; i += 1) {
-    const c = cases[i];
+  for (let i = 0; i < casesToRun.length; i += 1) {
+    const c = casesToRun[i];
     const tag = `[${String(i + 1).padStart(2, '0')}/${cases.length}]`;
     try {
       const decision = args.model
@@ -149,12 +161,22 @@ async function main() {
       const model = decision.suggestedModel;
       const output = await generate(base, key, model, c.prompt);
       const verdict = await judge(base, key, judgeModel, c.task, c.rubric, output);
-      results.push({ id: c.id, task: c.task, model, score: verdict.score, reason: verdict.reason, output: output.slice(0, 200) });
-      console.log(`${tag} ${c.id} → ${model} → ${verdict.score.toFixed(2)}`);
+      results.push({ id: c.id, task: c.task, model, score: verdict.score ?? null, reason: verdict.reason, output: output.slice(0, 200) });
+      console.log(`${tag} ${c.id} → ${model} → ${verdict.score == null ? '裁判未出分(null)' : verdict.score.toFixed(2)}`);
     } catch (error) {
-      results.push({ id: c.id, task: c.task, model: null, score: 0, reason: error.message, output: '' });
+      // 基础设施失败（fetch failed / timeout）≠ 模型能力 0 分：记 null，不计入均分
+      results.push({ id: c.id, task: c.task, model: null, score: null, reason: error.message, output: '' });
       console.log(`${tag} ${c.id} → 失败：${error.message}`);
     }
+  }
+
+  // --report 增量模式：把旧报告中已有分数的条目合并进本次结果（按 id 去重，新的优先）
+  if (args.report) {
+    const prev = JSON.parse(await readFile(resolve(projectRoot, args.report), 'utf8'));
+    const seen = new Set(results.map((r) => r.id));
+    const reused = (prev.results || []).filter((r) => r.score != null && !seen.has(r.id));
+    results.push(...reused);
+    console.log(`合并复用旧有效结果 ${reused.length} 条，共 ${results.length} 条`);
   }
 
   const scored = results.filter((r) => r.score != null);
@@ -162,10 +184,10 @@ async function main() {
   const scores = scored.map((r) => r.score);
   const avg = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
   printReport(avg, summarize(results, 'task'), summarize(results, 'model'), results);
-  if (judgeFailed) console.log(`\n⚠️ 裁判失效剔除：${judgeFailed} 条（不计入均分，不算 0）`);
+  if (judgeFailed) console.log(`\n⚠️ 失败剔除：${judgeFailed} 条（基础设施失败记 null，不计入均分，不算 0）`);
 
-  // 落盘报告（默认 data/eval-gate/）
-  const outPath = args.out || resolve(projectRoot, 'data', 'eval-gate', `eval-gate-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  // 落盘报告（默认 data/eval-gate/；--report 增量模式默认写回原报告文件）
+  const outPath = args.out || (args.report ? resolve(projectRoot, args.report) : resolve(projectRoot, 'data', 'eval-gate', `eval-gate-${new Date().toISOString().replace(/[:.]/g, '-')}.json`));
   await mkdir(dirname(outPath), { recursive: true });
   await writeFile(outPath, JSON.stringify({ at: new Date().toISOString(), judgeModel, mode, min: args.min, avg: Number(avg.toFixed(3)), byTask: summarize(results, 'task'), byModel: summarize(results, 'model'), results }, null, 2));
   console.log(`\n报告已写入 ${outPath}`);

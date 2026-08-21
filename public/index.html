@@ -27,13 +27,13 @@
           <div class="arch-step"><span class="arch-num">4</span><div><strong>打分排序</strong><p>质量 × 成本 × 时延加权打分，结合任务难度取最优，自建模型可加偏好</p></div></div>
           <div class="arch-step"><span class="arch-num">5</span><div><strong>转发与兜底</strong><p>会话粘住同一模型；失败自动换下一个；响应头带回全部决策信息</p></div></div>
         </div>
-        <p class="arch-note">分类体系：4 大类（⚙️代码 · 🤖智能体 · 📋数据 · 💬写作与对话）30 小类，与业界任务口径对齐。想深入？<button id="gotoManual2" class="link-btn" style="font-size:12px">使用手册 →</button></p>
+        <p class="arch-note">分类体系：4 大类（⚙️代码 · 🤖智能体 · 📋数据 · 💬写作与对话）30 小类，与 OpenRouter 业界任务口径对齐；路由打分另用通用/代码/推理/创意/抽取五族质量分（见手册）。想深入？<button id="gotoManual2" class="link-btn" style="font-size:12px">使用手册 →</button></p>
       </section>
       <section class="panel"><div class="panel-head"><div><p class="eyebrow">运行监控</p><h2>最近请求</h2><p class="hint">最近的每笔路由决策：请求被分给哪个模型、为什么、耗时多少。</p></div><button id="refresh" class="secondary">刷新</button></div><div id="recent" class="recent"><p class="empty">暂无请求</p></div></section>
     </section>
     <section class="tab-page" data-tab="policy" hidden>
       <section class="panel">
-      <div class="panel-head"><div><h2>业务策略</h2><p class="hint">默认只读。点「解锁修改」后可调整，改动即时反映到下方「调整影响预估」，确认后点「安全发布」。</p></div><div class="actions"><span id="dirtyBadge" class="pill bad dirty-badge" hidden>有未发布修改</span><button id="unlockEdit" class="secondary">🔓 解锁修改</button><button id="reload" class="secondary" hidden>放弃修改</button><button id="save" hidden>安全发布</button></div></div>
+      <div class="panel-head"><div><h2>业务策略</h2><p class="hint">默认只读防误改。解锁后可调整，改动即时反映到「调整影响预估」；发布或重新锁定后自动回锁。</p></div><div class="actions"><span id="dirtyBadge" class="pill bad dirty-badge" hidden>有未发布修改</span><button id="unlockEdit" class="secondary">🔓 解锁修改</button><button id="relockEdit" class="secondary" hidden>🔒 重新锁定</button><button id="reload" class="secondary" hidden>放弃修改</button><button id="save" hidden>安全发布</button></div></div>
       <div id="policyLockNote" class="lock-note">当前为只读视图——只看配置不改配置。要调整档位、开关或敏感度，请先点右上角「解锁修改」。</div>
       <div class="view-switch-panel simple-only"><span class="lbl">专家参数已隐藏，日常运营用上面的预设和开关即可。<button id="gotoExpert" class="link-btn">切换到专家模式</button></span></div>
             <div class="policy-section">

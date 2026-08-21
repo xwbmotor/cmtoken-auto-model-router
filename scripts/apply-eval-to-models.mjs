@@ -49,6 +49,20 @@ if (!sub) for (const f of (await readdir(dir)).filter((x) => x.startsWith('subta
 }
 if (!sub) { console.error('未找到 subtask-eval 报告（data/subtask-eval/subtask-eval-2*.json）'); process.exit(2); }
 
+// 2) 六维 evalGate：读 data/eval-gate/model-<id>.json（跳过 .bak 备份），按模型名匹配
+const gateDir = resolve(projectRoot, 'data', 'eval-gate');
+const gateByModel = {};
+try {
+  for (const f of (await readdir(gateDir)).filter((x) => /^model-.+\.json$/.test(x) && !x.includes('.bak'))) {
+    try {
+      const j = JSON.parse(await readFile(resolve(gateDir, f), 'utf8'));
+      const id = f.replace(/^model-/, '').replace(/\.json$/, '');
+      const valid = (j.results || []).filter((r) => r.score != null).length;
+      gateByModel[id] = { report: j, valid };
+    } catch {}
+  }
+} catch {}
+
 const SUB_LABEL = {
   'code-generation': '代码生成', debugging: '调试', 'code-review': '代码评审', 'sql-database': 'SQL', 'frontend-ui': '前端与UI', 'devops-config': 'DevOps与配置', 'shell-execution': 'Shell执行', 'file-io': '文件读写', 'repo-scanning': '仓库扫描',
   'multi-step-planning': '多步规划', 'tool-dispatch': '工具调度', 'workflow-execution': '工作流执行', 'web-search': 'Web搜索', 'memory-extraction': '记忆提取', 'devops-agent': 'DevOps智能体',
@@ -65,6 +79,15 @@ for (const m of config.models) {
   for (const [s, arr] of Object.entries(aggModel)) subtasks[s] = { avg: Number((arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(3)), n: arr.length };
   bs.subtasks = subtasks;
   bs.subtasksMeta = { at: sub.at, judge: sub.judge, source: sub.from };
+  // 六维 evalGate 写入（有数据才覆盖）
+  const g = gateByModel[m.id];
+  if (g && g.report.byTask) {
+    const dims = {};
+    let cnt = 0, sum = 0;
+    for (const [task, s] of Object.entries(g.report.byTask)) { dims[task] = s.avg; cnt += s.count; sum += s.avg * s.count; }
+    bs.evalGate = { at: (g.report.at || '').slice(0, 10) || sub.at.slice(0, 10), judge: (g.report.judgeModel || '').split('|')[0]?.split('=')[1] || 'glm-5.3(外部)', total: Number((sum / Math.max(cnt, 1)).toFixed(3)), ...dims };
+    console.log(`  evalGate 六维: ${Object.entries(dims).map(([k, v]) => k + ' ' + v).join(' · ')} | 有效 ${g.valid} 条`);
+  }
   bs.updatedAt = new Date().toISOString().slice(0, 10);
   changed += 1;
   console.log(`${m.id}: ${Object.keys(subtasks).length} 小类已写入`);
