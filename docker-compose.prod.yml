@@ -1,0 +1,36 @@
+# 生产部署：docker compose -f docker-compose.prod.yml up -d
+# 首次部署前：在宿主机准备 /opt/amr/config/router.json（含 upstream 凭证）和空 /opt/amr/data/
+# 镜像构建后导入：docker load -i amr-image-<ver>.tar.gz 或私有 registry 拉取
+services:
+  auto-model-router:
+    image: cmt-auto-model-router:0.4.24
+    container_name: auto-model-router
+    restart: unless-stopped
+    hostname: auto-model-router
+    ports:
+      - "0.0.0.0:8787:8787"          # 仅内网放行；如走反代/网关，可改 127.0.0.1:8787:8787
+    environment:
+      NODE_ENV: production
+      # ⚠️ 凭证全部经 env 注入，不进镜像、不进 git
+      ROUTER_KEY_MODE: passthrough    # 客户端直接用平台 MaaS key，路由器原样透传，计费落调用方租户（key「一样的」场景）
+      ADMIN_TOKEN: ${ADMIN_TOKEN}          # 管理页登录 token
+      MAAS_BASE_URL: ${MAAS_BASE_URL}      # 上游 MaaS 平台地址
+      TZ: ${TZ:-Asia/Shanghai}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # strict 模式才需要（passthrough 下可省）：
+      # ROUTER_ACCESS_KEY: ${ROUTER_ACCESS_KEY}
+      # MAAS_API_KEY: ${MAAS_API_KEY}
+      METRICS_TOKEN: ${METRICS_TOKEN}      # /metrics 抓取 token（可选但生产建议）
+    volumes:
+      - /opt/amr/config:/app/config        # router.json + history/（配置发布历史）
+      - /opt/amr/data:/app/data            # decision log + budget ledger + 训练数据
+    stop_grace_period: 25s                 # > SHUTDOWN_TIMEOUT_MS（默认 20s）保证优雅排空
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

@@ -123,9 +123,13 @@ test('yuanToBeans 按 beansPerYuan 换算算力豆', () => {
 
 // —— taskPreferences 容差分流（v0.4.14）——
 test('taskPreferences 容差内分流到指定模型（extraction→qwen）', () => {
-  const decision = routeRequest({ model: 'auto', messages: [{ role: 'user', content: '从下面材料提取关键信息并输出结构化 JSON：文章标题、作者、发表日期' }] }, config);
+  // 确定性构造：providerCostWeight 加权后 q36 可能本就是 extraction 评分第一（偏好无需分流），
+  // 把指定模型换成 dsf（当前第三）来稳定触发「分差 ≤ 容差 → 提前」的分流路径
+  const cfg = structuredClone(config);
+  cfg.routing.taskPreferences.extraction = { model: 'deepseekv4-flash', tolerance: 0.2 };
+  const decision = routeRequest({ model: 'auto', messages: [{ role: 'user', content: '从下面材料提取关键信息并输出结构化 JSON：文章标题、作者、发表日期' }] }, cfg);
   assert.equal(decision.analysis.task, 'extraction');
-  assert.equal(decision.suggestedModel, 'qwen36-35b');
+  assert.equal(decision.suggestedModel, 'deepseekv4-flash');
   assert.ok(decision.preference, 'preference 字段应非空');
   assert.match(decision.preference.note, /taskPreferences\[extraction\]/);
 });

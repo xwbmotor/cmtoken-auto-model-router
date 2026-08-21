@@ -170,6 +170,9 @@ Compose 含两个服务：`auto-router`（主路由 :8787）+ `classifier`（语
 
 Compose 仅把端口发布到宿主机 `127.0.0.1`。如果通过反向代理对外服务，请同时配置 TLS、访问控制、请求体限制和管理路径隔离。
 
+**Ubuntu 生产部署**（独立 URL + 注册为 `auto` 模型给平台/客户端试用，passthrough 模式 key 无感）：
+详见 [docs/Ubuntu生产部署.md](docs/Ubuntu生产部署.md)——镜像导出/导入、compose 生产文件、凭证注入、冒烟验证、运行数据位置与迭代闭环说明。
+
 使用 LiteLLM 作为网关底座（可选）：
 
 ```powershell

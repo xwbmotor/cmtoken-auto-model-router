@@ -290,7 +290,8 @@
         "instances": 12,
         "concurrencyPerInstance": 15,
         "totalConcurrency": 180
-      }
+      },
+      "costIndexProvider": 0.874
     },
     {
       "id": "qwen36-35b",
@@ -487,7 +488,8 @@
         "instances": 4,
         "concurrencyPerInstance": 45,
         "totalConcurrency": 180
-      }
+      },
+      "costIndexProvider": 0.115
     },
     {
       "id": "Qwen3.8-27B",
@@ -681,7 +683,8 @@
         "concurrencyPerInstance": 15,
         "totalConcurrency": 300
       },
-      "minimumCompletionTokensForReliableAnswer": 16384
+      "minimumCompletionTokensForReliableAnswer": 16384,
+      "costIndexProvider": 1
     }
   ],
   "decisionLog": {
