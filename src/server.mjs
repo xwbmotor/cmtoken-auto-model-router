@@ -625,12 +625,22 @@ async function proxyCompletion(req, res) {
   const fallback = decision.fallbackOrder.filter((m) => m !== decision.selectedModel);
   const attempts = [decision.selectedModel, ...fallback].slice(0, auto ? config.routing.maxAttempts : 1);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('上游请求超时')), config.routing.requestTimeoutMs);
+  // 超时语义（v0.4.26 修复流式长回答被掐）：
+  //   非流式 = 整请求总超时；流式 = 闲置超时（收到任何上游数据即续命）。
+  //   旧实现对流式也用一次性总超时——dsf 长回答（31 tok/s，10k 字≈110s+）撞 120s 线被 abort，
+  //   客户端表现为流中断后反复续写仍截断。闲置超时只杀真堵死（无数据流动）的连接。
+  const timeoutMs = Number(config.routing.requestTimeoutMs) || 120000;
+  let timer = null;
+  const armTimer = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(new Error(`上游请求超时（${body.stream ? '数据停滞' : '总时长'} 超过 ${Math.round(timeoutMs / 1000)}s）`)), timeoutMs);
+  };
   let lastError;
   for (let i = 0; i < attempts.length; i += 1) {
     const model = attempts[i];
     if (!claimCircuitAttempt(model)) continue;
     const started = Date.now();
+    armTimer(); // 每次尝试独立计时（旧实现 timer 在循环外只设一次，attempt 2 继承剩余预算）
     try {
       // 飞轮：流式请求带上 stream_options.include_usage，上游会在最后一个 chunk 附带 usage
       if (body.stream === true) body.stream_options = { ...(body.stream_options || {}), include_usage: true };
@@ -693,10 +703,12 @@ async function proxyCompletion(req, res) {
         clearTimeout(timer); return res.end();
       }
       // 流式：逐块转发（背压安全），并从 SSE 尾块提取 usage（飞轮：实际 token 消耗）
+      // 超时续命：每收到一个 chunk 重置闲置计时器——只要上游还在产 token 就不掐（v0.4.26）
       // 注意：undici 的 chunk 是 Uint8Array，toString('utf8') 不生效（会输出字节数字）——必须 Buffer 化
       const tailChunks = []; let tailBytes = 0;
       const trimTail = () => { if (tailBytes > 8192) { const merged = Buffer.concat(tailChunks).subarray(-4096); tailChunks.length = 0; tailChunks.push(merged); tailBytes = merged.length; } };
       for await (const chunk of upstream.body) {
+        if (body.stream === true) armTimer(); // 流式闲置超时：有数据流动就续命
         if (!res.write(chunk)) await new Promise((resolve) => res.once('drain', resolve));
         tailChunks.push(Buffer.from(chunk)); tailBytes += chunk.length; trimTail();
       }
