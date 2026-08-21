@@ -20,6 +20,15 @@ const PRESETS = {
   max:     { label: '顶配档：只用最强模型，不计成本（评测/演示场景）。', qualityFloor: 0.9,  costWeight: 0,    latencyWeight: 0.05, selfHostedBonus: 0.1 },
   custom:  { label: '自定义：手动微调滑条后的状态，档位过滤已解除。' }
 };
+// 路由风格预设（v0.4.27）：四权重一键组合。与成本档位正交——档位管价格带过滤，风格管评分权重。
+// 运营成本优先：providerCostWeight 拉到 0.4，流量更多导向平台指数低的模型（q36 0.115 单实例占用少并发高）。
+const STYLE_PRESETS = {
+  'quality-first':      { label: '质量优先：质量权重拉满，成本时延仅微调（对外演示/评测）。', qualityWeight: 1, costWeight: 0.08, providerCostWeight: 0.05, latencyWeight: 0.08, qualityFloor: 0.80 },
+  'user-cost-first':    { label: '用户成本优先：用户侧豆价权重拉高，替调用方省钱。', qualityWeight: 1, costWeight: 0.45, providerCostWeight: 0.10, latencyWeight: 0.10, qualityFloor: 0.72 },
+  'provider-cost-first':{ label: '运营成本优先：平台侧资源指数权重拉高，更多导向低占用高并发模型。', qualityWeight: 1, costWeight: 0.22, providerCostWeight: 0.40, latencyWeight: 0.10, qualityFloor: 0.72 },
+  'efficiency-first':   { label: '效率优先：时延权重拉高，首字快总时长短（交互场景）。', qualityWeight: 1, costWeight: 0.15, providerCostWeight: 0.05, latencyWeight: 0.45, qualityFloor: 0.72 },
+  'balanced-style':     { label: '均衡风格：四权重均衡（现网默认组合）。', qualityWeight: 1, costWeight: 0.22, providerCostWeight: 0.10, latencyWeight: 0.14, qualityFloor: 0.72 }
+};
 function headers(json = false) { const token = $('token').value.trim(); return { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(json ? { 'content-type': 'application/json' } : {}) }; }
 async function api(path, options = {}) { const response = await fetch(path, { ...options, headers: { ...headers(Boolean(options.body)), ...(options.headers || {}) } }); const value = await response.json(); if (!response.ok) throw new Error(value.error?.message || `HTTP ${response.status}`); return value; }
 function toast(message, bad = false) { const node = $('toast'); node.textContent = message; node.style.background = bad ? '#b42318' : '#101828'; node.classList.add('show'); setTimeout(() => node.classList.remove('show'), 3000); }
@@ -156,7 +165,8 @@ const POLICY_INPUTS = ['#mode', '#activeTrafficPercent', '#preferSelf', '#reason
   '#costTier', '#qualityFloor', '#costWeight', '#providerCostWeight', '#latencyWeight', '#budgetEnabled', '#dailyBudget',
   '#budgetThreshold', '#selfBonus', '#qualityWeight', '#complexQualityMargin', '#uncertaintyPenalty', '#maxAttempts']
   .flatMap(sel => Array.from(document.querySelectorAll(sel))).concat(
-    Array.from(document.querySelectorAll('#tierPicker input')));
+    Array.from(document.querySelectorAll('#tierPicker input'))).concat(
+    Array.from(document.querySelectorAll('#stylePicker input')));
 function setPolicyLock(locked) {
   POLICY_INPUTS.forEach(el => { el.disabled = locked; });
   const note = $('policyLockNote'); if (note) note.hidden = !locked;
@@ -281,6 +291,12 @@ function bindPolicy() {
   const tierRadio = document.querySelector(`input[name="costTier"][value="${tierNow}"]`);
   if (tierRadio) tierRadio.checked = true;
   document.querySelectorAll('#tierPicker .tier').forEach((el) => el.classList.toggle('active', el.dataset.tier === tierNow));
+  // 风格预设回显：四权重+质量底线完全匹配才高亮，否则不高亮（保持 custom 状态诚实）
+  const styleMatched = Object.entries(STYLE_PRESETS).find(([key, p]) => ['qualityWeight','costWeight','providerCostWeight','latencyWeight','qualityFloor'].every((f) => Math.abs((f === 'qualityWeight' ? r.qualityWeight ?? 1 : r[f]) - p[f]) < .005));
+  const styleNow = r.routeStyle && STYLE_PRESETS[r.routeStyle] ? r.routeStyle : styleMatched?.[0];
+  document.querySelectorAll('#stylePicker .tier').forEach((el) => el.classList.toggle('active', el.dataset.style === styleNow));
+  const styleRadio = styleNow && document.querySelector(`input[name="routeStyle"][value="${styleNow}"]`);
+  if (styleRadio) styleRadio.checked = true;
   updateRangeLabels();
 }
 function renderModels() { $('models').innerHTML = config.models.map((m, i) => `<tr data-index="${i}"><td><input class="enabled" type="checkbox" ${m.enabled ? 'checked' : ''}></td><td><strong>${m.displayName || m.id}</strong><br><small>${m.id}</small></td><td><span class="tag ${m.ownership === 'self_hosted' ? 'self' : 'eco'}">${m.ownership === 'self_hosted' ? '自建' : '生态'}</span></td><td><input class="quality" type="number" min="0" max="1" step=".01" value="${m.quality.default}"></td><td><input class="cost" type="number" min="0" step=".01" value="${m.costIndex}"></td><td class="provider-cost">—</td><td><input class="latency" type="number" min="0" step=".01" value="${m.latencyIndex}"></td><td><input class="input-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.input ?? ''}"></td><td><input class="cached-price" type="number" min="0" step=".01" placeholder="无折扣" value="${m.pricingYuanPerMillionTokens?.inputCached ?? ''}"></td><td><input class="output-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.output ?? ''}"></td><td><input class="p95" type="number" min="0" step="1" placeholder="待观测" value="${m.performance?.totalP95Ms ?? ''}"></td><td><span class="pill ${m.calibrationStatus === 'verified' ? 'good' : 'muted'}">${m.calibrationStatus === 'verified' ? '已验证' : m.calibrationStatus === 'pilot' ? 'Pilot' : '待校准'}</span></td><td class="health">—</td></tr>`).join(''); }
@@ -478,9 +494,15 @@ function renderSensitivity(s) {
 async function simulate() { if (!config) return; readForm(); const result = await api('/admin/api/simulate',{method:'POST',body:JSON.stringify({proposedConfig:config})}); renderSimulation(result); renderBaselines(); return result; }
 function scheduleSimulation(){ clearTimeout(simulateTimer); simulateTimer=setTimeout(()=>simulate().catch(()=>{}),350); }
 function percent(n,d){ return d ? `${(n/d*100).toFixed(1)}%` : '0.0%'; }
-function renderMetrics(){ const c=metrics.counters; $('total').textContent=c.total; $('autoRate').textContent=percent(c.auto,c.total); const selfIds=new Set(config.models.filter(m=>m.ownership==='self_hosted').map(m=>m.id)); const self=Object.entries(c.selected).filter(([id])=>selfIds.has(id)).reduce((s,[,n])=>s+n,0); $('selfRate').textContent=percent(self,c.success); $('semanticRate').textContent=percent(c.semantic?.disagreed||0,c.semantic?.succeeded||0); $('budgetRate').textContent=metrics.budget?.enabled?percentValue(metrics.budget.pressure):'未启用'; $('fallback').textContent=c.fallback; $('errorRate').textContent=percent(c.errors,c.total); document.querySelectorAll('#models tr').forEach(row=>{const m=config.models[Number(row.dataset.index)],h=metrics.health[m.id],cell=row.querySelector('.health'); cell.innerHTML=!h?'<span class="pill muted">无数据</span>':h.circuitState==='half_open'?'<span class="pill muted">恢复探测</span>':h.circuitOpenUntil>Date.now()?'<span class="pill bad">熔断</span>':`<span class="pill good">${h.ewmaLatencyMs}ms · ${h.failures}错</span>`}); $('recent').innerHTML=metrics.recent.length?metrics.recent.map(x=>`<div class="recent-item"><time>${new Date(x.at).toLocaleTimeString()}</time><div><b>${x.selected}</b> <small>← ${x.requested} · ${taskCN(x.task)} · ${METHOD_CN[x.routeMethod]||x.routeMethod||'规则'} · 推理${x.reasoningLevel||'off'}${x.fallbackAttempt?` · fallback ${x.fallbackAttempt}`:''}</small></div><span class="pill ${x.ok?'good':'bad'}">${x.ok?`${x.latencyMs}ms`:'失败'}</span></div>`).join(''):'<p class="empty">暂无请求</p>'; }
+function renderRecentKeySelect(){ // key 指纹下拉：从最近请求里聚合出现过的指纹（v0.4.27）
+  const sel=$('recentKeySelect'); if(!sel)return;
+  const seen=new Map(); for(const x of metrics.recent||[]){ if(x.keyFingerprint) seen.set(x.keyFingerprint,(seen.get(x.keyFingerprint)||0)+1); }
+  const cur=sel.value; sel.innerHTML='<option value="">全部调用方</option>'+[...seen.entries()].map(([fp,n])=>`<option value="${fp}">${fp} · ${n} 笔</option>`).join('');
+  sel.value=[...seen.keys()].includes(cur)?cur:''; $('recentKeyHint').textContent=`当前 ${seen.size} 个调用方 key 在线`;
+}
+function renderMetrics(){ const c=metrics.counters; $('total').textContent=c.total; $('autoRate').textContent=percent(c.auto,c.total); const selfIds=new Set(config.models.filter(m=>m.ownership==='self_hosted').map(m=>m.id)); const self=Object.entries(c.selected).filter(([id])=>selfIds.has(id)).reduce((s,[,n])=>s+n,0); $('selfRate').textContent=percent(self,c.success); $('semanticRate').textContent=percent(c.semantic?.disagreed||0,c.semantic?.succeeded||0); $('budgetRate').textContent=metrics.budget?.enabled?percentValue(metrics.budget.pressure):'未启用'; $('fallback').textContent=c.fallback; $('errorRate').textContent=percent(c.errors,c.total); document.querySelectorAll('#models tr').forEach(row=>{const m=config.models[Number(row.dataset.index)],h=metrics.health[m.id],cell=row.querySelector('.health'); cell.innerHTML=!h?'<span class="pill muted">无数据</span>':h.circuitState==='half_open'?'<span class="pill muted">恢复探测</span>':h.circuitOpenUntil>Date.now()?'<span class="pill bad">熔断</span>':`<span class="pill good">${h.ewmaLatencyMs}ms · ${h.failures}错</span>`}); renderRecentKeySelect(); $('recent').innerHTML=metrics.recent.length?metrics.recent.map(x=>{const reasonTag=x.reasoningApplied===false&&x.reasoningLevel&&x.reasoningLevel!=='off'?` · 推理${x.reasoningLevel}(建议未生效)`:` · 推理${x.reasoningLevel||'off'}`; return `<div class="recent-item"><time>${new Date(x.at).toLocaleTimeString()}</time><div><b>${x.selected}</b> <small>← ${x.requested} · ${x.keyFingerprint?`key ${x.keyFingerprint} · `:''}${taskCN(x.task)} · ${METHOD_CN[x.routeMethod]||x.routeMethod||'规则'}${reasonTag}${x.fallbackAttempt?` · fallback ${x.fallbackAttempt}`:''}</small></div><span class="pill ${x.ok?'good':'bad'}">${x.ok?`${x.latencyMs}ms`:'失败'}</span></div>`;}).join(''):'<p class="empty">暂无请求</p>'; }
 async function connect(){ try{sessionStorage.setItem('routerAdminToken',$('token').value); [config,metrics]=await Promise.all([api('/admin/api/config'),api('/admin/api/metrics')]);snapshotBaseline(); $('status').textContent=`已连接 · v${config.version}`; $('status').className='pill good'; renderMetrics(); renderOverview(); renderTaskBoard(); renderMarketSignal(); applyPolicyLock(); await simulate();}catch(error){$('status').textContent='连接失败';$('status').className='pill bad';toast(error.message,true)} }
-$('token').value=sessionStorage.getItem('routerAdminToken')||''; $('connect').onclick=connect; $('refresh').onclick=async()=>{try{metrics=await api('/admin/api/metrics');renderMetrics();renderOverview()}catch(e){toast(e.message,true)}}; $('reload').onclick=()=>{if(!savedConfig)return;config=structuredClone(savedConfig);snapshotBaseline();renderMetrics();simulate();toast('已恢复到当前线上版本')}; $('refreshBoard').onclick = () => { renderTaskBoard(); renderMarketSignal(); };
+$('token').value=sessionStorage.getItem('routerAdminToken')||''; $('connect').onclick=connect; $('refresh').onclick=async()=>{try{metrics=await api('/admin/api/metrics');renderMetrics();renderOverview()}catch(e){toast(e.message,true)}}; if($('recentKeySelect')) $('recentKeySelect').onchange=async()=>{try{metrics=await api('/admin/api/recent-key-filter',{method:'POST',body:JSON.stringify({key:$('recentKeySelect').value||null})});metrics=await api('/admin/api/metrics');renderMetrics();renderOverview();toast($('recentKeySelect').value?`已筛选 key ${$('recentKeySelect').value}`:'已显示全部调用方')}catch(e){toast(e.message,true)}}; $('reload').onclick=()=>{if(!savedConfig)return;config=structuredClone(savedConfig);snapshotBaseline();renderMetrics();simulate();toast('已恢复到当前线上版本')}; $('refreshBoard').onclick = () => { renderTaskBoard(); renderMarketSignal(); };
 if ($('probeSemantic')) $('probeSemantic').onclick = async () => {
   const url = $('semanticHttpUrl')?.value?.trim();
   const box = $('semanticProbeResult');
@@ -503,6 +525,17 @@ document.querySelectorAll('#tierPicker .tier').forEach((el) => el.addEventListen
   if (p) { const fields = { qualityFloor: 'qualityFloor', costWeight: 'costWeight', latencyWeight: 'latencyWeight', selfHostedBonus: 'selfBonus' }; for (const [field, id] of Object.entries(fields)) $(id).value = p[field]; }
   document.querySelectorAll('#tierPicker .tier').forEach((x) => x.classList.toggle('active', x === el));
   config.routing = config.routing || {}; config.routing.costTier = tier;
+  updateRangeLabels(); syncDirty(); scheduleSimulation();
+}));
+// 路由风格预设（v0.4.27）：四权重一键组合；写入后联动四个滑条+质量底线，档位标记为 custom
+document.querySelectorAll('#stylePicker .tier').forEach((el) => el.addEventListener('click', () => {
+  const style = el.dataset.style; const p = STYLE_PRESETS[style];
+  if (!p) return;
+  const fields = { qualityFloor: 'qualityFloor', costWeight: 'costWeight', providerCostWeight: 'providerCostWeight', latencyWeight: 'latencyWeight', qualityWeight: 'qualityWeight' };
+  for (const [field, id] of Object.entries(fields)) $(id).value = p[field];
+  document.querySelectorAll('#stylePicker .tier').forEach((x) => x.classList.toggle('active', x === el));
+  config.routing = config.routing || {}; config.routing.costTier = 'custom'; config.routing.routeStyle = style;
+  const help = $('presetHelp'); if (help) help.textContent = p.label;
   updateRangeLabels(); syncDirty(); scheduleSimulation();
 }));
 // 新增模型（运营流程第 1 步）：以 qwen36-35b 为模板的保守默认值 + enabled:false，录入后立即出现在表格中可继续编辑，发布走既有安全链路

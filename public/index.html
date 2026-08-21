@@ -29,7 +29,7 @@
         </div>
         <p class="arch-note">分类体系：4 大类（⚙️代码 · 🤖智能体 · 📋数据 · 💬写作与对话）30 小类，与 OpenRouter 业界任务口径对齐；路由打分另用通用/代码/推理/创意/抽取五族质量分（见手册）。想深入？<button id="gotoManual2" class="link-btn" style="font-size:12px">使用手册 →</button></p>
       </section>
-      <section class="panel"><div class="panel-head"><div><p class="eyebrow">运行监控</p><h2>最近请求</h2><p class="hint">最近的每笔路由决策：请求被分给哪个模型、为什么、耗时多少。</p></div><button id="refresh" class="secondary">刷新</button></div><div id="recent" class="recent"><p class="empty">暂无请求</p></div></section>
+      <section class="panel"><div class="panel-head"><div><p class="eyebrow">运行监控</p><h2>最近请求</h2><p class="hint">最近的每笔路由决策：请求被分给哪个模型、为什么、耗时多少。<span id="recentKeyHint"></span></p></div><div class="actions"><select id="recentKeySelect" title="按调用方 key 指纹筛选（指纹=调用方 API key 前 8 位哈希，非明文）"><option value="">全部调用方</option></select><button id="refresh" class="secondary">刷新</button></div></div><div id="recent" class="recent"><p class="empty">暂无请求</p></div></section>
     </section>
     <section class="tab-page" data-tab="policy" hidden>
       <section class="panel">
@@ -48,12 +48,21 @@
       </div>
       <div class="policy-section">
         <p class="policy-section-title">② 成本档位</p>
+        <div class="hint" style="margin-bottom:6px">成本档位=价格带过滤（对用户侧豆价）。价格带之上，路由风格可再选一档预设——四权重（质量/用户成本/平台成本/时延）的一键组合：</div>
         <div class="tier-picker" id="tierPicker">
           <label class="tier" data-tier="budget"><input type="radio" name="costTier" value="budget"><strong>省钱</strong><small>低成本模型优先，跑简单任务最划算</small></label>
           <label class="tier" data-tier="balanced"><input type="radio" name="costTier" value="balanced"><strong>均衡</strong><small>质量成本兼顾，默认推荐</small></label>
           <label class="tier" data-tier="quality"><input type="radio" name="costTier" value="quality"><strong>质量</strong><small>排除低端模型，复杂任务更稳</small></label>
           <label class="tier" data-tier="max"><input type="radio" name="costTier" value="max"><strong>顶配</strong><small>只用最强模型，不计成本</small></label>
           <label class="tier" data-tier="custom"><input type="radio" name="costTier" value="custom"><strong>自定义</strong><small>手动微调滑条后的状态</small></label>
+        </div>
+        <div class="hint" style="margin:10px 0 6px"><strong>路由风格预设</strong>（四权重一键组合，区别于上面的价格带档位）：</div>
+        <div class="tier-picker" id="stylePicker">
+          <label class="tier" data-style="quality-first"><input type="radio" name="routeStyle" value="quality-first"><strong>质量优先</strong><small>质量权重拉满，成本时延仅微调，适合对外演示</small></label>
+          <label class="tier" data-style="user-cost-first"><input type="radio" name="routeStyle" value="user-cost-first"><strong>用户成本优先</strong><small>用户侧豆价权重拉高，替调用方省钱</small></label>
+          <label class="tier" data-style="provider-cost-first"><input type="radio" name="routeStyle" value="provider-cost-first"><strong>运营成本优先</strong><small>平台侧资源指数权重拉高——更多流量导向低占用高并发模型（如 qwen3.6）</small></label>
+          <label class="tier" data-style="efficiency-first"><input type="radio" name="routeStyle" value="efficiency-first"><strong>效率优先</strong><small>时延权重拉高，首字快总时长短，适合交互场景</small></label>
+          <label class="tier" data-style="balanced-style"><input type="radio" name="routeStyle" value="balanced-style"><strong>均衡风格</strong><small>四权重均衡（现网默认组合）</small></label>
         </div>
         <small id="presetHelp" style="display:block;margin-top:6px"></small>
       </div>

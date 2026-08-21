@@ -165,6 +165,10 @@ function record(entry) {
   if (recent.length > 200) recent.length = 200;
 }
 
+// key 指纹筛选（最近请求面板）：内存环形缓冲里也带 keyFingerprint（v0.4.27）
+let recentKeyFilter = null;
+function setRecentKeyFilter(fp) { recentKeyFilter = fp; }
+
 // 切换影响预估：heldout 全量回放。dump=evaluate_classifier.py --dump 的逐条输出
 // （gold/clf/rule 任务标签 + 小模型 confidence/tier/complexity + text 原文）。
 // 三种决策链对比（与 runtime 真实代码路径一致）：
@@ -393,6 +397,14 @@ function sessionModel(req, decision) {
   if (current && current.expiresAt > Date.now() && decision.fallbackOrder.includes(current.model)) return current.model;
   sessions.set(id, { model: decision.selectedModel, expiresAt: Date.now() + config.routing.sessionStickinessTtlMs });
   return decision.selectedModel;
+}
+
+// —— 调用方归因：key 指纹（sha256 前 8 位十六进制）——
+// 只存指纹不存 key：多租户「按 key 筛选最近请求 / 消耗归因」够用，且明文日志不落敏感凭证。
+function keyFingerprint(authorizationHeader) {
+  const raw = String(authorizationHeader || '').replace(/^Bearer\s+/i, '').trim();
+  if (!raw) return null;
+  return createHash('sha256').update(raw).digest('hex').slice(0, 8);
 }
 
 function upstreamRequestBody(body, model, reasoningLevel) {
@@ -679,9 +691,9 @@ async function proxyCompletion(req, res) {
       const actualCostYuan = usage ? computeActualCostFromUsage(usage, selectedConfig) : null;
       if (actualCostYuan != null) { counters.tokens ??= {}; counters.tokens.prompt = (counters.tokens.prompt || 0) + usage.prompt; counters.tokens.completion = (counters.tokens.completion || 0) + usage.completion; }
       // 日志先组装不落盘（流式的 usage 在流尾才知道）——转发完成后统一 write
-      const logEntry = { sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, redactedBody: decisionLog.redact(body) };
+      const logEntry = { sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) };
       const logOutcome = { ok: true, model, latencyMs: latency, fallbackAttempt: i, estimatedCostYuan, actualCostYuan, usage };
-      record({ at: new Date().toISOString(), requested: decision.requestedModel, selected: model, suggested: decision.suggestedModel, task: decision.analysis.task, complexity: decision.analysis.complexity, routeMethod: decision.analysis.routeMethod, reasoningLevel: decision.reasoningLevel, estimatedCostYuan, actualCostYuan, latencyMs: latency, fallbackAttempt: i, ok: true });
+      record({ at: new Date().toISOString(), requested: decision.requestedModel, selected: model, suggested: decision.suggestedModel, task: decision.analysis.task, complexity: decision.analysis.complexity, routeMethod: decision.analysis.routeMethod, reasoningLevel: decision.reasoningLevel, reasoningApplied: Boolean(selectedModelConfig?.reasoningControl?.verified) && decision.reasoningLevel !== 'off', keyFingerprint: keyFingerprint(req.headers.authorization), estimatedCostYuan, actualCostYuan, latencyMs: latency, fallbackAttempt: i, ok: true });
       const headers = {
         'content-type': upstream.headers.get('content-type') || (body.stream ? 'text/event-stream' : 'application/json'),
         'cache-control': 'no-cache',
@@ -732,9 +744,9 @@ async function proxyCompletion(req, res) {
   clearTimeout(timer);
   counters.errors += 1;
   counters.outcome[auto ? 'auto' : 'explicit'].error += 1;
-  const failure = { at: new Date().toISOString(), requested: decision.requestedModel, selected: attempts.at(-1), suggested: decision.suggestedModel, task: decision.analysis.task, ok: false, error: lastError?.message };
+  const failure = { at: new Date().toISOString(), requested: decision.requestedModel, selected: attempts.at(-1), suggested: decision.suggestedModel, task: decision.analysis.task, reasoningLevel: decision.reasoningLevel, reasoningApplied: false, keyFingerprint: keyFingerprint(req.headers.authorization), ok: false, error: lastError?.message };
   record(failure);
-  decisionLog.write({ sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, redactedBody: decisionLog.redact(body) }, decision, { ok: false, model: attempts.at(-1), error: (lastError?.message || '').slice(0, 500) });
+  decisionLog.write({ sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, { ok: false, model: attempts.at(-1), error: (lastError?.message || '').slice(0, 500) });
   return errorJson(res, 502, lastError?.message || '所有候选模型均调用失败', 'upstream_error');
 }
 
@@ -1008,7 +1020,10 @@ function subCategoryOf(task, subTask) {
     }}).sort((a, b) => b.total - a.total);
     return json(res, 200, { window: 'recent 2000 decisions', board });
   }
-  if (req.method === 'GET' && url.pathname === '/admin/api/metrics') return json(res, 200, { counters, health, recent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: sessions.size });
+  if (req.method === 'GET' && url.pathname === '/admin/api/metrics') {
+    const visibleRecent = recentKeyFilter ? recent.filter((x) => (x.keyFingerprint || '') === recentKeyFilter) : recent;
+    return json(res, 200, { counters, health, recent: visibleRecent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: sessions.size });
+  }
   // 分类器标准评测：spawn Python 脚本跑 heldout 集，输出三方（gold/小模型/规则层）准确率与混淆矩阵。
   // 回答"换分类器后准了多少"——换端点前后各点一次即可对比。评测只读模型文件，不影响线上。
   if (req.method === 'POST' && url.pathname === '/admin/api/classifier/evaluate') {
@@ -1056,9 +1071,24 @@ function subCategoryOf(task, subTask) {
     try {
       const count = Math.max(1, Math.min(2000, Number(url.searchParams.get('count') || 200)));
       const includeFullText = url.searchParams.get('fullText') === '1';
-      const rows = await decisionLog.recent(count, { includeFullText });
+      const keyFilter = url.searchParams.get('key'); // key 指纹筛选（8 位十六进制）
+      const rows = await decisionLog.recent(count, { includeFullText, keyFingerprint: keyFilter });
       return json(res, 200, { count: rows.length, decisions: rows });
     } catch (error) { return errorJson(res, 500, error.message, 'decision_log_error'); }
+  }
+  // key 指纹筛选开关（最近请求面板 v0.4.27）：null=全部；8 位十六进制=只看该 key
+  if (req.method === 'POST' && url.pathname === '/admin/api/recent-key-filter') {
+    try {
+      const { key } = await readJson(req);
+      if (key !== null && key !== undefined && key !== '') {
+        const raw = String(key).toLowerCase();
+        if (!/^[0-9a-f]{8}$/.test(raw)) return errorJson(res, 400, 'key 指纹须为 8 位十六进制（0-9/a-f）', 'invalid_key');
+        setRecentKeyFilter(raw);
+        return json(res, 200, { ok: true, keyFingerprint: raw });
+      }
+      setRecentKeyFilter(null);
+      return json(res, 200, { ok: true, keyFingerprint: null });
+    } catch (error) { return errorJson(res, 400, error.message, 'invalid_body'); }
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/reload') {
     try { config = await loadConfig(); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); return json(res, 200, { ok: true, version: config.version }); }

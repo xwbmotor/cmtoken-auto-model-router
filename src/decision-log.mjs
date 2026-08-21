@@ -86,7 +86,7 @@ export class DecisionLog {
   entry(requestContext, decision, outcome) {
     return {
       at: new Date().toISOString(),
-      v: 1,
+      v: 2,
       request: requestContext,
       decision: {
         requestedModel: decision.requestedModel,
@@ -158,11 +158,12 @@ export class DecisionLog {
   }
 
   // 读取日志用于导出/标注：返回最新 count 条（跨轮转文件合并读取）
-  async recent(count = 200, { includeFullText = false } = {}) {
+  async recent(count = 200, { includeFullText = false, keyFingerprint = null } = {}) {
     if (!this.options.enabled && !this.currentFile) return [];
     const dir = resolve(this.projectRoot, this.options.dirPath);
     let files = [];
     try { files = (await readdir(dir)).filter((f) => f.endsWith('.jsonl')).sort().reverse(); } catch { return []; }
+    const want = keyFingerprint ? String(keyFingerprint).toLowerCase() : null;
     const rows = [];
     for (const file of files) {
       if (rows.length >= count) break;
@@ -170,7 +171,11 @@ export class DecisionLog {
       try { text = await readFile(resolve(dir, file), 'utf8'); } catch { continue; }
       const lines = text.split('\n').filter(Boolean);
       for (let i = lines.length - 1; i >= 0 && rows.length < count; i -= 1) {
-        try { rows.push(JSON.parse(lines[i])); } catch { /* 跳过坏行 */ }
+        try {
+          const row = JSON.parse(lines[i]);
+          if (want && String(row.request?.keyFingerprint || '').toLowerCase() !== want) continue;
+          rows.push(row);
+        } catch { /* 跳过坏行 */ }
       }
     }
     if (!includeFullText) {
