@@ -133,7 +133,8 @@
       "benchmarkScores": {
         "scores": {
           "gpqa_diamond": 0.881,
-          "swe_bench": 0.526
+          "swe_bench": 0.526,
+          "model_data_test": 0
         },
         "evalGate": {
           "at": "2026-08-19",
@@ -146,7 +147,122 @@
           "total": 0.89
         },
         "source": "eval-gate-50cases-serial-glm53-judge",
-        "updatedAt": "2026-08-19"
+        "updatedAt": "2026-08-21",
+        "scoresMeta": {
+          "source": "官方榜单（人工录入）",
+          "at": "2026-08-21"
+        },
+        "subtasks": {
+          "frontend-ui": {
+            "avg": 0.825,
+            "n": 2
+          },
+          "devops-config": {
+            "avg": 0.925,
+            "n": 2
+          },
+          "shell-execution": {
+            "avg": 0.65,
+            "n": 2
+          },
+          "file-io": {
+            "avg": 0.75,
+            "n": 2
+          },
+          "repo-scanning": {
+            "avg": 0.855,
+            "n": 2
+          },
+          "multi-step-planning": {
+            "avg": 0.945,
+            "n": 2
+          },
+          "tool-dispatch": {
+            "avg": 0.825,
+            "n": 2
+          },
+          "workflow-execution": {
+            "avg": 0.925,
+            "n": 2
+          },
+          "web-search": {
+            "avg": 0.835,
+            "n": 2
+          },
+          "memory-extraction": {
+            "avg": 0.885,
+            "n": 2
+          },
+          "devops-agent": {
+            "avg": 0.875,
+            "n": 2
+          },
+          "data-extraction": {
+            "avg": 0.925,
+            "n": 2
+          },
+          "data-transformation": {
+            "avg": 0.815,
+            "n": 2
+          },
+          "classification": {
+            "avg": 0.925,
+            "n": 2
+          },
+          "summarization": {
+            "avg": 0.925,
+            "n": 2
+          },
+          "translation": {
+            "avg": 0.9,
+            "n": 2
+          },
+          "math": {
+            "avg": 1,
+            "n": 2
+          },
+          "content-writing": {
+            "avg": 0.8,
+            "n": 2
+          },
+          "research-reports": {
+            "avg": 0.875,
+            "n": 2
+          },
+          "qa-knowledge": {
+            "avg": 0.9,
+            "n": 2
+          },
+          "conversation": {
+            "avg": 0.975,
+            "n": 2
+          },
+          "customer-support": {
+            "avg": 0.935,
+            "n": 2
+          },
+          "roleplay-fiction": {
+            "avg": 0.885,
+            "n": 2
+          },
+          "finance-trading": {
+            "avg": 0.825,
+            "n": 2
+          },
+          "security-audit": {
+            "avg": 0.875,
+            "n": 2
+          },
+          "other": {
+            "avg": 0.935,
+            "n": 2
+          }
+        },
+        "subtasksMeta": {
+          "at": "2026-08-21T00:12:20.423Z",
+          "judge": "glm-5.3(外部)",
+          "source": "data/subtask-eval/full30.json"
+        }
       },
       "calibrationStatus": "verified",
       "deployment": {
@@ -215,7 +331,118 @@
           "total": 0.883
         },
         "source": "eval-gate-50cases-serial-glm53-judge",
-        "updatedAt": "2026-08-19"
+        "updatedAt": "2026-08-21",
+        "subtasks": {
+          "frontend-ui": {
+            "avg": 0.75,
+            "n": 2
+          },
+          "devops-config": {
+            "avg": 0.9,
+            "n": 2
+          },
+          "shell-execution": {
+            "avg": 0.64,
+            "n": 2
+          },
+          "file-io": {
+            "avg": 0.8,
+            "n": 2
+          },
+          "repo-scanning": {
+            "avg": 0.885,
+            "n": 2
+          },
+          "multi-step-planning": {
+            "avg": 0.94,
+            "n": 2
+          },
+          "tool-dispatch": {
+            "avg": 0.7,
+            "n": 2
+          },
+          "workflow-execution": {
+            "avg": 0.91,
+            "n": 2
+          },
+          "web-search": {
+            "avg": 0.84,
+            "n": 2
+          },
+          "memory-extraction": {
+            "avg": 0.885,
+            "n": 2
+          },
+          "devops-agent": {
+            "avg": 0.825,
+            "n": 2
+          },
+          "data-extraction": {
+            "avg": 0.9,
+            "n": 2
+          },
+          "data-transformation": {
+            "avg": 0.8,
+            "n": 2
+          },
+          "classification": {
+            "avg": 0.865,
+            "n": 2
+          },
+          "summarization": {
+            "avg": 0.775,
+            "n": 2
+          },
+          "translation": {
+            "avg": 0.91,
+            "n": 2
+          },
+          "math": {
+            "avg": 1,
+            "n": 2
+          },
+          "content-writing": {
+            "avg": 0.875,
+            "n": 2
+          },
+          "research-reports": {
+            "avg": 0.89,
+            "n": 2
+          },
+          "qa-knowledge": {
+            "avg": 0.9,
+            "n": 2
+          },
+          "conversation": {
+            "avg": 0.96,
+            "n": 2
+          },
+          "customer-support": {
+            "avg": 0.95,
+            "n": 2
+          },
+          "roleplay-fiction": {
+            "avg": 0.89,
+            "n": 2
+          },
+          "finance-trading": {
+            "avg": 0.835,
+            "n": 2
+          },
+          "security-audit": {
+            "avg": 0.9,
+            "n": 2
+          },
+          "other": {
+            "avg": 0.95,
+            "n": 2
+          }
+        },
+        "subtasksMeta": {
+          "at": "2026-08-21T00:12:20.423Z",
+          "judge": "glm-5.3(外部)",
+          "source": "data/subtask-eval/full30.json"
+        }
       },
       "calibrationStatus": "verified",
       "deployment": {
@@ -278,8 +505,119 @@
           "reasoning": 0.944,
           "total": 0.921
         },
-        "updatedAt": "2026-08-19",
-        "source": "eval-gate-50cases-serial-glm53-judge"
+        "updatedAt": "2026-08-21",
+        "source": "eval-gate-50cases-serial-glm53-judge",
+        "subtasks": {
+          "frontend-ui": {
+            "avg": 0.9,
+            "n": 1
+          },
+          "devops-config": {
+            "avg": 0.935,
+            "n": 2
+          },
+          "shell-execution": {
+            "avg": 0.775,
+            "n": 2
+          },
+          "file-io": {
+            "avg": 0.975,
+            "n": 2
+          },
+          "repo-scanning": {
+            "avg": 0.94,
+            "n": 2
+          },
+          "multi-step-planning": {
+            "avg": 0.95,
+            "n": 2
+          },
+          "tool-dispatch": {
+            "avg": 0.89,
+            "n": 2
+          },
+          "workflow-execution": {
+            "avg": 0.94,
+            "n": 2
+          },
+          "web-search": {
+            "avg": 0.92,
+            "n": 2
+          },
+          "memory-extraction": {
+            "avg": 0.92,
+            "n": 2
+          },
+          "devops-agent": {
+            "avg": 0.92,
+            "n": 1
+          },
+          "data-extraction": {
+            "avg": 0.9,
+            "n": 2
+          },
+          "data-transformation": {
+            "avg": 0.9,
+            "n": 2
+          },
+          "classification": {
+            "avg": 0.8,
+            "n": 1
+          },
+          "summarization": {
+            "avg": 0.975,
+            "n": 2
+          },
+          "translation": {
+            "avg": 0.915,
+            "n": 2
+          },
+          "math": {
+            "avg": 1,
+            "n": 2
+          },
+          "content-writing": {
+            "avg": 0.9,
+            "n": 2
+          },
+          "research-reports": {
+            "avg": 0.89,
+            "n": 2
+          },
+          "qa-knowledge": {
+            "avg": 0.925,
+            "n": 2
+          },
+          "conversation": {
+            "avg": 0.935,
+            "n": 2
+          },
+          "customer-support": {
+            "avg": 0.975,
+            "n": 2
+          },
+          "roleplay-fiction": {
+            "avg": 0.91,
+            "n": 2
+          },
+          "finance-trading": {
+            "avg": 0.95,
+            "n": 1
+          },
+          "security-audit": {
+            "avg": 0.925,
+            "n": 2
+          },
+          "other": {
+            "avg": 0.925,
+            "n": 2
+          }
+        },
+        "subtasksMeta": {
+          "at": "2026-08-21T00:12:20.423Z",
+          "judge": "glm-5.3(外部)",
+          "source": "data/subtask-eval/full30.json"
+        }
       },
       "avgLatencyMs": 12502,
       "deployment": {

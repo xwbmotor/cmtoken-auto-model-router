@@ -1,66 +1,89 @@
-// Qwen3.8-27B 思考型模型重跑工具：max_tokens 32768（8192 时 reasoning 烧满导致 content 空）
-// 只重跑指定模型+小类，输出与主跑同结构
+// 补跑报告里的失败条（score==null）：读 --report，只重跑失败项，结果按 (model,id) 覆盖合并回写报告文件本身
+// 用法：npm run eval:regen -- --report data/subtask-eval/full30.json
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { loadConfig, projectRoot } from '../src/config.mjs';
 
 const MAXT = Number(process.env.REGEN_MAX_TOKENS || 32768);
-const model = process.argv[2];
-const subFilter = process.argv[3] ? process.argv[3].split(',') : null;
-const outName = process.argv[4] || `run-${model}-regen.json`;
+const argReport = process.argv.includes('--report') ? process.argv[process.argv.indexOf('--report') + 1] : null;
+if (!argReport) { console.error('用法: node subtask-regen.mjs --report <报告路径>'); process.exit(2); }
+const reportPath = resolve(projectRoot, argReport);
 
 const config = await loadConfig();
 const base = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl).replace(/\/$/, '');
 const key = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
-const judge = { base: 'https://api.z.ai/api/coding/paas/v4', key: process.env.GLMCODE_API_KEY, model: 'glm-5.3' };
+const JUDGE = { base: 'https://api.z.ai/api/coding/paas/v4', key: process.env.GLMCODE_API_KEY, model: 'glm-5.3' };
 
-const all = JSON.parse(await readFile(resolve(projectRoot, 'config/subtask-eval.json'), 'utf8')).cases;
-const cases = subFilter ? all.filter((c) => subFilter.includes(c.sub)) : all;
-console.log(`重跑 ${model} × ${cases.length} 条 · max_tokens=${MAXT} · judge ${judge.model}`);
+const caseById = new Map(JSON.parse(await readFile(resolve(projectRoot, 'config/subtask-eval.json'), 'utf8')).cases.map((c) => [c.id, c]));
+const report = JSON.parse(await readFile(reportPath, 'utf8'));
+const fails = report.results.filter((r) => r.score == null);
+console.log(`重跑 --report ${argReport} × ${fails.length} 条 · max_tokens=${MAXT} · judge ${JUDGE.model}`);
 
-const SUB_LABEL = { debugging: '调试', 'code-generation': '代码生成', 'code-review': '代码评审', 'sql-database': 'SQL' };
-const results = [];
-let i = 0;
-for (const c of cases) {
-  i += 1;
+async function genOne(model, c) {
+  const res = await fetch(`${base}/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: c.prompt }], stream: false, max_tokens: MAXT }),
+    signal: AbortSignal.timeout(300000)
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const d = await res.json();
+  const m = d.choices?.[0]?.message || {};
+  return { output: m.content || '', finish: d.choices?.[0]?.finish_reason, reasoningLen: (m.reasoning || m.reasoning_content || '').length };
+}
+
+async function judgeOne(c, output) {
+  const prompt = `你是模型输出质量评估裁判。根据评分要点，给下面的模型输出打分（0 到 1 之间的小数，1 为完全符合）。\n\n任务类型：${c.sub}\n评分要点：${c.rubric}\n\n模型输出：\n${output}\n\n只返回一个 JSON 对象：{"score": 0.85, "reason": "一句话说明"}`;
+  const jr = await fetch(`${JUDGE.base}/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${JUDGE.key}` },
+    body: JSON.stringify({ model: JUDGE.model, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: 2048 }),
+    signal: AbortSignal.timeout(120000)
+  });
+  const jd = await jr.json();
+  const match = (jd.choices?.[0]?.message?.content || '').match(/\{[\s\S]*\}/);
+  if (!match) return { score: null, reason: '裁判未返回 JSON' };
+  const parsed = JSON.parse(match[0]);
+  return { score: Number.isFinite(Number(parsed.score)) ? Number(parsed.score) : null, reason: parsed.reason || '' };
+}
+
+let done = 0;
+for (const r of fails) {
+  const c = caseById.get(r.id);
+  if (!c) { console.log(`${r.id} 不在用例集中，跳过`); continue; }
   try {
-    const res = await fetch(`${base}/chat/completions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model, messages: [{ role: 'user', content: c.prompt }], stream: false, max_tokens: MAXT }),
-      signal: AbortSignal.timeout(300000)
-    });
-    const d = await res.json();
-    const m = d.choices?.[0]?.message || {};
-    const output = m.content || '';
-    const finish = d.choices?.[0]?.finish_reason;
-    // 裁判
-    const prompt = `你是模型输出质量评估裁判。根据评分要点，给下面的模型输出打分（0 到 1 之间的小数，1 为完全符合）。\n\n任务类型：${c.sub}\n评分要点：${c.rubric}\n\n模型输出：\n${output}\n\n只返回一个 JSON 对象：{"score": 0.85, "reason": "一句话说明"}`;
-    let score = null, reason = '';
-    try {
-      const jr = await fetch(`${judge.base}/chat/completions`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${judge.key}` },
-        body: JSON.stringify({ model: judge.model, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: 2048 }),
-        signal: AbortSignal.timeout(120000)
-      });
-      const jd = await jr.json();
-      const match = (jd.choices?.[0]?.message?.content || '').match(/\{[\s\S]*\}/);
-      if (match) { score = Number(JSON.parse(match[0]).score); reason = JSON.parse(match[0]).reason || ''; }
-    } catch {}
-    results.push({ id: c.id, sub: c.sub, model, score, reason, finish, contentLen: output.length, reasoningLen: (m.reasoning || m.reasoning_content || '').length, outputHead: output.slice(0, 160) });
-    console.log(`[${String(i).padStart(2, '0')}/${cases.length}] ${c.id} finish=${finish} content=${output.length} reasoning=${(m.reasoning || m.reasoning_content || '').length} → ${score == null ? 'null' : score.toFixed(2)} ${reason.slice(0, 40)}`);
-  } catch (error) {
-    results.push({ id: c.id, sub: c.sub, model, score: null, error: error.message });
-    console.log(`[${String(i).padStart(2, '0')}/${cases.length}] ${c.id} 失败：${error.message.slice(0, 80)}`);
+    const g = await genOne(r.model, c);
+    if (!g.output) { console.log(`[${++done}/${fails.length}] ${r.id} ${r.model} 仍无 content（finish=${g.finish}）`); continue; }
+    const j = await judgeOne(c, g.output);
+    if (j.score != null) {
+      Object.assign(r, { score: j.score, reason: j.reason, finish: g.finish, contentLen: g.output.length, reasoningLen: g.reasoningLen, outputHead: g.output.slice(0, 160), regenAt: new Date().toISOString() });
+      console.log(`[${++done}/${fails.length}] ${r.id} ${r.model} → ${j.score.toFixed(2)} ${j.reason.slice(0, 40)}`);
+    } else {
+      console.log(`[${++done}/${fails.length}] ${r.id} ${r.model} 裁判失败：${j.reason}`);
+    }
+  } catch (e) {
+    console.log(`[${++done}/${fails.length}] ${r.id} ${r.model} 失败：${e.message.slice(0, 80)}`);
   }
 }
 
-// 聚合
-const bySub = {};
-for (const r of results.filter((r) => r.score != null)) (bySub[r.sub] ||= []).push(r.score);
-console.log('\n== 重跑结果 ==');
-for (const [sub, arr] of Object.entries(bySub)) console.log(`  ${SUB_LABEL[sub] || sub}: ${arr.length} 条 均分 ${(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(3)}`);
-
-await writeFile(resolve(projectRoot, 'data/subtask-eval', outName), JSON.stringify({ at: new Date().toISOString(), judge: 'glm-5.3(外部)', model, maxTokens: MAXT, results }, null, 2));
-console.log(`\n已写入 data/subtask-eval/${outName}`);
+// 重新聚合并回写报告
+const byModel = {};
+for (const x of report.results) {
+  byModel[x.model] ||= { scored: 0, sum: 0, fail: 0, bySub: {} };
+  if (x.score == null) byModel[x.model].fail += 1;
+  else { byModel[x.model].scored += 1; byModel[x.model].sum += x.score; (byModel[x.model].bySub[x.sub] ||= []).push(x.score); }
+}
+report.summary = {};
+for (const [m, v] of Object.entries(byModel)) {
+  report.summary[m] = {
+    total: v.scored + v.fail, scored: v.scored, failed: v.fail,
+    avg: Number((v.sum / Math.max(1, v.scored)).toFixed(3)),
+    subtasks: Object.fromEntries(Object.entries(v.bySub).map(([s, arr]) => [s, { n: arr.length, avg: Number((arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(3)) }]))
+  };
+  const avgs = Object.values(report.summary[m].subtasks).map((x) => x.avg);
+  const spread = Math.max(0, ...avgs) - Math.min(...avgs);
+  report.summary[m].spread = Number(spread.toFixed(3));
+}
+await writeFile(reportPath, JSON.stringify(report, null, 2));
+const still = report.results.filter((r) => r.score == null).length;
+console.log(`\n已回写 ${argReport} · 剩余失败 ${still} 条`);

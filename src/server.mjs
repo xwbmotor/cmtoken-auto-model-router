@@ -777,6 +777,50 @@ const server = http.createServer(async (req, res) => {
     return errorJson(res, 401, 'Admin Token 无效', 'authentication_error');
   }
   if (req.method === 'GET' && url.pathname === '/admin/api/config') return json(res, 200, config);
+  // 模型数据模板下载 + 上传导入：benchmark 榜单分 / evalGate 实测 / 小类实测 三层数据
+  if (req.method === 'GET' && url.pathname === '/admin/api/model-data/template') {
+    return json(res, 200, {
+      note: '模型能力数据导入模板。填 benchmarkScores 段后上传；subtasks/evalGate 可选填，留空则保留现值。models 数组每项只需 id + 要更新的字段。',
+      models: [
+        {
+          id: '模型ID（必填，须与模型管理中的模型 ID 一致）',
+          benchmarkScores: {
+            scores: { gpqa_diamond: 0.881, swe_bench: 0.526, livecodebench: 0.804 },
+            scoresMeta: { source: '官方榜单名称/链接', at: '2026-08-21' },
+            evalGate: { default: 0.92, simple: 0.97, coding: 0.88, reasoning: 0.919, creative: 0.881, extraction: 0.85, total: 0.89 },
+            subtasks: { 'code-generation': { avg: 0.79, n: 8 }, debugging: { avg: 0.84, n: 8 } }
+          }
+        }
+      ]
+    });
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/model-data/import') {
+    try {
+      const body = await readJson(req);
+      const incoming = Array.isArray(body?.models) ? body.models : null;
+      if (!incoming || !incoming.length) return errorJson(res, 400, '导入文件需含 models 数组（见模板）', 'invalid_request_error');
+      const applied = []; const skipped = [];
+      for (const item of incoming) {
+        if (!item?.id || typeof item.id !== 'string') { skipped.push(`${JSON.stringify(item?.id)} 缺有效 id`); continue; }
+        const target = config.models.find((m) => m.id === item.id);
+        if (!target) { skipped.push(`${item.id} 不存在`); continue; }
+        const bs = item.benchmarkScores;
+        if (!bs || typeof bs !== 'object') { skipped.push(`${item.id} 缺 benchmarkScores`); continue; }
+        const cur = target.benchmarkScores ||= {};
+        if (bs.scores && typeof bs.scores === 'object') cur.scores = { ...cur.scores, ...bs.scores };
+        if (bs.scoresMeta && typeof bs.scoresMeta === 'object') cur.scoresMeta = { ...cur.scoresMeta, ...bs.scoresMeta };
+        if (bs.evalGate && typeof bs.evalGate === 'object') cur.evalGate = { ...cur.evalGate, ...bs.evalGate };
+        if (bs.subtasks && typeof bs.subtasks === 'object') cur.subtasks = { ...cur.subtasks, ...bs.subtasks };
+        if (bs.subtasksMeta && typeof bs.subtasksMeta === 'object') cur.subtasksMeta = { ...cur.subtasksMeta, ...bs.subtasksMeta };
+        if (bs.source) cur.source = String(bs.source);
+        cur.updatedAt = new Date().toISOString().slice(0, 10);
+        applied.push(item.id);
+      }
+      if (!applied.length) return errorJson(res, 400, `全部 ${skipped.length} 条被跳过：${skipped.join('；')}`, 'invalid_request_error');
+      config = await saveConfig(config);
+      return json(res, 200, { ok: true, applied, skipped });
+    } catch (error) { return errorJson(res, 400, error.message, 'invalid_request_error'); }
+  }
   if (req.method === 'PUT' && url.pathname === '/admin/api/config') {
     try { config = await saveConfig(await readJson(req)); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); return json(res, 200, config); }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }

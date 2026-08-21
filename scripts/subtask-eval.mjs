@@ -27,7 +27,7 @@ async function generate(base, key, model, prompt) {
   const res = await fetch(`${base}/chat/completions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: 8192 }),
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: Number(process.env.SUBTASK_EVAL_MAX_TOKENS || 32768) }),
     signal: AbortSignal.timeout(TIMEOUT_MS)
   });
   if (!res.ok) throw new Error(`生成失败 ${model}: HTTP ${res.status} ${(await res.text()).slice(0, 120)}`);
@@ -139,8 +139,19 @@ async function main() {
 
   const outPath = args.out || resolve(projectRoot, 'data', 'subtask-eval', `subtask-eval-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
   await mkdir(dirname(outPath), { recursive: true });
-  await writeFile(outPath, JSON.stringify({ at: new Date().toISOString(), judge: judge.name, models, granularity, results }, null, 2));
-  console.log(`\n报告已写入 ${outPath}`);
+  // 追加合并：同 id+model 的旧结果被本次覆盖（增量重跑不丢历史批次）
+  let mergedResults = results;
+  let priorNote = '';
+  try {
+    const prev = JSON.parse(await readFile(outPath, 'utf8'));
+    if (Array.isArray(prev.results)) {
+      const key = new Set(results.map((r) => `${r.id}|${r.model}`));
+      mergedResults = [...prev.results.filter((r) => !key.has(`${r.id}|${r.model}`)), ...results];
+      priorNote = `（合并前序 ${prev.results.length} 条，覆盖 ${results.length} 条）`;
+    }
+  } catch {}
+  await writeFile(outPath, JSON.stringify({ at: new Date().toISOString(), judge: judge.name, models, granularity, results: mergedResults }, null, 2));
+  console.log(`\n报告已写入 ${outPath} 共 ${mergedResults.length} 条${priorNote}`);
 }
 
 main().catch((error) => { console.error('执行失败：', error.message); process.exit(2); });
