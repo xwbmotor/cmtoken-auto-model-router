@@ -294,6 +294,48 @@ function groupedSubsHtml(subtasks, dim) {
     return `<div class="sub-group"><span class="sub-group-label">${SUB_GROUP_ICON[g] || '·'} ${g}</span><div class="sub-group-cells">${cells}</div></div>`;
   }).join('');
 }
+// 30 小类统一列顺序：按 4 大类分组、组内按 SUB_CATEGORY 声明顺序（保证跨模型同列对齐）
+function orderedSubKeys() {
+  const groups = {};
+  for (const [k, v] of Object.entries(SUB_CATEGORY)) {
+    const cat = v[0];
+    (groups[cat] ||= []).push(k);
+  }
+  return SUB_GROUP_ORDER.filter((g) => groups[g]?.length).flatMap((g) => groups[g]);
+}
+// 矩阵：30 小类（列）× 模型（行）；每格只显示分数，热度走背景
+function renderSubMatrix() {
+  const wrap = $('subMatrixWrap'); if (!wrap) return;
+  if (!config.models?.length) { wrap.innerHTML = '<p class="hint">暂无模型。</p>'; return; }
+  const keys = orderedSubKeys();
+  // 按大类分组成列头段
+  const catSegments = [];
+  let curCat = null, curStart = 0;
+  keys.forEach((k, idx) => {
+    const cat = (SUB_CATEGORY[k] || [])[0] || '其他';
+    if (cat !== curCat) { if (curCat) catSegments.push({ cat: curCat, start: curStart, end: idx }); curCat = cat; curStart = idx; }
+  });
+  if (curCat) catSegments.push({ cat: curCat, start: curStart, end: keys.length });
+  // 找每个小类在所有模型里的最高分（用于高亮）
+  const best = {};
+  for (const k of keys) {
+    const vals = config.models.map((m) => Number(m.benchmarkScores?.subtasks?.[k]?.avg)).filter((v) => !Number.isNaN(v));
+    best[k] = vals.length ? Math.max(...vals) : null;
+  }
+  const colHeader = `<tr class="matrix-head"><th class="row-head-cell" rowspan="2">模型</th>${catSegments.map((s) => `<th colspan="${s.end - s.start}" class="matrix-cat">${SUB_GROUP_ICON[s.cat] || ''} ${s.cat}</th>`).join('')}</tr><tr class="matrix-subhead">${keys.map((k) => `<th class="matrix-sub" title="${(SUB_CATEGORY[k]||[])[3]||k} · 大类${(SUB_CATEGORY[k]||[])[0]||''}">${(SUB_CATEGORY[k] || [])[3] || k}</th>`).join('')}</tr>`;
+  const rowBody = config.models.map((m, i) => {
+    const dim = m.enabled ? '' : ' dim';
+    const subs = m.benchmarkScores?.subtasks || {};
+    return `<tr data-row="${i}"><th class="row-head-cell"><div class="cap-model${dim}"><strong>${m.displayName || m.id}</strong><small>${m.id}</small></div></th>${keys.map((k) => {
+      const v = subs[k];
+      if (!v) return `<td class="matrix-cell empty" data-model="${i}" data-sub="${k}">—</td>`;
+      const isBest = best[k] != null && Math.abs(Number(v.avg) - best[k]) < 1e-9;
+      return `<td class="matrix-cell${dim}${isBest ? ' best' : ''}" data-model="${i}" data-sub="${k}" style="background:${subHeat(v.avg)}" title="${(SUB_CATEGORY[k] || ['', '', '', k])[3] || k}（${(SUB_CATEGORY[k] || [])[0] || ''}）· 均分 ${v.avg} · ${v.n} 条">${v.avg}</td>`;
+    }).join('')}</tr>`;
+  }).join('');
+  wrap.innerHTML = `<div class="matrix-scroll"><table class="sub-matrix"><colgroup><col class="row-head-col">${keys.map(() => `<col class="sub-col">`).join('')}</colgroup>${colHeader}${rowBody}</table></div>`;
+  wrap._matrixBound = true;
+}
 function subHeat(v){ // 双色梯度：低分偏红警示、中高分偏绿稳健；避免单调绿
   if (v == null) return 'rgba(120,120,120,0.15)';
   const x = Math.max(0, Math.min(1, v));
@@ -301,22 +343,20 @@ function subHeat(v){ // 双色梯度：低分偏红警示、中高分偏绿稳�
   const t = (x - 0.7) / 0.3;
   return `rgba(18,145,80,${(0.15 + 0.55 * t).toFixed(3)})`;
 }
+// 摘要：模型/官方/六维 三列（不再展开 30 小类，30 小类单独走矩阵）
 function renderProfile() {
   const tbody = $('profileRows'); if (!tbody) return;
-  if (!config.models?.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">暂无模型。</td></tr>'; return; }
+  if (!config.models?.length) { tbody.innerHTML = '<tr><td colspan="3" class="empty">暂无模型。</td></tr>'; renderSubMatrix(); return; }
+  const bestTotal = Math.max(0, ...config.models.map((x) => Number(x.benchmarkScores?.evalGate?.total) || 0));
   tbody.innerHTML = config.models.map((m, i) => {
     const bs = m.benchmarkScores || {};
     const dim = m.enabled ? '' : ' dim';
-    // 官方榜单
     const scores = bs.scores && Object.keys(bs.scores).length ? Object.entries(bs.scores).map(([k, v]) => `<span class="pill ${v >= 0.8 ? 'good' : 'muted'}" title="${k}">${k} ${Number(v).toFixed(3).replace(/0+$/,'').replace(/\.$/,'')}</span>`).join(' ') : '<span class="pill muted">未录入</span>';
-    // 六维实测（总分最高者 pill 加 good 强调）
     const eg = bs.evalGate;
-    const bestTotal = Math.max(0, ...config.models.map((x) => Number(x.benchmarkScores?.evalGate?.total) || 0));
     const gate = eg ? CAP_TASKS.filter(t => eg[t] != null).map(t => `<span class="pill ${eg[t] >= Math.max(...CAP_TASKS.map(k => Number(eg[k]) || 0)) - 1e-9 ? 'good' : ''}" title="${CAP_TASK_LABEL[t]} ${eg[t]}">${CAP_TASK_LABEL[t]} ${eg[t]}</span>`).join(' ') + (eg.total != null ? `<span class="pill ${eg.total >= bestTotal - 1e-9 && eg.total > 0 ? 'good' : ''}" title="总均分${eg.total >= bestTotal - 1e-9 && eg.total > 0 ? '（三模型最高）' : ''}">总 ${eg.total}</span>` : '') : '<span class="pill muted">未实测</span>';
-    // 30 小类：按 4 大类分组的热力图
-    const subs = groupedSubsHtml(bs.subtasks, dim);
-    return `<tr><th><div class="cap-model${dim}"><strong>${m.displayName || m.id}</strong><small>${m.id}</small></div></th><td>${scores}</td><td>${gate}</td><td class="sub-cells">${subs}</td></tr>`;
+    return `<tr><th><div class="cap-model${dim}"><strong>${m.displayName || m.id}</strong><small>${m.id}</small></div></th><td>${scores}</td><td>${gate}</td></tr>`;
   }).join('');
+  renderSubMatrix();
 }
 async function showSubDetail(modelIdx, subKey) {
   const m = config.models[modelIdx]; if (!m) return;
@@ -329,8 +369,16 @@ async function showSubDetail(modelIdx, subKey) {
   <p class="hint">模型 ${m.displayName || m.id} · ${label}（${catCn}）均分 <strong>${v.avg}</strong> · 样本 ${v.n} 条 · 实测时间 ${meta.at || '—'} · 裁判 ${meta.judge || '—'}</p>`;
 }
 function bindProfile() {
-  const tb = $('profileRows');
-  if (tb && !tb._subBound) { tb.addEventListener('click', (e) => { const c = e.target.closest('.sub-cell'); if (!c) return; const tr = c.closest('tr'); const rowIdx = tr ? [...tr.parentElement.children].indexOf(tr) : 0; showSubDetail(rowIdx, c.dataset.sub); }); tb._subBound = true; }
+  const summaryTb = $('profileRows');
+  if (summaryTb && !summaryTb._subBound) { summaryTb.addEventListener('click', (e) => { /* 摘要行无热力，点击 noop */ }); summaryTb._subBound = true; }
+  const wrap = $('subMatrixWrap');
+  if (wrap && !wrap._cellBound) {
+    wrap.addEventListener('click', (e) => {
+      const c = e.target.closest('.matrix-cell'); if (!c) return;
+      showSubDetail(Number(c.dataset.model), c.dataset.sub);
+    });
+    wrap._cellBound = true;
+  }
   const dl = $('dlProfileTpl');
   if (dl && !dl._bound) { dl._bound = true; dl.onclick = async () => {
     try { const tpl = await api('/admin/api/model-data/template'); const blob = new Blob([JSON.stringify(tpl, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'model-data-template.json'; a.click(); URL.revokeObjectURL(a.href); }

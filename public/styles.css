@@ -187,11 +187,36 @@ body:not(.simple-view) .simple-only{display:none!important}
 .capability-matrix-panel th { font-size: 12px; }
 .capability-matrix-panel .cap-model strong { font-size: 14px; }
 .capability-matrix-panel .cap-model small { font-size: 12px; }
-/* 能力档案列宽：模型/官方/六维固定，30 小类列自适应 */
+/* 能力档案摘要表列宽（模型/官方/六维）；30 小类走下方矩阵 */
 .profile-panel table colgroup col:nth-child(1){width:150px}
 .profile-panel table colgroup col:nth-child(2){width:230px}
 .profile-panel table colgroup col:nth-child(3){width:280px}
-.profile-panel table colgroup col:nth-child(4){width:560px}
+/* 30 小类矩阵：横向可滚动、每列等宽 */
+.sub-matrix-wrap{margin-top:14px}
+.sub-matrix-title{margin:0 0 8px;font-size:14px;color:#1a2433}
+.sub-matrix-wrap .matrix-scroll{overflow-x:auto;border:1px solid var(--line,#e3e8ee);border-radius:10px;background:#fff;max-height:520px;overflow-y:auto}
+.sub-matrix{border-collapse:separate;border-spacing:0;font-size:11.5px;color:#1a2433}
+.sub-matrix col.row-head-col{width:170px}
+.sub-matrix col.sub-col{width:68px}
+.sub-matrix th,.sub-matrix td{padding:0;text-align:center;vertical-align:middle;border-right:1px solid rgba(18,145,80,.08);border-bottom:1px solid rgba(18,145,80,.08)}
+.sub-matrix .row-head-cell{position:sticky;left:0;z-index:2;background:#f8fafc;text-align:left;padding:8px 10px;border-right:2px solid var(--line,#e3e8ee)}
+.sub-matrix thead th{position:sticky;top:0;z-index:3;background:#f8fafc;font-weight:600}
+.sub-matrix .matrix-head th{top:0}
+.sub-matrix .matrix-subhead th{top:32px}
+.sub-matrix .matrix-cat{font-size:13px;font-weight:700;letter-spacing:.5px;padding:8px 6px;border-bottom:2px solid var(--line,#e3e8ee);background:#e3e8ee;color:#1a2433}
+.sub-matrix .matrix-sub{font-weight:400;font-size:10.5px;color:#475569;padding:4px 2px;line-height:1.15;writing-mode:horizontal-tb;white-space:nowrap}
+.sub-matrix tbody tr:nth-child(even) .matrix-cell:not(.empty){background-blend-mode:multiply}
+.sub-matrix tbody tr:nth-child(even) .matrix-cell:not(.empty)::after{content:'';position:absolute;inset:0;background:rgba(0,0,0,.04);pointer-events:none}
+.sub-matrix tbody tr:hover .matrix-cell:not(.empty){filter:brightness(1.05)}
+.sub-matrix .cap-model strong{display:block;font-size:13px}
+.sub-matrix .cap-model small{color:#98a2b3;font-size:11px;font-weight:400}
+.sub-matrix .matrix-cell{position:relative;font-variant-numeric:tabular-nums;font-size:12px;font-weight:600;padding:8px 0;cursor:pointer;transition:transform .08s}
+.sub-matrix .matrix-cell:hover{transform:scale(1.06);outline:2px solid #129150;outline-offset:-2px;position:relative;z-index:1}
+.sub-matrix .matrix-cell.best{font-weight:700}
+.sub-matrix .matrix-cell.empty{color:#b0b8c1;background:#f5f7fa;font-weight:400;cursor:default}
+.sub-matrix .matrix-cell.dim{opacity:.55}
+.matrix-title{margin-top:18px;font-size:14px;color:#1a2433}
+.profile-panel table colgroup col:nth-child(4){width:auto}
 .capability-matrix-panel th:first-child { width: 220px; }
 
 /* 3b) 定价流量构成：单行不换行 */
@@ -258,17 +283,4 @@ body:not(.simple-view) .simple-only{display:none!important}
 /* 任务分类大类+小类 */
 .task-cat { font-size: 11px; color: var(--muted, #6b7280); }
 
-/* ===== 能力档案（三层：官方benchmark / 六维实测 / 30小类实测）===== */
-.profile-panel .sub-cells{display:flex;flex-direction:column;gap:8px;min-width:540px}
-.profile-panel .sub-group{display:flex;align-items:flex-start;gap:10px}
-.profile-panel .sub-group-label{flex:none;width:84px;font-size:11.5px;color:var(--ink-2,#475569);font-weight:600;padding-top:5px;line-height:1.2}
-.profile-panel .sub-group-cells{display:flex;flex-wrap:wrap;gap:3px;flex:1}
-.profile-panel .sub-cell{display:inline-flex;flex-direction:column;align-items:center;gap:1px;padding:2px 6px;border-radius:6px;font-size:10.5px;line-height:1.15;color:#1a2433;cursor:pointer;border:1px solid rgba(18,145,80,.15);transition:transform .08s;min-width:46px}
-.profile-panel .sub-cell:hover{transform:translateY(-1px);border-color:#129150}
-.profile-panel .sub-cell b{font-size:11px;font-variant-numeric:tabular-nums}
-.profile-panel .sub-cell.dim{opacity:.45}
-.profile-panel .btn-like{display:inline-flex;align-items:center;padding:6px 12px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;cursor:pointer;font-size:12.5px;color:#1a2433}
-.profile-panel .btn-like:hover{border-color:#129150;color:#129150}
-.profile-detail{margin-top:12px;padding:14px 16px;border:1px solid #e3e8ee;border-radius:10px;background:#f8fafc}
-.profile-detail h3{margin:0;font-size:15px}
-.profile-detail h3 small{color:#67748a;font-weight:400;margin-left:6px}
+/* ===== 能力档案：30 小类矩阵（列=小类，行=模型）===== */
