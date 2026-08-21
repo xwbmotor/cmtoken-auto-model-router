@@ -41,7 +41,8 @@
         "tolerance": 0.05
       }
     },
-    "costTier": "custom"
+    "costTier": "custom",
+    "providerCostWeight": 0.1
   },
   "semanticRouter": {
     "enabled": true,

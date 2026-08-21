@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeCostIndex, computeCostIndexFromPricing } from '../src/config.mjs';
+import { computeCostIndex, computeCostIndexFromPricing, computeCostIndexProvider } from '../src/config.mjs';
 
 test('computeCostIndex 由部署资源估算相对成本，最贵归一化到 1', () => {
   const models = [
@@ -68,4 +68,29 @@ test('computeCostIndexFromPricing 跳过缺价模型，不足两个返回 null',
     { id: 'c', pricingYuanPerMillionTokens: { input: 1, output: 2 } },
   ];
   assert.equal(computeCostIndexFromPricing(models, { pricingMix: { input: 10, output: 1 } }), null);
+});
+
+test('computeCostIndexProvider 平台侧指数：单位吞吐资源占用归一（真实部署数据口径）', () => {
+  // 2026-08 实录数据：dsf 12机412tps / q36 2机520tps / q38 10机300tps（均 910B2 单卡，卡价权重 1）
+  const models = [
+    { id: 'dsf', deployment: { deviceType: '910B2', machines: 12, cardsPerMachine: 1, tps: 412 } },
+    { id: 'q36', deployment: { deviceType: '910B2', machines: 2, cardsPerMachine: 1, tps: 520 } },
+    { id: 'q38', deployment: { deviceType: '910B2', machines: 10, cardsPerMachine: 1, tps: 300 } }
+  ];
+  const result = computeCostIndexProvider(models, { cardPrice: { '910B2': 1 } });
+  // q38 单位吞吐吃卡最多 → 1.0；q36 2卡扛520tps 最省 → 0.115；dsf 0.874
+  assert.equal(result.q38, 1);
+  assert.ok(Math.abs(result.q36 - 0.115) < 0.001, `q36 应≈0.115，实际 ${result.q36}`);
+  assert.ok(Math.abs(result.dsf - 0.874) < 0.001, `dsf 应≈0.874，实际 ${result.dsf}`);
+});
+
+test('computeCostIndexProvider 与用户侧 costIndex 独立（同模型两口径可背离）', () => {
+  const models = [
+    { id: 'a', deployment: { deviceType: '910B2', machines: 1, cardsPerMachine: 1, tps: 1000 } },
+    { id: 'b', deployment: { deviceType: '910B2', machines: 1, cardsPerMachine: 1, tps: 100 } }
+  ];
+  const provider = computeCostIndexProvider(models, { cardPrice: { '910B2': 1 } });
+  // b 吞吐低 10 倍 → 平台侧成本是 a 的 10 倍 → 封顶 1.0；a = 0.1
+  assert.equal(provider.b, 1);
+  assert.ok(Math.abs(provider.a - 0.1) < 0.001);
 });

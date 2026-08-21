@@ -213,8 +213,12 @@ function livePenalty(modelId, health, config) {
 // 评分策略注册表：config.routing.scoreStrategy 选择，未来可加 'learned' 等
 const SCORE_STRATEGIES = {
   weighted({ model, quality, config, uncertainty, dynamicPenalty, selfBonus, effectiveCostWeight }) {
+    // 成本双指标：costIndex=用户侧结算价（豆价），costIndexProvider=平台侧资源消耗（卡/吞吐）。
+    // 两个独立权重各自配置，默认 providerCostWeight=0（不改变既有行为）。
+    const providerWeight = Number(config.routing.providerCostWeight ?? 0);
     return config.routing.qualityWeight * quality
       - effectiveCostWeight * Number(model.costIndex || 0)
+      - providerWeight * Number(model.costIndexProvider ?? 0.5) // 无部署数据的模型取 0.5 中性值，不奖不罚
       - config.routing.latencyWeight * Number(model.latencyIndex || 0)
       - uncertainty - dynamicPenalty + selfBonus;
   }

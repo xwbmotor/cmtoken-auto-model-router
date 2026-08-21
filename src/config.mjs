@@ -44,8 +44,9 @@ export function validateConfig(config) {
   }
   if (!config.routing || !['active', 'shadow'].includes(config.routing.mode)) throw new Error('routing.mode 必须是 active 或 shadow');
   if (config.routing.costTier != null && !['budget', 'balanced', 'quality', 'max', 'custom'].includes(config.routing.costTier)) throw new Error('routing.costTier 必须是 budget/balanced/quality/max/custom');
-  const bounded = [['qualityFloor', 0, 1], ['qualityWeight', 0, 3], ['costWeight', 0, 1], ['latencyWeight', 0, 1], ['selfHostedBonus', 0, 1], ['activeTrafficPercent', 0, 100], ['complexQualityMargin', 0, 0.3]];
+  const bounded = [['qualityFloor', 0, 1], ['qualityWeight', 0, 3], ['costWeight', 0, 1], ['latencyWeight', 0, 1], ['selfHostedBonus', 0, 1], ['activeTrafficPercent', 0, 100], ['complexQualityMargin', 0, 0.3], ['providerCostWeight', 0, 1]];
   for (const [name, min, max] of bounded) {
+    if (config.routing[name] === undefined) continue; // 未配置视为默认值（如 providerCostWeight 缺省=0），向后兼容旧配置
     const value = Number(config.routing[name]);
     if (!Number.isFinite(value) || value < min || value > max) throw new Error(`routing.${name} 必须在 ${min} 到 ${max} 之间`);
   }
@@ -186,6 +187,27 @@ export function computeCostIndex(models, costModel) {
   return result;
 }
 
+// 平台侧成本指数（成本双指标之二）：与用户侧结算价（pricing 口径 costIndex）分开，
+// 度量平台自有算力的资源消耗强度 = 单位吞吐占用的硬件资源（机数×卡数×卡价权重 / 单实例吞吐）。
+// 用户侧看豆价（每豆换多少 token），平台侧看卡（同样吞吐谁吃卡少）；两者背离正是调度要同时管的事。
+export function computeCostIndexProvider(models, costModel) {
+  const cardPrice = costModel?.cardPrice || {};
+  const costs = [];
+  for (const model of models) {
+    const d = model.deployment;
+    if (!d || !d.machines || !d.tps) continue;
+    const cardWeight = Number(cardPrice[d.deviceType] || 1);
+    const hardwareWeight = Number(d.machines) * (Number(d.cardsPerMachine) || 1) * cardWeight;
+    costs.push({ id: model.id, unitCost: hardwareWeight / Number(d.tps) });
+  }
+  if (costs.length < 2) return null;
+  const anchor = Math.max(...costs.map((c) => c.unitCost));
+  if (!(anchor > 0)) return null;
+  const result = {};
+  for (const c of costs) result[c.id] = Number(Math.min(1, (c.unitCost / anchor)).toFixed(3));
+  return result;
+}
+
 export async function loadConfig() {
   const raw = await readFile(configPath(), 'utf8');
   const config = validateConfig(JSON.parse(raw));
@@ -197,6 +219,14 @@ export async function loadConfig() {
     if (computed) {
       for (const model of config.models) {
         if (computed[model.id] != null) model.costIndex = computed[model.id];
+      }
+    }
+    // 平台侧成本指数独立于 costModel.source：无论用户侧走 pricing 还是 deployment 口径，
+    // 只要模型有部署数据就计算 provider 指数（权重 providerCostWeight=0 时不影响评分，仅展示）
+    const providerIndex = computeCostIndexProvider(config.models, config.costModel);
+    if (providerIndex) {
+      for (const model of config.models) {
+        if (providerIndex[model.id] != null) model.costIndexProvider = providerIndex[model.id];
       }
     }
   }

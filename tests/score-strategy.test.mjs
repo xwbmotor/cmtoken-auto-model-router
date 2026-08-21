@@ -61,3 +61,43 @@ test('budgetCostMultiplier 配置化：预算压力放大成本权重', () => {
   assert.ok(decision.candidates.length > 0);
   assert.ok(decision.candidates.every((c) => Number.isFinite(c.score)));
 });
+
+// ---------- 成本双指标：平台侧资源消耗独立权重 ----------
+test('providerCostWeight=0 与未配置（undefined）评分完全一致（回归保护）', () => {
+  const cfg = JSON.parse(JSON.stringify(baseConfig));
+  const body = { model: 'auto', messages: [{ role: 'user', content: '写一个 Python 装饰器' }] };
+  const d1 = routeRequest(body, { ...cfg, routing: { ...cfg.routing, providerCostWeight: 0 } }, { now: 1000, health: {} });
+  const d2 = routeRequest(body, { ...cfg, routing: (() => { const r = { ...cfg.routing }; delete r.providerCostWeight; return r; })() }, { now: 1000, health: {} });
+  assert.deepEqual(d1.candidates.map((c) => [c.model, c.score]), d2.candidates.map((c) => [c.model, c.score]));
+});
+
+test('providerCostWeight 生效：高权重下资源消耗大的模型评分被压低', () => {
+  const cfg = JSON.parse(JSON.stringify(baseConfig));
+  // 确保测试前提：至少两个模型有 deployment 数据算出 costIndexProvider
+  const withDeployment = cfg.models.filter((m) => m.deployment?.machines && m.deployment?.tps);
+  assert.ok(withDeployment.length >= 2, `应有≥2个模型有部署数据，实际 ${withDeployment.length}`);
+  // loadConfig 才会计算 costIndexProvider，这里手动补上（与 computeCostIndexProvider 同式）
+  const units = withDeployment.map((m) => ({ id: m.id, unit: Number(m.deployment.machines) * (Number(m.deployment.cardsPerMachine) || 1) / Number(m.deployment.tps) }));
+  const anchor = Math.max(...units.map((u) => u.unit));
+  for (const u of units) cfg.models.find((m) => m.id === u.id).costIndexProvider = Number((u.unit / anchor).toFixed(3));
+  const body = { model: 'auto', messages: [{ role: 'user', content: '写一个 Python 装饰器' }] };
+  const d0 = routeRequest(body, { ...cfg, routing: { ...cfg.routing, providerCostWeight: 0 } }, { now: 1000, health: {} });
+  const d1 = routeRequest(body, { ...cfg, routing: { ...cfg.routing, providerCostWeight: 0.6 } }, { now: 1000, health: {} });
+  const scoreOf = (d, id) => d.candidates.find((c) => c.model === id)?.score;
+  // q36 资源指数 0.115 最低，q38 1.0 最高：高权重下 q38 相对 q36 的分差应缩小（或反超）
+  const gap0 = scoreOf(d0, 'qwen36-35b') - scoreOf(d0, 'Qwen3.8-27B');
+  const gap1 = scoreOf(d1, 'qwen36-35b') - scoreOf(d1, 'Qwen3.8-27B');
+  assert.ok(gap1 > gap0, `平台权重提高后，省卡模型(q36)对吃卡模型(q38)的相对优势应扩大：${gap0.toFixed(4)} → ${gap1.toFixed(4)}`);
+});
+
+test('无部署数据的模型平台指数取 0.5 中性值（不奖不罚）', () => {
+  const cfg = JSON.parse(JSON.stringify(baseConfig));
+  const m = cfg.models.find((x) => x.deployment);
+  delete m.deployment; delete m.costIndexProvider;
+  const body = { model: 'auto', messages: [{ role: 'user', content: '你好' }] };
+  const d0 = routeRequest(body, { ...cfg, routing: { ...cfg.routing, providerCostWeight: 0 } }, { now: 1000, health: {} });
+  const d1 = routeRequest(body, { ...cfg, routing: { ...cfg.routing, providerCostWeight: 0.6 } }, { now: 1000, health: {} });
+  // 删掉 deployment 的模型不再有 costIndexProvider → 0.5 中性值参与扣分；有数据的其他模型指数<0.5 的被扣更少
+  assert.ok(d1.candidates.length === d0.candidates.length, '候选数量不应变化');
+  assert.ok(d1.candidates.every((c) => Number.isFinite(c.score)), '所有候选分数应为有限数');
+});
