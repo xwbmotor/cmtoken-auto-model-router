@@ -58,3 +58,18 @@ test('max 档只排除最低端', () => {
   assert.ok(!d.rejected.some((r) => r.model === 'mid'));
   assert.ok(['mid', 'top'].includes(d.suggestedModel));
 });
+
+test('max 档不排空真实池：新价（2026-08-20 算力豆价）三模型全部入选（顶配档 min 0.3→0.2 防回归）', () => {
+  // 新价 costIndex：qwen36 0.196 / Qwen3.8 0.236 / dsf 0.298（dsf 由最便宜变为最贵）。
+  // 修复前 max 档 min=0.3 把三者全排除 → routeRequest 抛「没有候选模型」，切顶配档即管理台报错。
+  const newPriceModels = [
+    { id: 'dsf', ownership: 'self_hosted', enabled: true, costIndex: 0.298, latencyIndex: 0.21, quality: { default: 0.92 }, calibrationStatus: 'verified' },
+    { id: 'q36', ownership: 'self_hosted', enabled: true, costIndex: 0.196, latencyIndex: 0.4, quality: { default: 0.833 }, calibrationStatus: 'verified' },
+    { id: 'q38', ownership: 'self_hosted', enabled: true, costIndex: 0.236, latencyIndex: 0.286, quality: { default: 0.92 }, calibrationStatus: 'verified' }
+  ];
+  const cfg = makeConfig('max', {}, {});
+  cfg.models = newPriceModels;
+  const d = routeRequest(body, cfg, { health: {} });
+  assert.ok(d.rejected.every((r) => !r.reasons.includes('below_cost_tier') || r.model === 'q36'), '仅最便宜的 q36(0.196<0.2) 允许被顶配档排除，其余不许');
+  assert.ok(['dsf', 'q38'].includes(d.suggestedModel), '顶配档应仍有两个候选可选，不空池');
+});

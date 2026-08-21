@@ -74,3 +74,20 @@ test('分类器评测资产齐备：heldout.jsonl 与 evaluate_classifier.py 存
     assert.ok(typeof row.text === 'string' && row.text.length > 0);
   }
 });
+
+test('Zero-Router 哈希负数防回归：FNV-1a 溢出产生负哈希时索引必须归一化（真实 12 样本+新价 3 模型前沿复现 2026-08-21 simulate 400）', async () => {
+  // 2026-08-21 新价上线后 /admin/api/simulate 稳定 400：zeroRouterChoice 里 front[h % len]
+  // 在 h 为负数时产生负索引 → undefined → 读 .capabilities 崩。旧价 2 模型前沿负索引恰好
+  // 落在 [-1,0] 内有效，掩盖了此 bug；新价 3 模型前沿出现 -2 索引才暴露。
+  // 这四个样本的 FNV-1a(requestText) 均为负数（-271207372 等），修复前必崩。
+  const negativeHashSamples = [
+    { messages: [{ role: 'user', content: '分析 Java 计数器 n++ 的并发安全问题，给出最小修复和单元测试。' }] },
+    { messages: [{ role: 'user', content: '比较 Saga、TCC 和本地消息表三种分布式事务方案，从一致性、成本、复杂度和恢复能力给出取舍。' }] },
+    { messages: [{ role: 'user', content: '为企业内部 AI 助手写三条简洁宣传语，每条不超过18字。' }] },
+    { messages: [{ role: 'user', content: '编写 PostgreSQL 查询，统计最近30天每个用户的订单金额并按金额降序。' }] },
+  ];
+  for (const body of negativeHashSamples) {
+    const chosen = zeroRouterChoice(body, config); // 修复前：TypeError: Cannot read properties of undefined
+    assert.ok(chosen === null || typeof chosen === 'object', `负哈希样本应返回模型或 null，而非崩溃：${JSON.stringify(body.messages[0].content).slice(0, 30)}`);
+  }
+});

@@ -5,7 +5,7 @@ const COST_TIERS = {
   budget:  { label: '省钱', min: 0,    max: 0.2 },
   balanced:{ label: '均衡', min: 0,    max: 0.5 },
   quality: { label: '质量', min: 0.15, max: 1 },
-  max:     { label: '顶配', min: 0.3,  max: 1 }
+  max:     { label: '顶配', min: 0.2,  max: 1 }
 };
 export function costTierBand(config) {
   const tier = config.routing?.costTier;
@@ -263,7 +263,7 @@ export function zeroRouterChoice(body, config, runtime = {}) {
   const text = requestText(body);
   let h = 2166136261;
   for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
-  const model = front[h % front.length];
+  const model = front[((h % front.length) + front.length) % front.length]; // FNV-1a 溢出可产生负数，负数取模得负索引 → 归一化到 [0, len)
   const reasons = [];
   if (model.capabilities && capabilityEligible(model, runtime.analysis?.requirements || {}).length) return null;
   return model;
