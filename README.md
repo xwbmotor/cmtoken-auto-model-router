@@ -16,6 +16,8 @@
 
 本项目只有一个版本号：**软件版本**（SemVer `0.X.X`），唯一来源是 `package.json` 的 `version`，配合 `git tag vX.Y.Z`。
 
+- 递增规则（2026-08-22 起）：修 bug / 调参数 = patch（末位 +1）；**新增功能 = minor bump**（中位 +1，末位归零）；主版本保持 0 直到对外承诺接口长期稳定。0.4.27 是最后一个 0.4.x，下一版起 0.5.0。
+
 - 运行时所有对外暴露的版本（`/health` 的 `configVersion`、响应头 `x-router-policy-version`、`/metrics` 的 `router_config_version`、管理后台显示）都取这个值。
 - `config/router.json` 不再维护独立的整数修订号；配置变更历史由 `config/history/` 目录按时间戳归档（每次保存自动备份上一版）。
 - 发布流程：改代码 → bump `package.json` 版本 → `git commit` → `git tag vX.Y.Z` → `git push --tags`。
