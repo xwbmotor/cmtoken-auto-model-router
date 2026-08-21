@@ -22,7 +22,7 @@
       <section class="panel arch-panel"><div class="panel-head"><div><p class="eyebrow">一图看懂</p><h2>请求进来后发生了什么</h2><p class="hint">每个 model=auto 的请求按这五步选出模型，全程毫秒级、对调用方透明。</p></div><button id="gotoManual" class="link-btn" style="font-size:12px">完整说明 →</button></div>
         <div class="arch-flow">
           <div class="arch-step"><span class="arch-num">1</span><div><strong>识别任务</strong><p>关键词规则判断请求是代码 / 推理 / 抽取 / 创意 / 通用中的哪类，附带难度估计</p></div></div>
-          <div class="arch-step"><span class="arch-num">2</span><div><strong>低置信复核</strong><p>规则拿不准时（置信度低），复核模型再判一遍——可设为仅观察或正式采用</p></div></div>
+          <div class="arch-step"><span class="arch-num">2</span><div><strong>低置信复核</strong><p>规则拿不准时（置信度低），复核模型再判一遍——小模型为主，拿不准升级大模型兜底；可设为仅观察或正式采用</p></div></div>
           <div class="arch-step"><span class="arch-num">3</span><div><strong>候选过滤</strong><p>按成本档位、能力要求（工具/JSON/视觉）、健康状态筛出合格模型</p></div></div>
           <div class="arch-step"><span class="arch-num">4</span><div><strong>打分排序</strong><p>质量 × 成本 × 时延加权打分，结合任务难度取最优，自建模型可加偏好</p></div></div>
           <div class="arch-step"><span class="arch-num">5</span><div><strong>转发与兜底</strong><p>会话粘住同一模型；失败自动换下一个；响应头带回全部决策信息</p></div></div>

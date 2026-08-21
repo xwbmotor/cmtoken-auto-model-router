@@ -129,8 +129,8 @@
         <rect x="300" y="225" width="280" height="110" rx="6" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
         <text x="440" y="250" fill="white" font-size="12" font-weight="600" text-anchor="middle">② 语义复核  classifySemantically()</text>
         <text x="440" y="270" fill="#94a3b8" font-size="9" text-anchor="middle">仅 confidence &lt; 0.7 触发（省成本时延）</text>
-        <text x="440" y="286" fill="#94a3b8" font-size="9" text-anchor="middle">provider: openai-chat / http-json / disabled</text>
-        <text x="440" y="302" fill="#94a3b8" font-size="9" text-anchor="middle">统一合同覆盖 task·tier·complexity</text>
+        <text x="440" y="286" fill="#94a3b8" font-size="9" text-anchor="middle">provider: openai-chat / http-json / cascade / disabled</text>
+        <text x="440" y="302" fill="#94a3b8" font-size="9" text-anchor="middle">cascade: 小模型先判 → 拿不准升大模型兜底</text>
         <text x="440" y="318" fill="#34d399" font-size="8" text-anchor="middle">自训练小模型可无缝替换</text>
 
         <!-- ③ 加权评分 -->

@@ -149,7 +149,7 @@ systemctl daemon-reload && systemctl enable --now auto-router
 | 错误率 >1% | 最近请求失败项 | 上游故障为主 → 报 MaaS；路由器缺陷 → 回滚上个 git tag |
 | 租户计费疑义 | decision log | 按 requestId 查决策日志，给出模型选择依据 |
 | 管理端连不上 | ADMIN_TOKEN | 轮换后旧值立即失效（时序安全比较），填新值 |
-| 分类器挂了 | classifier 容器 | shadow 无影响；active 自动回退规则层，服务不中断 |
+| 分类器挂了 | classifier 容器 | shadow 无影响；active 自动回退规则层（级联方式先升大模型再判，两级都挂才回退），服务不中断 |
 | 429 频出 | 限流计数 | 正常保护；单租户长期顶格 → 调 config.rateLimit |
 
 ### 扩容与回滚
