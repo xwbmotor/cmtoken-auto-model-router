@@ -153,7 +153,7 @@ document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => apply
 
 // ── 业务策略只读锁：默认只读，点「解锁修改」才能调整 ──
 const POLICY_INPUTS = ['#mode', '#activeTrafficPercent', '#preferSelf', '#reasoningEnabled', '#decisionLogEnabled',
-  '#costTier', '#qualityFloor', '#costWeight', '#latencyWeight', '#budgetEnabled', '#dailyBudget',
+  '#costTier', '#qualityFloor', '#costWeight', '#providerCostWeight', '#latencyWeight', '#budgetEnabled', '#dailyBudget',
   '#budgetThreshold', '#selfBonus', '#qualityWeight', '#complexQualityMargin', '#uncertaintyPenalty', '#maxAttempts']
   .flatMap(sel => Array.from(document.querySelectorAll(sel))).concat(
     Array.from(document.querySelectorAll('#tierPicker input')));
