@@ -136,15 +136,21 @@ const BODY_LIMITS = {
 const DEFAULT_BODY_LIMIT = 64 * 1024;  // 健康检查、reload、metrics、decisions 等 GET/POST 小体
 
 async function readJson(req) {
+  const text = await readRawBody(req);
+  try { return JSON.parse(text); } catch { throw new Error('请求体不是合法 JSON'); }
+}
+async function readRawBody(req) {
   const limit = BODY_LIMITS[req.url ? new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname : ''] ?? DEFAULT_BODY_LIMIT;
   const chunks = [];
   let size = 0;
+  let overLimit = false;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > limit) throw new Error(`请求体超过 ${Math.round(limit / 1024)}KB 上限`);
+    if (size > limit) { overLimit = true; continue; } // 不 destroy 连接（会 RST 掉客户端 fetch）：继续读完再返回 400
     chunks.push(chunk);
   }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+  if (overLimit) throw new Error(`请求体超过 ${Math.round(limit / 1024)}KB 上限`);
+  return Buffer.concat(chunks);
 }
 
 function safeEqual(a, b) {
@@ -163,6 +169,11 @@ function authorized(req, envName) {
 function record(entry) {
   recent.unshift(entry);
   if (recent.length > 200) recent.length = 200;
+  // routeMethod 分布（三层 UI：L1 规则定案占比 = rules / (rules+semantic)）
+  if (entry.routeMethod) {
+    const by = counters.routeMethod ||= {};
+    by[entry.routeMethod] = (by[entry.routeMethod] || 0) + 1;
+  }
 }
 
 // key 指纹筛选（最近请求面板）：内存环形缓冲里也带 keyFingerprint（v0.4.27）
@@ -239,7 +250,7 @@ function simulatePolicy(policyConfig) {
     const model = policyConfig.models.find((item) => item.id === decision.suggestedModel);
     const costYuan = estimateCostYuan(sample.body, decision.analysis, model, policyConfig, decision.reasoningLevel || 'off');
     const latencyMs = model?.avgLatencyMs ?? Math.round(Number(candidate?.latencyIndex || 0) * 43787);
-    return { id: sample.id, label: sample.label, task: decision.analysis.task, subTask: decision.analysis.subTask || '', complexity: decision.analysis.complexity, tier: decision.analysis.tier, model: decision.suggestedModel, quality: candidate?.quality || 0, costIndex: Number(candidate?.costIndex || 0), latencyIndex: Number(candidate?.latencyIndex || 0), costYuan: costYuan == null ? null : Number(costYuan), latencyMs, signals: decision.analysis.signals };
+    return { id: sample.id, label: sample.label, task: decision.analysis.task, subTask: decision.analysis.subTask || '', complexity: decision.analysis.complexity, tier: decision.analysis.tier, model: decision.suggestedModel, quality: candidate?.quality || 0, costIndex: Number(candidate?.costIndex || 0), costIndexProvider: Number(model?.costIndexProvider ?? 0.5), latencyIndex: Number(candidate?.latencyIndex || 0), costYuan: costYuan == null ? null : Number(costYuan), latencyMs, signals: decision.analysis.signals, requirements: decision.analysis.requirements };
   });
   const distribution = {};
   for (const row of rows) distribution[row.model] = (distribution[row.model] || 0) + 1;
@@ -249,6 +260,45 @@ function simulatePolicy(policyConfig) {
     return Number((values.reduce((sum, value) => sum + Number(value), 0) / values.length).toFixed(3));
   };
   const selfIds = new Set(policyConfig.models.filter((model) => model.ownership === 'self_hosted').map((model) => model.id));
+  // 固定单模型基线（「不做 auto」的具象化）：给每个模型算「全部流量都给它」的 质量均值/用户成本/平台成本/时延，
+  // 与当前策略对比得百分比——回答「这套策略相对直接用某个模型，成本省多少、质量变化多少」。
+  const singleModelBaselines = policyConfig.models.map((model) => {
+    const picks = rows.map((row) => {
+      const q = Number(model.quality?.[row.task] ?? model.quality?.default ?? 0);
+      return { quality: q, costIndex: Number(model.costIndex || 0), costIndexProvider: Number(model.costIndexProvider ?? 0.5), latencyIndex: Number(model.latencyIndex || 0) };
+    });
+    const avg = (f) => Number((picks.reduce((s, p) => s + p[f], 0) / picks.length).toFixed(3));
+    return {
+      model: model.id,
+      displayName: model.displayName || model.id,
+      averageQuality: avg('quality'),
+      averageCostIndex: avg('costIndex'),
+      averageCostIndexProvider: avg('costIndexProvider'),
+      averageLatencyIndex: avg('latencyIndex'),
+      feasible: rows.every((row) => !row.requirements || Object.entries(row.requirements).every(([cap, req]) => !req || model.capabilities?.[cap] !== false))
+    };
+  });
+  const vsCheapest = singleModelBaselines.length
+    ? singleModelBaselines.reduce((a, b) => (a.averageCostIndex <= b.averageCostIndex ? a : b))
+    : null;
+  const vsStrongest = singleModelBaselines.length
+    ? singleModelBaselines.reduce((a, b) => (a.averageQuality >= b.averageQuality ? a : b))
+    : null;
+  const pct = (a, b) => (a == null || b == null || b === 0 ? null : Number((((a - b) / b) * 100).toFixed(1)));
+  const comparison = {
+    // 对比锚点：全用最便宜模型（成本下界/质量受损）与全用最强模型（质量上界/成本失控）
+    anchors: { cheapest: vsCheapest?.model, strongest: vsStrongest?.model },
+    current: {
+      quality: average('quality'),
+      costIndex: average('costIndex'),
+      costIndexProvider: average('costIndexProvider'),
+      latencyIndex: average('latencyIndex')
+    },
+    currentVsCheapest: { costDeltaPct: pct(average('costIndex'), vsCheapest?.averageCostIndex), qualityDeltaPct: pct(average('quality'), vsCheapest?.averageQuality) },
+    currentVsStrongest: { costDeltaPct: pct(average('costIndex'), vsStrongest?.averageCostIndex), qualityDeltaPct: pct(average('quality'), vsStrongest?.averageQuality) },
+    singleModelBaselines
+  };
+
   // 论文标准锚点：Zero-Router（Pareto 前沿哈希分发）与 Oracle（逐请求事后最优）。
   // 同一批样本上聚合质量/成本/时延，回答"当前路由距随机基线和理论上界各差多少"。
   const baselines = { zeroRouter: { label: '随机基线（Pareto 前沿）' }, oracle: { label: '事后最优上界' } };
@@ -271,7 +321,7 @@ function simulatePolicy(policyConfig) {
     const avg = (f) => Number((picks.reduce((s, p) => s + p[f], 0) / picks.length).toFixed(3));
     baselines[key] = { label: baselines[key].label, modelDistribution: picks.reduce((acc, p) => ({ ...acc, [p.model]: (acc[p.model] || 0) + 1 }), {}), averageQuality: avg('quality'), averageCostIndex: avg('costIndex'), averageLatencyIndex: avg('latencyIndex'), fallbackCount };
   }
-  return { rows, distribution, averageQuality: average('quality'), averageCostIndex: average('costIndex'), averageLatencyIndex: average('latencyIndex'), averageCostYuan: average('costYuan'), averageLatencyMs: average('latencyMs'), selfHostedRate: Number((rows.filter((row) => selfIds.has(row.model)).length / rows.length).toFixed(3)), paretoFrontier: paretoFrontier(policyConfig.models).map((m) => m.id), baselines };
+  return { rows, distribution, averageQuality: average('quality'), averageCostIndex: average('costIndex'), averageLatencyIndex: average('latencyIndex'), averageCostYuan: average('costYuan'), averageLatencyMs: average('latencyMs'), selfHostedRate: Number((rows.filter((row) => selfIds.has(row.model)).length / rows.length).toFixed(3)), paretoFrontier: paretoFrontier(policyConfig.models).map((m) => m.id), baselines, comparison };
 }
 
 // 敏感度分析：对三个运营滑条（成本敏感度/速度敏感度/最低质量目标）各做一次翻转点扫描。
@@ -780,7 +830,12 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.setHeader('access-control-allow-headers', 'authorization,content-type,x-session-id,x-request-id'); res.writeHead(204); return res.end(); }
   if (req.method === 'GET' && url.pathname === '/metrics') {
     // Prometheus 抓取端点：默认要求 METRICS_TOKEN（未设置时仅本机绑定可用——见下方 host 判断）
-    if (process.env.METRICS_TOKEN && !safeEqual(req.headers.authorization, `Bearer ${process.env.METRICS_TOKEN}`)) return errorJson(res, 401, 'Metrics Token 无效', 'authentication_error');
+    if (process.env.METRICS_TOKEN && !safeEqual(req.headers.authorization, `Bearer ${process.env.METRICS_TOKEN}`)) {
+      // 鉴权失败限速（与 admin 同一个更严的桶）：防 metrics token 暴力破解
+      const verdict = adminAuthLimiter.check('admin-auth-fail:' + (req.socket.remoteAddress || 'unknown'));
+      if (!verdict.allowed) return json(res, 429, { error: { message: '鉴权失败次数过多，请稍后再试', type: 'rate_limit_exceeded', code: 429 } }, { 'retry-after': String(Math.ceil(verdict.retryAfterMs / 1000)) });
+      return errorJson(res, 401, 'Metrics Token 无效', 'authentication_error');
+    }
     const disk = await decisionLog.diskUsage();
     const body = renderPrometheusMetrics({ counters, health, budget: budgetTracker.snapshot(), decisionLog: { ...decisionLog.snapshot(), diskUsage: disk }, config, sessions: sessions.size, draining: shutdownManager.draining, inflight: shutdownManager.inflightCount() });
     res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
@@ -818,6 +873,65 @@ const server = http.createServer(async (req, res) => {
         }
       ]
     });
+  }
+  // Excel 模板（CSV with BOM，Excel 双击打开不乱码）：一行一模型，分数列即 benchmarkScores.scores
+  if (req.method === 'GET' && url.pathname === '/admin/api/model-data/template-xlsx') {
+    const esc = (v) => /[",\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : String(v ?? '');
+    const header = ['模型ID(必填)', '榜单名/来源', '录入日期', 'gpqa_diamond', 'swe_bench', 'livecodebench', 'evalGate-total', 'evalGate-default', 'evalGate-coding', 'evalGate-reasoning', 'evalGate-creative', 'evalGate-extraction', 'evalGate-simple'];
+    const rows = [header];
+    for (const m of config.models) {
+      const bs = m.benchmarkScores || {};
+      const s = bs.scores || {}; const g = bs.evalGate || {};
+      rows.push([m.id, bs.scoresMeta?.source || '', bs.scoresMeta?.at || '', s.gpqa_diamond ?? '', s.swe_bench ?? '', s.livecodebench ?? '', g.total ?? '', g.default ?? '', g.coding ?? '', g.reasoning ?? '', g.creative ?? '', g.extraction ?? '', g.simple ?? '']);
+    }
+    const csv = '\uFEFF' + rows.map((r) => r.map(esc).join(',')).join('\r\n');
+    res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="model-data-template.csv"' });
+    return res.end(csv);
+  }
+  // CSV 导入：与 JSON 导入同一合并语义（模板下载 → Excel 编辑 → 上传回来）
+  if (req.method === 'POST' && url.pathname === '/admin/api/model-data/import-xlsx') {
+    try {
+      const raw = (await readRawBody(req)).toString('utf-8').replace(/^\uFEFF/, '');
+      const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+      if (lines.length < 2) return errorJson(res, 400, 'CSV 至少需要表头+一行数据', 'invalid_request_error');
+      const parseLine = (line) => {
+        const cells = []; let cur = ''; let inQ = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (inQ) { if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') inQ = false; else cur += ch; }
+          else if (ch === '"') inQ = true;
+          else if (ch === ',') { cells.push(cur); cur = ''; } else cur += ch;
+        }
+        cells.push(cur);
+        return cells.map((c) => c.trim());
+      };
+      const header = parseLine(lines[0]);
+      const applied = []; const skipped = [];
+      const col = (name) => header.findIndex((h) => h.includes(name));
+      for (const line of lines.slice(1)) {
+        const cells = parseLine(line);
+        const id = cells[0];
+        if (!id) continue;
+        const target = config.models.find((m) => m.id === id);
+        if (!target) { skipped.push(`${id} 不存在`); continue; }
+        const num = (i) => { const v = Number(cells[i]); return cells[i] !== '' && Number.isFinite(v) ? v : null; };
+        const bs = target.benchmarkScores ||= {};
+        const scores = {}; let hasScore = false;
+        for (const k of ['gpqa_diamond', 'swe_bench', 'livecodebench']) { const i = col(k); if (i >= 0) { const v = num(i); if (v != null) { scores[k] = v; hasScore = true; } } }
+        if (hasScore) Object.assign(bs.scores ||= {}, scores);
+        const gate = {}; let hasGate = false;
+        for (const k of ['total', 'default', 'coding', 'reasoning', 'creative', 'extraction', 'simple']) { const i = col('evalGate-' + k); if (i >= 0) { const v = num(i); if (v != null) { gate[k] = v; hasGate = true; } } }
+        if (hasGate) Object.assign(bs.evalGate ||= {}, gate);
+        const src = cells[col('榜单名')] || '';
+        if (src) { bs.scoresMeta ||= {}; bs.scoresMeta.source = src; bs.scoresMeta.at = cells[col('录入日期')] || new Date().toISOString().slice(0, 10); }
+        else { bs.scoresMeta ||= {}; bs.scoresMeta.at = new Date().toISOString().slice(0, 10); }
+        bs.updatedAt = new Date().toISOString().slice(0, 10);
+        applied.push(id);
+      }
+      if (!applied.length) return errorJson(res, 400, `全部 ${skipped.length} 条被跳过：${skipped.join('；')}`, 'invalid_request_error');
+      config = await saveConfig(config);
+      return json(res, 200, { ok: true, applied, skipped, format: 'csv' });
+    } catch (error) { return errorJson(res, 400, error.message, 'invalid_request_error'); }
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/model-data/import') {
     try {

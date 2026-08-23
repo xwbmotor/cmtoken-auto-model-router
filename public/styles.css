@@ -289,3 +289,7 @@ body:not(.simple-view) .simple-only{display:none!important}
 .task-cat { font-size: 11px; color: var(--muted, #6b7280); }
 
 /* ===== 能力档案：30 小类矩阵（列=小类，行=模型）===== */
+
+/* key 指纹（最近请求）：默认灰显不抢眼，hover 出完整指纹提示 */
+.recent-item .key-fp{color:var(--muted);border-bottom:1px dotted var(--muted);cursor:help}
+.recent-item .key-fp:hover{color:var(--text)}

@@ -285,6 +285,10 @@ function bindPolicy() {
   const chatModel = config.semanticRouter?.openaiChat?.model || config.semanticRouter?.model;
   $('semanticModel').innerHTML = config.models.map((m) => `<option value="${m.id}" ${m.id === chatModel ? 'selected' : ''}>${m.displayName || m.id}</option>`).join('');
   $('semanticHttpUrl').value = config.semanticRouter?.httpJson?.url || '';
+  // L1 规则定案占比（来自服务端 counters.routeMethod）：(rules+shadow) / (rules+shadow+semantic)
+  const rm = metrics?.counters?.routeMethod || {};
+  const rulesN = (rm.rules || 0) + (rm.rules_semantic_shadow || 0); const semN = rm.semantic || 0;
+  const rc = $('rulesCoverage'); if (rc) { const tot = rulesN + semN; rc.textContent = tot ? `${Math.round(rulesN / tot * 100)}%（近 ${tot} 笔）` : '暂无流量'; rc.className = 'pill ' + (tot ? 'good' : 'muted'); }
   $('decisionLogEnabled').checked = Boolean(config.decisionLog?.enabled);
   const matched = Object.entries(PRESETS).find(([key, p]) => key !== 'custom' && ['qualityFloor','costWeight','latencyWeight','selfHostedBonus'].every((f) => Math.abs(r[f] - p[f]) < .005));
   const tierNow = matched?.[0] || (PRESETS[r.costTier] ? r.costTier : 'custom');
@@ -415,15 +419,21 @@ function bindProfile() {
   }
   const dl = $('dlProfileTpl');
   if (dl && !dl._bound) { dl._bound = true; dl.onclick = async () => {
-    try { const tpl = await api('/admin/api/model-data/template'); const blob = new Blob([JSON.stringify(tpl, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'model-data-template.json'; a.click(); URL.revokeObjectURL(a.href); }
+    try {
+      const res = await fetch('/admin/api/model-data/template-xlsx', { headers: headers() });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error?.message || `HTTP ${res.status}`);
+      const blob = await res.blob(); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'model-data-template.csv'; a.click(); URL.revokeObjectURL(a.href);
+    }
     catch (e) { toast(e.message, true); }
   }; }
   const f = $('importProfileFile');
   if (f && !f._bound) { f._bound = true; f.onchange = async () => {
     const file = f.files?.[0]; if (!file) return; f.value = '';
     try {
-      const text = await file.text(); const data = JSON.parse(text);
-      const r = await api('/admin/api/model-data/import', { method: 'POST', body: JSON.stringify(data) });
+      const isCsv = /\.csv$/i.test(file.name);
+      const r = isCsv
+        ? await api('/admin/api/model-data/import-xlsx', { method: 'POST', body: await file.text() })
+        : await api('/admin/api/model-data/import', { method: 'POST', body: JSON.stringify(JSON.parse(await file.text())) });
       config = await api('/admin/api/config'); snapshotBaseline(); renderProfile();
       $('profileImportMsg').textContent = `导入成功 ${r.applied.length} 个${r.skipped?.length ? `，跳过 ${r.skipped.length} 个（${r.skipped.join('；')}）` : ''}`;
       toast(`模型数据已导入 ${r.applied.length} 个`);
@@ -471,6 +481,26 @@ function renderSimulation(result) {
   $('impactSummary').innerHTML = `<article class="impact ${risk}"><span>模型切换</span><strong>${result.changed}/${result.sampleCount}</strong><small>${percentValue(result.changedRate)} 代表任务改变</small></article><article><span>预计质量</span>${metricDelta(c.averageQuality,p.averageQuality)}</article>${(c.averageCostYuan!=null&&p.averageCostYuan!=null)?`<article><span>平均单次成本 <span class="help" data-help="按 12 个代表性任务（含系统提示词+多轮上下文+业务文档）的平均输入输出量、按厂商目录价5折结算价估算。DeepSeek V4 Flash 结算价输入 0.5 元/百万 token、输出 1 元/百万 token，因此单次多在 0.0001~0.012 元（1 厘~1 分）区间——这是真实结算价口径，不是市场价。">?</span></span>${metricDeltaCost(c.averageCostYuan,p.averageCostYuan,true)}</article>`:`<article><span>成本指数</span>${metricDelta(c.averageCostIndex,p.averageCostIndex,true)}</article>`}${(c.averageLatencyMs!=null&&p.averageLatencyMs!=null)?`<article><span>平均端到端时延 <span class="help" data-help="从发出请求到收完完整回答的总耗时（含模型思考时间），按代表性任务平均。">?</span></span>${metricDeltaMs(c.averageLatencyMs,p.averageLatencyMs,true)}</article>`:`<article><span>时延指数</span>${metricDelta(c.averageLatencyIndex,p.averageLatencyIndex,true)}</article>`}<article><span>自建比例</span><strong>${percentValue(p.selfHostedRate)}</strong><small>当前 ${percentValue(c.selfHostedRate)}</small></article>`;
   $('impactRows').innerHTML = p.rows.map((row,i) => { const before=c.rows[i], changed=before.model!==row.model; const sc3 = subCategoryOf(row.task, row.subTask); return `<tr><td><strong>${row.label}</strong><br><small>${sc3[2]} ${sc3[0]} · ${sc3[3]}</small></td><td>${Math.round(row.complexity*100)} · ${tierCN(row.tier)}</td><td>${before.model}</td><td>${row.model}</td><td><span class="pill ${changed?'bad':'good'}">${changed?'切换':'不变'}</span></td></tr>`; }).join('');
   renderSensitivity(result.sensitivity);
+  renderNoAutoCompare(result);
+}
+// 「不做 auto」对比表：调整后策略 vs 全量固定给每个单模型（质量/用户成本/平台成本/时延 + 百分比变化）
+function renderNoAutoCompare(result) {
+  const box = $('noAutoCompare'); if (!box) return;
+  const cmp = result.proposed?.comparison || result.comparison;
+  if (!cmp || !cmp.singleModelBaselines?.length) { box.innerHTML = ''; return; }
+  const p = result.proposed;
+  const fmt = (v, suffix = '%') => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + suffix;
+  const rowsHtml = cmp.singleModelBaselines.map((b) => {
+    const dQ = p.averageQuality != null && b.averageQuality ? ((p.averageQuality - b.averageQuality) / b.averageQuality) * 100 : null;
+    const dC = p.averageCostIndex != null && b.averageCostIndex ? ((p.averageCostIndex - b.averageCostIndex) / b.averageCostIndex) * 100 : null;
+    const dP = p.averageCostIndexProvider != null && b.averageCostIndexProvider ? ((p.averageCostIndexProvider - b.averageCostIndexProvider) / b.averageCostIndexProvider) * 100 : null;
+    const pills = [];
+    if (dQ != null) pills.push(`<span class="pill ${dQ >= 0 ? 'good' : 'bad'}" title="质量变化">质量${fmt(dQ)}</span>`);
+    if (dC != null) pills.push(`<span class="pill ${dC <= 0 ? 'good' : 'bad'}" title="用户成本变化">用户成本${fmt(dC)}</span>`);
+    if (dP != null) pills.push(`<span class="pill ${dP <= 0 ? 'good' : 'bad'}" title="平台成本变化">平台成本${fmt(dP)}</span>`);
+    return `<tr><td><b>${escHtml(b.displayName || b.model)}</b>${b.feasible === false ? ' <span class="pill bad" style="font-size:11px">能力不足</span>' : ''}</td><td>${b.averageQuality?.toFixed(3) ?? '—'}</td><td>${b.averageCostIndex?.toFixed(3) ?? '—'}</td><td>${b.averageCostIndexProvider?.toFixed(3) ?? '—'}</td><td>${pills.join(' ')}</td></tr>`;
+  }).join('');
+  box.innerHTML = `<p class="policy-section-title" style="margin:4px 0 6px">不做 auto 会怎样 <span class="help" data-help="把全部流量固定给某个模型（不做路由）的模拟结果 vs 当前调整后的策略。质量越高越好；用户成本=按豆价结算；平台成本=按算力资源消耗；负值=策略比固定该模型更省。">?</span></p><div class="table-wrap"><table><thead><tr><th>固定给单一模型</th><th>质量</th><th>用户成本</th><th>平台成本</th><th>当前策略相对它</th></tr></thead><tbody>${rowsHtml}</tbody></table></div><p class="hint" style="margin:6px 0 0">「不做 auto」= 同一批代表任务全部发给该模型。「当前策略相对它」列是百分比变化，绿=更优。这张表回答：不路由直接用某个模型，质量和成本各差多少。</p>`;
 }
 // 调整手感：每个滑条「再拉多少才会变 / 拉到头也变不了的原因」
 function renderSensitivity(s) {
@@ -500,7 +530,7 @@ function renderRecentKeySelect(){ // key 指纹下拉：从最近请求里聚合
   const cur=sel.value; sel.innerHTML='<option value="">全部调用方</option>'+[...seen.entries()].map(([fp,n])=>`<option value="${fp}">${fp} · ${n} 笔</option>`).join('');
   sel.value=[...seen.keys()].includes(cur)?cur:''; $('recentKeyHint').textContent=`当前 ${seen.size} 个调用方 key 在线`;
 }
-function renderMetrics(){ const c=metrics.counters; $('total').textContent=c.total; $('autoRate').textContent=percent(c.auto,c.total); const selfIds=new Set(config.models.filter(m=>m.ownership==='self_hosted').map(m=>m.id)); const self=Object.entries(c.selected).filter(([id])=>selfIds.has(id)).reduce((s,[,n])=>s+n,0); $('selfRate').textContent=percent(self,c.success); $('semanticRate').textContent=percent(c.semantic?.disagreed||0,c.semantic?.succeeded||0); $('budgetRate').textContent=metrics.budget?.enabled?percentValue(metrics.budget.pressure):'未启用'; $('fallback').textContent=c.fallback; $('errorRate').textContent=percent(c.errors,c.total); document.querySelectorAll('#models tr').forEach(row=>{const m=config.models[Number(row.dataset.index)],h=metrics.health[m.id],cell=row.querySelector('.health'); cell.innerHTML=!h?'<span class="pill muted">无数据</span>':h.circuitState==='half_open'?'<span class="pill muted">恢复探测</span>':h.circuitOpenUntil>Date.now()?'<span class="pill bad">熔断</span>':`<span class="pill good">${h.ewmaLatencyMs}ms · ${h.failures}错</span>`}); renderRecentKeySelect(); $('recent').innerHTML=metrics.recent.length?metrics.recent.map(x=>{const reasonTag=x.reasoningApplied===false&&x.reasoningLevel&&x.reasoningLevel!=='off'?` · 推理${x.reasoningLevel}(建议未生效)`:` · 推理${x.reasoningLevel||'off'}`; return `<div class="recent-item"><time>${new Date(x.at).toLocaleTimeString()}</time><div><b>${x.selected}</b> <small>← ${x.requested} · ${x.keyFingerprint?`key ${x.keyFingerprint} · `:''}${taskCN(x.task)} · ${METHOD_CN[x.routeMethod]||x.routeMethod||'规则'}${reasonTag}${x.fallbackAttempt?` · fallback ${x.fallbackAttempt}`:''}</small></div><span class="pill ${x.ok?'good':'bad'}">${x.ok?`${x.latencyMs}ms`:'失败'}</span></div>`;}).join(''):'<p class="empty">暂无请求</p>'; }
+function renderMetrics(){ const c=metrics.counters; $('total').textContent=c.total; $('autoRate').textContent=percent(c.auto,c.total); const selfIds=new Set(config.models.filter(m=>m.ownership==='self_hosted').map(m=>m.id)); const self=Object.entries(c.selected).filter(([id])=>selfIds.has(id)).reduce((s,[,n])=>s+n,0); $('selfRate').textContent=percent(self,c.success); $('semanticRate').textContent=percent(c.semantic?.disagreed||0,c.semantic?.succeeded||0); $('budgetRate').textContent=metrics.budget?.enabled?percentValue(metrics.budget.pressure):'未启用'; $('fallback').textContent=c.fallback; $('errorRate').textContent=percent(c.errors,c.total); document.querySelectorAll('#models tr').forEach(row=>{const m=config.models[Number(row.dataset.index)],h=metrics.health[m.id],cell=row.querySelector('.health'); cell.innerHTML=!h?'<span class="pill muted">无数据</span>':h.circuitState==='half_open'?'<span class="pill muted">恢复探测</span>':h.circuitOpenUntil>Date.now()?'<span class="pill bad">熔断</span>':`<span class="pill good">${h.ewmaLatencyMs}ms · ${h.failures}错</span>`}); renderRecentKeySelect(); $('recent').innerHTML=metrics.recent.length?metrics.recent.map(x=>{const reasonTag=x.reasoningApplied===false&&x.reasoningLevel&&x.reasoningLevel!=='off'?` · 推理${x.reasoningLevel}(建议未生效)`:` · 推理${x.reasoningLevel||'off'}`; return `<div class="recent-item"><time>${new Date(x.at).toLocaleTimeString()}</time><div><b>${x.selected}</b> <small>← ${x.requested}${x.keyFingerprint?` · <span class="key-fp" title="调用方 key 指纹：${x.keyFingerprint}（可在上方下拉按它筛选）">${x.keyFingerprint}</span>`:''} · ${taskCN(x.task)} · ${METHOD_CN[x.routeMethod]||x.routeMethod||'规则'}${reasonTag}${x.fallbackAttempt?` · fallback ${x.fallbackAttempt}`:''}</small></div><span class="pill ${x.ok?'good':'bad'}">${x.ok?`${x.latencyMs}ms`:'失败'}</span></div>`;}).join(''):'<p class="empty">暂无请求</p>'; }
 async function connect(){ try{sessionStorage.setItem('routerAdminToken',$('token').value); [config,metrics]=await Promise.all([api('/admin/api/config'),api('/admin/api/metrics')]);snapshotBaseline(); $('status').textContent=`已连接 · v${config.version}`; $('status').className='pill good'; renderMetrics(); renderOverview(); renderTaskBoard(); renderMarketSignal(); applyPolicyLock(); await simulate();}catch(error){$('status').textContent='连接失败';$('status').className='pill bad';toast(error.message,true)} }
 $('token').value=sessionStorage.getItem('routerAdminToken')||''; $('connect').onclick=connect; $('refresh').onclick=async()=>{try{metrics=await api('/admin/api/metrics');renderMetrics();renderOverview()}catch(e){toast(e.message,true)}}; if($('recentKeySelect')) $('recentKeySelect').onchange=async()=>{try{metrics=await api('/admin/api/recent-key-filter',{method:'POST',body:JSON.stringify({key:$('recentKeySelect').value||null})});metrics=await api('/admin/api/metrics');renderMetrics();renderOverview();toast($('recentKeySelect').value?`已筛选 key ${$('recentKeySelect').value}`:'已显示全部调用方')}catch(e){toast(e.message,true)}}; $('reload').onclick=()=>{if(!savedConfig)return;config=structuredClone(savedConfig);snapshotBaseline();renderMetrics();simulate();toast('已恢复到当前线上版本')}; $('refreshBoard').onclick = () => { renderTaskBoard(); renderMarketSignal(); };
 if ($('probeSemantic')) $('probeSemantic').onclick = async () => {

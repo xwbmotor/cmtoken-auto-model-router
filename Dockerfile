@@ -11,6 +11,7 @@ WORKDIR /app
 # 非 root 运行（node 镜像自带 node 用户 uid=1000）
 COPY --chown=node:node src/ ./src/
 COPY --chown=node:node public/ ./public/
+COPY --chown=node:node docs/ ./docs/
 COPY --chown=node:node package.json README.md ./
 # config 作为无挂载启动时的兜底；生产用 compose 卷覆盖
 COPY --chown=node:node config/router.json ./config/router.json

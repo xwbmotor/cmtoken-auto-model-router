@@ -23,14 +23,14 @@ docker --version && docker compose version   # 两个都有输出即可
 
 ```bash
 # Windows 构建机
-docker build -t cmt-auto-model-router:0.4.24 .
-docker save cmt-auto-model-router:0.4.24 | gzip > amr-image-0.4.24.tar.gz
+docker build -t cmt-auto-model-router:<版本号> .   # <版本号> 填当前发布版本，如 0.5.0
+docker save cmt-auto-model-router:<版本号> | gzip > amr-image-<版本号>.tar.gz
 ```
 
 ```bash
 # Ubuntu 宿主机
 sudo mkdir -p /opt/amr/{config,data}
-docker load -i amr-image-0.4.24.tar.gz
+docker load -i amr-image-<版本号>.tar.gz
 # 拷贝仓库里这三个文件到 /opt/amr/（scp/U盘均可）：
 #   docker-compose.prod.yml  → /opt/amr/
 #   config/router.json       → /opt/amr/config/router.json
@@ -133,7 +133,7 @@ docker compose -f docker-compose.prod.yml down                 # 停止
 # 构建机出新版镜像 tar → 宿主机
 docker load -i amr-image-<new-ver>.tar.gz
 cd /opt/amr
-sed -i "s/cmt-auto-model-router:0.4.24/cmt-auto-model-router:<new-ver>/" docker-compose.prod.yml
+sed -i "s/cmt-auto-model-router:<版本号>/cmt-auto-model-router:<new-ver>/" docker-compose.prod.yml
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 

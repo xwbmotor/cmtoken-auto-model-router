@@ -1,22 +1,22 @@
-# Auto Model Router 实验服务
+# Auto Model Router
 
-一个零第三方运行依赖的 OpenAI Chat Completions 兼容代理，为 4 个自建模型和 1 个生态模型提供 `model=auto`、自建优先、Shadow 实验、熔断降级、配置管理及监控页面。
+一个零第三方运行依赖的 OpenAI Chat Completions 兼容代理：`model=auto` 一入口，按任务类型与难度自动从模型池选型——自建优先、质量底线、双成本指标（用户侧豆价 + 平台侧算力资源）、Shadow 灰度、熔断降级、配置管理与监控页面一体。
 
 可以直接连接 MaaS，也可以采用 `Auto Router → LiteLLM → MaaS`。LiteLLM 的职责边界见 [集成说明](docs/litellm.md)。
 
 > `config/router.json` 中的 `quality` 分数来自两级校准：冷启动先验（公开 benchmark 映射 + `scripts/benchmark-to-quality.mjs`）和 eval gate 实测（`config/eval-gate.json`，50 条真实用例裁判打分）。真实流量跑够量后由校准判定自动解除 `uncertaintyPenalty`。
 
-当前实验配置已禁用生态模型 `Minimax-M3` 和自建模型 `minimax-m25`（原因见 `benchmark-results/REASONING-VERIFICATION-SUMMARY-2026-08-17.md`：其思考无法关闭），Auto 候选和 fallback 只包含 3 个自建模型；需要时可在管理端重新启用。（`benchmark-results/` 为运行时产物，不入库，克隆后由 `npm run benchmark` 生成）
+模型池在 `config/router.json` 注册（示例配置含 3 个自建模型；历史曾评测 `minimax-m25`——思考无法关闭——与 `hy3-preview`、`Minimax-M3`，均已移除/禁用）。`benchmark-results/` 为运行时产物，不入库，克隆后由 `npm run benchmark` 生成。
 
 完整的开发、测试和运营操作步骤见 [Auto Model Router 使用说明](docs/使用说明.md)。
 
-移交给新的开发智能体时，请先让其阅读 [智能体交接说明](docs/智能体交接说明.md)。
+交接给新的开发智能体时，请先让其阅读 [智能体交接说明](docs/智能体交接说明.md)。
 
 ## 版本规范
 
 本项目只有一个版本号：**软件版本**（SemVer `0.X.X`），唯一来源是 `package.json` 的 `version`，配合 `git tag vX.Y.Z`。
 
-- 递增规则（2026-08-22 起）：修 bug / 调参数 = patch（末位 +1）；**新增功能 = minor bump**（中位 +1，末位归零）；主版本保持 0 直到对外承诺接口长期稳定。0.4.27 是最后一个 0.4.x，下一版起 0.5.0。
+- 递增规则：修 bug / 调参数 = patch（末位 +1）；**新增功能 = minor bump**（中位 +1，末位归零）；主版本保持 0 直到对外承诺接口长期稳定。
 
 - 运行时所有对外暴露的版本（`/health` 的 `configVersion`、响应头 `x-router-policy-version`、`/metrics` 的 `router_config_version`、管理后台显示）都取这个值。
 - `config/router.json` 不再维护独立的整数修订号；配置变更历史由 `config/history/` 目录按时间戳归档（每次保存自动备份上一版）。
@@ -50,7 +50,12 @@
 - 模型选择与推理强度建议分离；只有标记为已验证的模型才会收到推理参数
 - 真实输入/输出单价与 P95 注册、每日预算软保护
 - `CLOSED → OPEN → HALF_OPEN` 受控熔断恢复
-- 五模型基准测试脚本
+- 多模型基准测试脚本（对全部启用模型跑 8 项任务）
+- 「不做 auto」对比（v0.5.0）：影响预估新增固定单模型基线表——同一批代表任务全量固定给每个模型与当前策略并排比较质量/用户成本/平台成本/时延百分比，换策略与横向汇报直接有数
+- 三层分类架构可视化（v0.5.0）：质量复核页改为 L1 规则层 → L2 小模型复核层 → L3 大模型复核层三卡片布局，每层独立配置（L1 规则内置于代码、L2 端点地址、L3 模型选择+级联阈值），并显示规则层高置信定案占比（counters.routeMethod）
+- 模型能力数据 Excel 导入导出（v0.5.0）：`GET /admin/api/model-data/template-xlsx`（CSV+BOM，Excel 直接打开）+ `POST /admin/api/model-data/import-xlsx`，前端按钮样式统一，兼容 JSON 导入
+- 管理端点鉴权失败限速（v0.5.0）：`/admin` 与 `/metrics` 鉴权失败按 IP 限速（10 次/分钟），连续失败临时封禁
+- 使用手册容器化（v0.5.0）：Dockerfile 补 COPY `docs/`，修复云容器 `/manual` 404
 
 流量与健康指标保存在内存中，服务重启后清空；预算估算账本持久化到 `data/budget-ledger.json`，路由决策日志持久化到 `data/decisions/`。实验验证通过后应接 PostgreSQL/ClickHouse 和 Prometheus。
 
@@ -125,12 +130,12 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8787/v1/chat/completions -H
 
 1. 在管理端将模式切换为 `shadow`，实际仍走 `shadowModel`。
 2. 收集真实流量中的 Auto 建议、任务类型、复杂度和模型健康。
-3. 运行五模型基准测试，并人工复核编程、推理和创意任务。
+3. 运行基准测试（对全部启用模型），并人工复核编程、推理和创意任务。
 4. 更新每个模型分任务质量、成本与时延指数。
 5. 先对低风险调用启用 `active`，观察自建承载率、错误率和 fallback。
 6. 再接持久化指标、租户级策略、流量百分比灰度和质量反馈。
 
-## 五模型基准测试
+## 基准测试
 
 先查看计划，不发送请求：
 

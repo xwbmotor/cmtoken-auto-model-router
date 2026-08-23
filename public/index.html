@@ -85,12 +85,12 @@
         </div>
       </div><details class="advanced"><summary>高级参数（建议由算法负责人维护）</summary><div class="policy-grid"><label><span class="lbl">质量权重 <span class="help" data-help="质量分在总评分中的基础权重，越高越看重模型效果。">?</span></span><input id="qualityWeight" type="number" min="0" max="3" step="0.01"></label><label><span class="lbl">复杂任务质量加严 <span class="help" data-help="复杂任务临时提高质量门槛（0~0.3），防止难题被发到较弱模型。">?</span></span><input id="complexQualityMargin" type="number" min="0" max="0.3" step="0.01"><small>复杂任务额外增加的质量门槛。</small></label><label><span class="lbl">新模型观察期扣分 <span class="help" data-help="对尚未跑够真实流量的新模型扣分，防止高估其能力；积累足够真实表现后自动解除。">?</span></span><input id="uncertaintyPenalty" type="number" min="0" max="1" step="0.01"></label><label><span class="lbl">最多尝试次数 <span class="help" data-help="首选模型失败后，最多再尝试几个备选模型。">?</span></span><input id="maxAttempts" type="number" min="1" max="5"></label></div></details>
     </section>
-    <section class="panel impact-panel"><div class="panel-head"><div><h2>调整影响预估</h2><p class="hint">上面策略的任何调整都会即时反映在这里：多少任务的模型会切换、质量/成本/时延怎么变。基于 10 类代表性任务计算，不调用模型、不产生费用。</p></div><button id="simulate" class="secondary">重新模拟</button></div><div id="impactSummary" class="impact-summary"><p class="empty">连接后自动计算调整前后的影响。</p></div><div id="sensitivityBox" class="sensitivity-box" hidden></div><div class="table-wrap"><table><thead><tr><th>代表任务</th><th>难度</th><th>当前模型</th><th>调整后模型</th><th>变化</th></tr></thead><tbody id="impactRows"></tbody></table></div>
+    <section class="panel impact-panel"><div class="panel-head"><div><h2>调整影响预估</h2><p class="hint">上面策略的任何调整都会即时反映在这里：多少任务的模型会切换、质量/成本/时延怎么变。基于 10 类代表性任务计算，不调用模型、不产生费用。</p></div><button id="simulate" class="secondary">重新模拟</button></div><div id="impactSummary" class="impact-summary"><p class="empty">连接后自动计算调整前后的影响。</p></div><div id="noAutoCompare" class="no-auto-compare" style="margin-top:10px"></div><div id="sensitivityBox" class="sensitivity-box" hidden></div><div class="table-wrap"><table><thead><tr><th>代表任务</th><th>难度</th><th>当前模型</th><th>调整后模型</th><th>变化</th></tr></thead><tbody id="impactRows"></tbody></table></div>
       <details class="advanced baseline-details"><summary>基线对照（随机基线 / 事后最优）<span class="help" data-help="随机基线=把请求随机分给成本-时延都不吃亏的模型（打不过它说明任务区分度不够）；事后最优=每题都选到理论最优模型（理论上界）。当前路由应落在两者之间。">?</span></summary><div id="baselineRows" class="baseline-grid"><p class="empty">连接后自动计算。</p></div></details></section>
       <section class="panel danger-note"><strong>安全发布</strong><span>每次发布前自动模拟影响并保存上一版本。高影响调整需要二次确认；建议先把 Auto 生效流量设为 5%–10%，观察后逐步放量。</span></section>
     </section>
     <section class="tab-page" data-tab="models" hidden>
-      <section class="panel profile-panel"><div class="panel-head"><div><p class="eyebrow">模型能力</p><h2>能力档案</h2><p class="hint">三层透视：官方 benchmark 榜单分（厂商/公开榜单发布）· 六维实测（本网真实环境打分，路由直接使用）· 30 小类实测（4 大类 30 小类口径，本网裁判打分）。实测反映模型在本网推理环境下的真实水平，可与官方榜互相印证。支持模板导入。</p></div><div class="actions"><button id="dlProfileTpl" class="secondary">下载导入模板</button><label class="secondary btn-like" for="importProfileFile">上传导入<input id="importProfileFile" type="file" accept=".json,application/json" hidden></label><span id="profileImportMsg" class="hint"></span></div></div>
+      <section class="panel profile-panel"><div class="panel-head"><div><p class="eyebrow">模型能力</p><h2>能力档案</h2><p class="hint">三层透视：官方 benchmark 榜单分（厂商/公开榜单发布）· 六维实测（本网真实环境打分，路由直接使用）· 30 小类实测（4 大类 30 小类口径，本网裁判打分）。实测反映模型在本网推理环境下的真实水平，可与官方榜互相印证。支持模板导入。</p></div><div class="actions"><button id="dlProfileTpl" class="secondary">下载导入模板（Excel）</button><label class="secondary btn-like" for="importProfileFile">上传导入（.csv / .json）<input id="importProfileFile" type="file" accept=".csv,text/csv,.json,application/json" hidden></label><span id="profileImportMsg" class="hint"></span></div></div>
       <div class="table-wrap"><table><colgroup><col><col><col></colgroup><thead><tr><th>模型</th><th>官方 Benchmark <span class="help" data-help="厂商或公开榜单发布的分数（如 GPQA-Diamond、SWE-bench、LiveCodeBench），0~1 归一。用于跨模型横向参照。">?</span></th><th>六维实测 <span class="help" data-help="本网真实环境实测的六维均分，即路由打分层直接使用的能力分。">?</span></th></tr></thead><tbody id="profileRows"><tr><td colspan="3" class="empty">连接后自动加载。</td></tr></tbody></table></div>
       <h3 class="matrix-title">30 小类实测矩阵 <span class="help" data-help="30 个任务小类（4 大类）作为列、模型作为行；每格为该模型在该小类的均分，背景红绿热度，列内三模型最高分高亮。点击格子看明细。">?</span></h3>
       <div id="subMatrixWrap" class="sub-matrix-wrap"></div>
@@ -113,30 +113,42 @@
     </section>
     <section class="tab-page" data-tab="semantic" hidden>
       <section class="panel">
-      <div class="panel-head"><div><p class="eyebrow">质量复核</p><h2>复核方式</h2><p class="hint">规则分类拿不准的请求（置信度低），再让复核模型重新判一遍任务类型，减少分错档。这里选谁来复核、结果是否生效。</p></div></div>
-            <div class="policy-section">
-        <p class="policy-section-title">① 复核方式</p>
+      <div class="panel-head"><div><p class="eyebrow">三层分类架构</p><h2>复核方式与三层配置</h2><p class="hint">请求分类走三层漏斗：<b>L1 规则层</b>（关键词/正则，零成本、毫秒级）→ <b>L2 小模型复核层</b>（规则拿不准时介入）→ <b>L3 大模型复核层</b>（小模型也拿不准时兜底）。分类结果决定请求发给模型池里的哪个模型。每层独立启停、独立配置。</p></div></div>
+      <div class="arch-steps tri-layer">
+        <div class="arch-step layer-card" id="layerCardRules"><span class="arch-num">L1</span><div><strong>规则层</strong><p>关键词+正则分类，零成本毫秒级。所有请求的第一道判定，4大类30小类口径。</p></div></div>
+        <div class="arch-step layer-card" id="layerCardSmall"><span class="arch-num">L2</span><div><strong>小模型复核层</strong><p>规则置信度不足时介入的自训练小模型（本网部署，HTTP 端点）。</p></div></div>
+        <div class="arch-step layer-card" id="layerCardLarge"><span class="arch-num">L3</span><div><strong>大模型复核层</strong><p>小模型也拿不准时的 MaaS 大模型兜底（级联第二级），或直接用大模型复核。</p></div></div>
+      </div>
+      <div class="policy-section">
+        <p class="policy-section-title">全局开关（决定 L2/L3 是否参与）</p>
         <div class="policy-grid business-policy">
-          <label><span class="lbl">由谁复核 <span class="help" data-help="选「不启用」时只靠关键词规则分类；选了任一复核方式后，规则置信度不足的请求都会触发复核。「级联」先用自训练小模型，小模型失败或拿不准时再升级 MaaS 大模型兜底——大部分请求只花小模型的成本，分不准的少数才付大模型调用。">?</span></span><select id="semanticProvider"><option value="disabled">不启用（只靠规则分类）</option><option value="http-json">自训练小模型（本网部署）</option><option value="openai-chat">MaaS 大模型</option><option value="cascade">级联（小模型 → 大模型兜底）</option></select><small>换组件后用下方「体检」验证效果。</small></label>
+          <label><span class="lbl">由谁复核 <span class="help" data-help="决定 L2/L3 哪几层参与。「不启用」=只靠 L1 规则分类；「自训练小模型」=L2；「MaaS 大模型」=L3；「级联」=L2 失败或拿不准时自动升级 L3——大部分请求只花 L2 的成本，少数才付 L3 调用。">?</span></span><select id="semanticProvider"><option value="disabled">不启用（只靠 L1 规则层）</option><option value="http-json">L2：自训练小模型（本网部署）</option><option value="openai-chat">L3：MaaS 大模型</option><option value="cascade">级联 L2 → L3（小模型优先，大模型兜底）</option></select><small>换组件后用下方「体检」验证效果。</small></label>
           <label><span class="lbl">复核结果怎么用 <span class="help" data-help="「仅观察」=后台默默对比复核与规则的分歧、不改变线上路由；「正式采用」=低置信请求按复核结果选模型。">?</span></span><select id="semanticMode"><option value="shadow">仅观察分歧，不改变路由</option><option value="active">正式采用复核结果</option></select><small>建议先观察再采用。</small></label>
-          <label><span class="lbl">复核触发阈值 <span class="help" data-help="规则分类置信度低于该阈值时才触发复核（避免每条都复核的开销）。">?</span></span><input id="semanticThreshold" type="number" min="0" max="1" step="0.05"><small>规则置信度低于该值时才复核。</small></label>
-          <label><span class="lbl">复核采纳阈值 <span class="help" data-help="复核模型对自己判断不够自信（低于此值）时不采纳、仍按规则路由。0=全部采纳。级联方式下此值兼任升级线：小模型置信度低于它就升级大模型。">?</span></span><input id="semanticMinConfidence" type="number" min="0" max="1" step="0.05" value="0"><small>低于此值退回规则层（级联=升级大模型）。</small></label>
+          <label><span class="lbl">复核触发阈值 <span class="help" data-help="规则分类置信度低于该阈值时才触发复核（避免每条都复核的开销）。">?</span></span><input id="semanticThreshold" type="number" min="0" max="1" step="0.05"><small>L1 置信度低于该值时才进 L2/L3。</small></label>
+          <label><span class="lbl">复核采纳阈值 <span class="help" data-help="复核模型对自己判断不够自信（低于此值）时不采纳、仍按规则路由。0=全部采纳。级联方式下此值兼任升级线：小模型置信度低于它就升级大模型。">?</span></span><input id="semanticMinConfidence" type="number" min="0" max="1" step="0.05" value="0"><small>低于此值退回 L1（级联=升级 L3）。</small></label>
         </div>
       </div>
       <div class="policy-section">
-        <p class="policy-section-title">② 组件配置</p>
+        <p class="policy-section-title">L1 · 规则层</p>
         <div class="policy-grid business-policy">
-          <label class="expert-only"><span class="lbl">分类模型 <span class="help" data-help="复核方式选「MaaS 大模型」或「级联」时实际调用的大模型（级联时为第二级兜底）。">?</span></span><select id="semanticModel"></select><small>「MaaS 大模型」「级联」方式使用；纯小模型方式忽略。</small></label>
-          <label class="expert-only"><span class="lbl">小模型端点地址 <span class="help" data-help="选「自训练小模型」或「级联」方式时，小模型服务的 HTTP 地址（发文本、返回分类结果）。">?</span></span><input id="semanticHttpUrl" type="text" placeholder="http://127.0.0.1:9000/classify"><small>「自训练小模型」「级联」方式使用。POST 一条工单分类样例，返回 {"task","tier","complexity","confidence","reason"}。</small></label>
+          <label><span class="lbl">规则集 <span class="help" data-help="规则层的分类规则内置于 src/router.mjs，按 OpenRouter 4 大类 30 小类口径实现（代码即规则），所有环境一致，改规则=改代码发版。规则分类的准确率可在下方「组件体检」评测。">?</span></span><span class="pill good">内置 · 4大类30小类 · 常驻生效</span><small>规则在代码里（保证一致性），页面不可改；调优走「组件体检」验证后发版。</small></label>
+          <label><span class="lbl">规则高置信定案占比 <span class="help" data-help="最近真实流量里 L1 规则以高置信度直接定案（无需复核）的占比——越高说明规则层消化得越多、复核成本越低。">?</span></span><span id="rulesCoverage" class="pill muted">连接后显示</span><small>来自决策日志的 routeMethod 统计。</small></label>
+        </div>
+      </div>
+      <div class="policy-section">
+        <p class="policy-section-title">L2 · 小模型复核层</p>
+        <div class="policy-grid business-policy">
+          <label class="expert-only"><span class="lbl">端点地址 <span class="help" data-help="选「自训练小模型」或「级联」时，小模型服务的 HTTP 地址（POST 文本、返回分类 JSON）。">?</span></span><input id="semanticHttpUrl" type="text" placeholder="http://127.0.0.1:9000/classify"><small>合同：POST 工单样例 → {"task","tier","complexity","confidence","reason"}。</small></label>
           <label class="expert-only probe-inline"><span class="lbl">连通性自检 <span class="help" data-help="向上面填写的端点地址发一条真实分类请求，逐层验证：网络通 → HTTP 200 → 返回 JSON → 字段齐全。">?</span></span><span><button id="probeSemantic" class="secondary">🔌 测试小模型连通性</button><small>本机开发需先启动 scripts/serve_classifier.bat（:8788）；compose 部署自动拉起。</small></span></label>
         </div>
         <div id="semanticProbeResult" class="probe-result" hidden></div>
       </div>
-      </section>
-      <section class="panel">
-        <div class="panel-head"><div><p class="eyebrow">质量复核</p><h2>组件体检</h2><p class="hint">换复核组件前后各跑一次，数字直接对比：准确率、与规则层的分歧、切换到正式采用后的全局影响。</p></div><div class="actions"><button id="evalClassifier" class="secondary">评测分类器</button><button id="replaySwitch" class="secondary">切换影响预估</button></div></div>
-      <div id="classifierReport" class="classifier-report"><p class="empty">点击「评测分类器」在标准评测集上对比小模型与规则的准确率、混淆矩阵。</p></div>
-      <div id="replayReport" class="classifier-report" style="margin-top:12px"><p class="empty">点击「切换影响预估」回放 454 条标准集：切到正式采用后判准率/成本/质量怎么变、误判方向如何。</p></div>
+      <div class="policy-section">
+        <p class="policy-section-title">L3 · 大模型复核层</p>
+        <div class="policy-grid business-policy">
+          <label class="expert-only"><span class="lbl">复核大模型 <span class="help" data-help="选「MaaS 大模型」或「级联」时实际调用的大模型（级联时为第二级兜底）。建议选便宜快速的模型——它只做分类判断不写正文。">?</span></span><select id="semanticModel"></select><small>「MaaS 大模型」「级联」方式使用；纯小模型方式忽略。</small></label>
+        </div>
+      </div>
       </section>
     </section>
     <section class="tab-page" data-tab="debug" hidden>

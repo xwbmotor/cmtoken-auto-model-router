@@ -5,7 +5,7 @@ import { appendFileSync } from 'node:fs';
 
 const JUDGE = 'url=https://api.z.ai/api/coding/paas/v4|model=glm-5.3|key=GLMCODE_API_KEY';
 const MODELS = [];
-const LOG = 'C:/Users/xwbmo/AppData/Local/Temp/gate56-all.log';
+const LOG = process.env.TEMP ? process.env.TEMP.replace(/\\/g, '/') + '/gate56-all.log' : '/tmp/gate56-all.log';
 import { writeFileSync, appendFileSync } from 'node:fs';
 function logSync(m) { appendFileSync(LOG, m + '\n'); }
 
