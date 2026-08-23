@@ -5,7 +5,6 @@ data
 state
 benchmark-results
 tests
-docs
 scripts
 config/history
 .env
