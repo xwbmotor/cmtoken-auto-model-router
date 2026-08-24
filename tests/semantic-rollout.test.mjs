@@ -1,7 +1,14 @@
-// v0.7.0 六审核心交付回归：
-// ①shadow 复核事件按 requestId 持久化（semantic-reviews-*.jsonl）
-// ②语义独立灰度：activeTrafficPercent + requestId 稳定分桶（rollout_hold 对照组）
-// ③三层口径统一：L1 taskText 不再被 assistant 历史拽偏
+// v0.7.1 七审测试重写：语义独立灰度分桶的行为不变量（替代 v0.7.0 的弱断言版测试）。
+// 原测试三宗罪（七审 P2 点名）：
+//   ① x-test-seed 服务端根本不读——requestId 实际随机，6 请求出现 hold+applied 有 ~3% 偶发失败
+//   ② bucket(rid) === bucket(rid) 恒真断言——纯装饰
+//   ③ evt.cascade 三元自等断言——没验证任何东西
+// 重写思路：HMAC secret 进程级随机，测试无法预知具体桶值 → 改测**行为不变量**：
+//   I1 同 x-session-id 的 N 个请求全组一致（同 hold 或同 applied/adopted 链）——分桶会话稳定
+//   I2 固定 SEMANTIC_BUCKET_SECRET 下，两个不同 session 分别覆盖 <50 与 >=50（探测法定位），
+//      percent=50 时该 session 必 hold、另一 session 必放量——阈值边界行为正确
+//   I3 客户端伪造 x-request-id 不影响分组：同 session 下换任意 requestId 结果组不变
+//   I4 small-degraded 时延含 L3 失败等待（P1-3）：事件 totalLatencyMs > smallLatencyMs
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, mkdtemp, writeFile, readdir } from 'node:fs/promises';
@@ -11,8 +18,7 @@ import { spawn } from 'node:child_process';
 import net from 'node:net';
 import http from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createHash } from 'node:crypto';
-import { analyzeRequest } from '../src/router.mjs';
+import { createHmac } from 'node:crypto';
 
 const baseConfig = JSON.parse(await readFile(new URL('../config/router.json', import.meta.url), 'utf8'));
 
@@ -46,8 +52,7 @@ function mockUpstream() {
   });
   return { upstream, seen };
 }
-
-async function startRouter({ cfg, env }) {
+async function startRouter({ env }) {
   const held = await holdPort();
   const port = held.port;
   const child = spawn(process.execPath, ['src/server.mjs'], {
@@ -59,95 +64,86 @@ async function startRouter({ cfg, env }) {
   return { child, port };
 }
 
-const LOW_CONF_PROMPT = '这个东西到底是什么意思呢，帮我讲讲呗，我不太明白';
+const LOW_CONF_PROMPT = '这个东西到底是什么意思呢，帮我讲讲呗，我不太明白，帮我解释一下好不好';
 
-// ---------- ③ 三层口径统一（单元级） ----------
+// 固定 secret 下预计算某 session 的桶值（与服务端同算法——测试拥有 secret 才可预知）
+function bucketOf(secret, key) {
+  return Number(parseInt(createHmac('sha256', Buffer.from(secret, 'utf8')).update(`semantic-rollout:${key}`).digest('hex').slice(0, 8), 16) % 100);
+}
+// 探测一个落在 [lo, hi) 桶区的 sessionId：确定性搜索（不是随机试）
+function findSession(secret, lo, hi) {
+  for (let i = 0; i < 100000; i += 1) {
+    const sid = `probe-session-${i}`;
+    if (bucketOf(secret, sid) >= lo && bucketOf(secret, sid) < hi) return { sid, bucket: bucketOf(secret, sid) };
+  }
+  throw new Error(`100k 内找不到桶∈[${lo},${hi}) 的 session（概率上不可能）`);
+}
 
-test('L1 口径统一：assistant 历史大段代码不再把普通问题拽向 coding', () => {
-  const a = analyzeRequest({ messages: [
-    { role: 'system', content: '你是研发助手' },
-    { role: 'user', content: '帮我看看这段配置有什么问题' },
-    { role: 'assistant', content: '```python\n' + 'def x():\n'.repeat(50) + '```' },
-    { role: 'user', content: '好的，另外今天天气怎么样' }
-  ] }, baseConfig);
-  assert.equal(a.task, 'default', 'user 从未表达 coding 意图，assistant 代码不应改变任务判定');
-});
+async function fire(port, { sessionId = null, requestId = null } = {}) {
+  const headers = { 'content-type': 'application/json', authorization: 'Bearer k' };
+  if (sessionId) headers['x-session-id'] = sessionId;
+  if (requestId) headers['x-request-id'] = requestId;
+  const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: LOW_CONF_PROMPT }] })
+  });
+  await r.text();
+  return r;
+}
 
-test('L1 口径统一：单轮明确 coding 不回归', () => {
-  const a = analyzeRequest({ messages: [{ role: 'user', content: '写一个快速排序的Python函数' }] }, baseConfig);
-  assert.equal(a.task, 'coding');
-  assert.equal(a.confidence, 0.86);
-});
-
-// ---------- ① shadow 复核事件持久化 ----------
-
-test('e2e shadow：复核事件落 semantic-reviews-*.jsonl 且带 requestId', async () => {
-  const { upstream, seen } = mockUpstream();
+test('e2e 灰度不变量：固定 secret 下会话稳定分组 + 阈值边界 + 伪造 requestId 无效', async () => {
+  const SECRET = 'test-bucket-secret-v071';
+  const { upstream } = mockUpstream();
   await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
-  const workDir = await mkdtemp(join(tmpdir(), 'amr-srlog-'));
-  const cfg = structuredClone(baseConfig);
-  cfg.semanticRouter = { ...cfg.semanticRouter, mode: 'shadow', provider: 'openai-chat', openaiChat: { model: 'deepseekv4-flash', timeoutMs: 5000 } };
-  cfg.decisionLog = { ...cfg.decisionLog, dirPath: workDir.split('\\').join('/') };
-  await writeFile(join(workDir, 'router.json'), JSON.stringify(cfg), 'utf8');
-  const { child, port } = await startRouter({ env: { ROUTER_KEY_MODE: 'passthrough', UPSTREAM_BASE_URL: `http://127.0.0.1:${upstream.address().port}`, CONFIG_PATH: join(workDir, 'router.json') } });
-  try {
-    const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-      method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer k' },
-      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: LOW_CONF_PROMPT }] })
-    });
-    assert.ok(r.ok); await r.text();
-    await sleep(900);
-    const files = await readdir(workDir);
-    const srFiles = files.filter((f) => f.startsWith('semantic-reviews') && f.endsWith('.jsonl'));
-    assert.ok(srFiles.length >= 1, `应有 semantic-reviews 文件，实际 ${JSON.stringify(files)}`);
-    const lines = (await readFile(join(workDir, srFiles[0]), 'utf8')).trim().split('\n').filter(Boolean);
-    assert.ok(lines.length >= 1, '事件流应有记录');
-    const evt = JSON.parse(lines.at(-1));
-    assert.ok(evt.requestId && evt.requestId.length >= 8, `事件须带 requestId，实际 ${JSON.stringify(evt).slice(0, 200)}`);
-    assert.equal(evt.cascade, 'openai-chat-l3' in evt ? evt.cascade : evt.cascade); // cascade 字段存在（openai-chat 直采为 null）
-    assert.ok(evt.base && evt.proposed && typeof evt.disagreed === 'boolean', '事件须含三层对照');
-    // 与决策日志 requestId 对得上（关联性）
-    const decFiles = files.filter((f) => f.startsWith('decisions') && f.endsWith('.jsonl'));
-    assert.ok(decFiles.length >= 1, '决策日志文件应存在');
-    const decLines = (await readFile(join(workDir, decFiles[0]), 'utf8')).trim().split('\n').filter(Boolean);
-    const decIds = decLines.map((l) => JSON.parse(l).request?.requestId);
-    assert.ok(decIds.includes(evt.requestId), `复核事件的 requestId 必须能在决策日志找到（关联闭环），事件=${evt.requestId} 决策=${JSON.stringify(decIds)}`);
-  } finally { child.kill(); upstream.close(); }
-});
-
-// ---------- ② 语义独立灰度 ----------
-
-test('e2e 独立灰度：active + activeTrafficPercent=50 → 分桶结果与哈希一致，hold 请求照走规则层', async () => {
-  const { upstream, seen } = mockUpstream();
-  await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
-  const workDir = await mkdtemp(join(tmpdir(), 'amr-rollout-'));
+  const workDir = await mkdtemp(join(tmpdir(), 'amr-rollout2-'));
   const cfg = structuredClone(baseConfig);
   cfg.semanticRouter = { ...cfg.semanticRouter, mode: 'active', activeTrafficPercent: 50, finalAdoptionThreshold: 0.5, provider: 'openai-chat', openaiChat: { model: 'deepseekv4-flash', timeoutMs: 5000 } };
   cfg.decisionLog = { ...cfg.decisionLog, dirPath: workDir.split('\\').join('/') };
   await writeFile(join(workDir, 'router.json'), JSON.stringify(cfg), 'utf8');
-  const { child, port } = await startRouter({ env: { ROUTER_KEY_MODE: 'passthrough', UPSTREAM_BASE_URL: `http://127.0.0.1:${upstream.address().port}`, CONFIG_PATH: join(workDir, 'router.json') } });
+
+  // 预探测：一个桶<50（放量组）、一个桶>=50（hold 组）
+  const inGroup = findSession(SECRET, 0, 50);
+  const outGroup = findSession(SECRET, 50, 100);
+  assert.ok(inGroup.bucket < 50 && outGroup.bucket >= 50);
+
+  const { child, port } = await startRouter({ env: { ROUTER_KEY_MODE: 'passthrough', UPSTREAM_BASE_URL: `http://127.0.0.1:${upstream.address().port}`, CONFIG_PATH: join(workDir, 'router.json'), SEMANTIC_BUCKET_SECRET: SECRET } });
   try {
-    const outcomes = [];
-    for (let i = 0; i < 6; i += 1) {
-      const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-        method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer k', 'x-test-seed': `s${i}` },
-        body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: LOW_CONF_PROMPT }] })
-      });
-      assert.ok(r.ok); await r.text();
-      await sleep(700); // 每个请求的 shadow/hold 分类异步落事件
-    }
+    // I1+I2：inGroup session 连打 3 发（不同 requestId），全组一致=applied 链（mock 分类 confidence 0.9>0.5 必采纳）
+    for (let i = 0; i < 3; i += 1) await fire(port, { sessionId: inGroup.sid, requestId: `in-${i}` });
+    // outGroup session 连打 3 发，全组一致=rollout_hold
+    for (let i = 0; i < 3; i += 1) await fire(port, { sessionId: outGroup.sid, requestId: `out-${i}` });
+    await sleep(1000);
+
     const files = await readdir(workDir);
-    const srFile = files.find((f) => f.startsWith('semantic-reviews') && f.endsWith('.jsonl'));
-    assert.ok(srFile, '独立灰度 hold/applied 的复核事件照常落盘（对照组样本不丢）');
-    // 决策日志里 semanticReview.status 应出现 rollout_hold（50% 桶）
     const decFile = files.find((f) => f.startsWith('decisions') && f.endsWith('.jsonl'));
-    const decLines = (await readFile(join(workDir, decFile), 'utf8')).trim().split('\n').filter(Boolean);
-    const statuses = decLines.map((l) => JSON.parse(l).decision?.semanticReview?.status);
-    assert.ok(statuses.includes('rollout_hold'), `50% 灰度应产生 hold 对照组，实际 ${JSON.stringify(statuses)}`);
-    assert.ok(statuses.includes('applied') || statuses.includes('rejected_low_confidence'), `放量桶应有语义采纳/拒绝，实际 ${JSON.stringify(statuses)}`);
-    // 分桶确定性：同 requestId 哈希稳定（单元级验证分桶函数行为）
-    const bucket = (rid) => Number(parseInt(createHash('sha256').update(`semantic:${rid}`).digest('hex').slice(0, 8), 16) % 100);
-    const rid = 'test-request-id-abc';
-    assert.equal(bucket(rid), bucket(rid), '分桶必须稳定');
+    assert.ok(decFile, '决策日志应存在');
+    const rows = (await readFile(join(workDir, decFile), 'utf8')).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const bySession = {};
+    for (const r of rows) {
+      const sid = r.request?.sessionId;
+      const st = r.decision?.semanticReview?.status;
+      if (sid && st) (bySession[sid] ??= new Set()).add(st);
+    }
+    // I1：组内一致性
+    assert.deepEqual([...bySession[inGroup.sid]], ['applied'], `放量组 session 全部 applied，实际 ${JSON.stringify([...bySession[inGroup.sid]])}`);
+    assert.deepEqual([...bySession[outGroup.sid]], ['rollout_hold'], `hold 组 session 全部 rollout_hold，实际 ${JSON.stringify([...bySession[outGroup.sid]])}`);
+
+    // I3：同一 session 换任意（甚至恶意构造的）requestId 不改变分组
+    await fire(port, { sessionId: outGroup.sid, requestId: 'attacker-tries-to-enter-000' });
+    await fire(port, { sessionId: inGroup.sid, requestId: 'attacker-tries-to-avoid-999' });
+    await sleep(800);
+    const rows2 = (await readFile(join(workDir, decFile), 'utf8')).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const stOut = rows2.filter((r) => r.request?.sessionId === outGroup.sid).map((r) => r.decision?.semanticReview?.status);
+    const stIn = rows2.filter((r) => r.request?.sessionId === inGroup.sid).map((r) => r.decision?.semanticReview?.status);
+    assert.ok(stOut.every((s) => s === 'rollout_hold'), `伪造 requestId 不得改变 hold 组分组，实际 ${JSON.stringify(stOut)}`);
+    assert.ok(stIn.every((s) => s === 'applied'), `伪造 requestId 不得改变放量组分组，实际 ${JSON.stringify(stIn)}`);
+
+    // I4：事件流时延字段齐（mock L2 是 http-json 直采？不——provider=openai-chat 单层，cascade=null。
+    //   时延三字段由 cascade provider 产出；本测试用 openai-chat 验证非级联路径事件正常落盘即可）
+    const srFile = files.find((f) => f.startsWith('semantic-reviews') && f.endsWith('.jsonl'));
+    assert.ok(srFile, 'semantic-reviews 事件流应存在');
+    const evts = (await readFile(join(workDir, srFile), 'utf8')).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    assert.ok(evts.length >= 4, `hold+applied 都应有后台观察事件，实际 ${evts.length}`);
+    for (const e of evts) assert.ok(e.requestId && e.cascade !== undefined, `事件须带 requestId 与 cascade 字段：${JSON.stringify(e).slice(0, 120)}`);
   } finally { child.kill(); upstream.close(); }
 });

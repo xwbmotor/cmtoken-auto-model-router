@@ -212,7 +212,7 @@
           <li>• ② 语义复核：仅 confidence &lt; 0.7 触发（L2 小模型 → L3 大模型级联）</li>
           <li>• ③ 加权评分：硬性过滤 + 打分排序</li>
           <li>• 三层输出统一落进决策日志</li>
-          <li>• v0.7.0：复核事件按 requestId 持久化（semantic-reviews 流）；语义独立灰度分桶（rollout_hold 对照组）</li>
+          <li>• v0.7.0/0.7.1：复核事件按 requestId 持久化（semantic-reviews 流，关停排空）；语义独立灰度按会话 HMAC 分桶（默认 5%，rollout_hold 对照组）</li>
         </ul>
       </div>
 

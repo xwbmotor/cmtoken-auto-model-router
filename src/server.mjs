@@ -18,7 +18,7 @@ import { createRateLimiter } from './rate-limiter.mjs';
 import { shouldPromoteVerified } from './calibration.mjs';
 import { MarketSignal } from './market-signal.mjs';
 import { registerMarketSignal } from './market-signal-runtime.mjs';
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 8787);
@@ -32,6 +32,17 @@ const decisionLog = await DecisionLog.create(projectRoot, config);
 // 两个流各持一个才能并行轮转互不踩脚；共享 enabled/目录/轮转参数，filePrefix 区分文件名）。
 // 事件按 requestId 关联决策日志，shadow 观察期数据重启不再丢。
 const semanticLog = await DecisionLog.create(projectRoot, { decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } });
+
+// v0.7.1 七审 P1-2：后台语义复核任务注册表。shadow/rollout_hold 的 classifyAndCompare 是
+// fire-and-forget——HTTP 响应已结束但复核还在跑，容器滚动重启时进程直接退出会丢「正在复核
+// 的事件」与「已排队未落盘的 semantic-reviews 事件」。关停 flush 按①后台任务（带超时）
+// →②semanticLog.writeChain 顺序排空。
+const semanticBackgroundTasks = new Set();
+function trackSemanticTask(promise) {
+  semanticBackgroundTasks.add(promise);
+  promise.finally(() => semanticBackgroundTasks.delete(promise)).catch(() => {});
+  return promise;
+}
 // 市场信号引擎（OpenRouter wisdom-of-market 内网飞轮）：聚合决策日志的份额/点名/失败率，
 // 样本不足自动休眠、幅度有界（±0.05），进程级单例供 router 热路径查询
 const marketSignal = new MarketSignal({ decisionLog });
@@ -694,7 +705,8 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
       counters.semantic.cascadeLatency ??= {};
       const agg = counters.semantic.cascadeLatency[lv] ??= { count: 0, sumMs: 0 };
       agg.count += 1;
-      agg.sumMs += Number(assessment.cascade.latencyMs ?? 0);
+      // v0.7.1 七审 P1-3：指标主口径=totalLatencyMs（small-degraded 含 L3 失败等待，large=small+large）
+      agg.sumMs += Number(assessment.cascade.totalLatencyMs ?? assessment.cascade.latencyMs ?? 0);
     }
     const review = { at: new Date().toISOString(), assessment, base: { task: baseAnalysis.task, tier: baseAnalysis.tier, complexity: baseAnalysis.complexity, model: baseDecision.suggestedModel }, proposed: { task: semanticAnalysis.task, tier: semanticAnalysis.tier, complexity: semanticAnalysis.complexity, model: proposed.suggestedModel }, disagreed };
     // v0.6.1 五审 P1：L3 大模型分类调用成本入账（原实现完全不入预算台账——真实付费的黑洞）。
@@ -707,7 +719,7 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
     // v0.7.0 六审 P1：复核事件持久化（shadow/active 通用）。按 requestId 关联决策日志，
     // 重启不丢；含三层结果对照、cascade 层级、开销与时延。语义复核频繁但单条小（<2KB），
     // 与决策日志共用轮转策略（16MB×14 文件）足够 7 天观察期。
-    if (track) semanticLog.writeRaw({ at: review.at, v: 1, requestId, keyFingerprint: baseDecision.keyFingerprint || null, cascade: assessment.cascade?.level || null, cascadeLatencyMs: assessment.cascade?.latencyMs ?? null, smallAttempt: assessment.smallAttempt ? { task: assessment.smallAttempt.task, tier: assessment.smallAttempt.tier, confidence: assessment.smallAttempt.confidence, latencyMs: assessment.smallAttempt.latencyMs ?? null } : null, base: review.base, proposed: review.proposed, disagreed, ...overhead, assessment: { task: assessment.task, tier: assessment.tier, complexity: assessment.complexity, confidence: assessment.confidence } });
+    if (track) semanticLog.writeRaw({ at: review.at, v: 1, requestId, keyFingerprint: baseDecision.keyFingerprint || null, cascade: assessment.cascade?.level || null, cascadeLatencyMs: assessment.cascade?.totalLatencyMs ?? assessment.cascade?.latencyMs ?? null, smallLatencyMs: assessment.cascade?.smallLatencyMs ?? null, largeLatencyMs: assessment.cascade?.largeLatencyMs ?? null, totalLatencyMs: assessment.cascade?.totalLatencyMs ?? null, smallAttempt: assessment.smallAttempt ? { task: assessment.smallAttempt.task, tier: assessment.smallAttempt.tier, confidence: assessment.smallAttempt.confidence, latencyMs: assessment.smallAttempt.latencyMs ?? null } : null, base: review.base, proposed: review.proposed, disagreed, ...overhead, assessment: { task: assessment.task, tier: assessment.tier, complexity: assessment.complexity, confidence: assessment.confidence } });
     return { assessment, semanticAnalysis, proposed, review };
   }).catch((error) => {
     if (track) {
@@ -720,7 +732,25 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
   });
 }
 
-async function resolveAutoDecision(body, { preview = false, clientAuthHeader = null, requestId = null } = {}) {
+// v0.7.1 七审 P1-1：语义灰度分桶加固。三个变化：
+// ① 无盐 SHA-256(客户端可控 requestId) → HMAC(secret)。secret=进程级随机（不落盘、不进 config
+//    API、不跨重启稳定）——客户端无法预计算自己落在哪个桶，服务端也不受重启前桶漂移影响
+//    （shadow/hold 对照组按请求独立归因，无需跨重启同桶）。若未来要求跨重启稳定（如按会话
+//    长期对照），把 secret 换成 SEMANTIC_BUCKET_SECRET 环境变量即可，逻辑不变。
+// ② 桶键优先级：x-session-id（同会话稳定分桶，重试不换组）> keyFingerprint（同租户稳定）
+//    > 服务端内部实验ID（randomUUID，绝不复用客户端 x-request-id——七审：外部请求ID与
+//    内部实验ID分离，客户端构造 ID 无法操纵分组）。
+// ③ 返回 { bucket, key } 一并落事件，事后可审计每次分桶用了哪个键。
+// secret 来源：SEMANTIC_BUCKET_SECRET（跨重启稳定，部署方可选）> 进程级随机（默认）。
+// 两者都不可被客户端预计算——分桶输入（session/fingerprint/内部ID）+服务端秘密，七审 P1-1。
+const semanticBucketSecret = process.env.SEMANTIC_BUCKET_SECRET ? Buffer.from(process.env.SEMANTIC_BUCKET_SECRET, 'utf8') : randomBytes(32);
+function semanticBucketOf({ sessionId = null, keyFingerprint = null, requestId = null } = {}) {
+  const key = sessionId || (keyFingerprint && String(keyFingerprint).length === 8 ? `fp:${keyFingerprint}` : null) || `rid:${requestId || randomUUID()}`;
+  const bucket = Number(parseInt(createHmac('sha256', semanticBucketSecret).update(`semantic-rollout:${key}`).digest('hex').slice(0, 8), 16) % 100);
+  return { bucket, key };
+}
+
+async function resolveAutoDecision(body, { preview = false, clientAuthHeader = null, requestId = null, bucketKey = null } = {}) {
   const baseAnalysis = { ...analyzeRequest(body, config), routeMethod: 'rules' };
   const runtime = { health, analysisOverride: baseAnalysis, budgetPressure: budgetTracker.pressure(), ...(preview ? { trafficBucket: 0 } : {}) };
   // 套餐动态候选池：按客户端 key 解析 v1/models 可用集，交集非空才启用过滤（防命名不匹配全灭），失败回退全量
@@ -738,7 +768,7 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
   if (!shouldUseSemanticRouter(baseAnalysis, body, config)) return baseDecision;
   if (!preview) counters.semantic.eligible += 1;
   if (config.semanticRouter.mode === 'shadow' && !preview) {
-    classifyAndCompare(body, baseAnalysis, baseDecision, { clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null, requestId }).catch(() => {});
+    trackSemanticTask(classifyAndCompare(body, baseAnalysis, baseDecision, { clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null, requestId }));
     return { ...baseDecision, semanticReview: { status: 'shadow_pending' } };
   }
   // v0.7.0 六审 P1：语义路由独立灰度。routing.activeTrafficPercent 控制的是「模型路由 vs 固定
@@ -746,12 +776,12 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
   // 100%，实验混杂无法归因。按 requestId 稳定哈希分桶（同请求重试/复放落同桶），未放量请求照旧
   // 走规则层决策 + 后台 shadow 观察（不丢对照组样本）。
   const semanticPercent = Math.max(0, Math.min(100, Number(config.semanticRouter.activeTrafficPercent ?? 100)));
-  const semanticBucket = requestId ? Number(parseInt(createHash('sha256').update(`semantic:${requestId}`).digest('hex').slice(0, 8), 16) % 100) : 0;
+  const { bucket: semanticBucket, key: semanticBucketKey } = semanticBucketOf(bucketKey || {});
   const semanticRolloutApplied = config.semanticRouter.mode === 'active' && semanticBucket < semanticPercent;
   if (config.semanticRouter.mode === 'active' && !semanticRolloutApplied && !preview) {
     counters.semantic.rolloutHold = (counters.semantic.rolloutHold || 0) + 1;
-    classifyAndCompare(body, baseAnalysis, baseDecision, { clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null, requestId }).catch(() => {});
-    return { ...baseDecision, semanticReview: { status: 'rollout_hold', bucket: semanticBucket, percent: semanticPercent } };
+    trackSemanticTask(classifyAndCompare(body, baseAnalysis, baseDecision, { clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null, requestId }));
+    return { ...baseDecision, semanticReview: { status: 'rollout_hold', bucket: semanticBucket, bucketKey: semanticBucketKey, percent: semanticPercent } };
   }
   try {
     const result = await classifyAndCompare(body, baseAnalysis, baseDecision, { track: !preview, clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null, requestId });
@@ -799,7 +829,7 @@ async function proxyCompletion(req, res) {
   let decision;
   if (auto) {
     counters.auto += 1;
-    try { decision = await resolveAutoDecision(body, { clientAuthHeader: req.headers.authorization, requestId: req.requestId }); }
+    try { decision = await resolveAutoDecision(body, { clientAuthHeader: req.headers.authorization, requestId: req.requestId, bucketKey: { sessionId: req.headers['x-session-id'] || null, keyFingerprint: keyFingerprint(req.headers.authorization), requestId: req.requestId } }); }
     catch (error) { counters.errors += 1; return errorJson(res, 503, error.message); }
   } else {
     counters.explicit += 1;
@@ -1491,14 +1521,22 @@ function subCategoryOf(task, subTask) {
       const includeFullText = url.searchParams.get('fullText') === '1';
       const decisions = await decisionLog.recent(count, { includeFullText: true }).catch(() => []);
       const reviews = await semanticLog.recent(count * 2).catch(() => []);
+      // v0.7.1 七审 P2：recent() 返回从新到旧——先见即最新。setIfAbsent 语义（首次写入胜出），
+      // 修正原实现「后写覆盖」实际留下最老事件的错误。
       const reviewByRid = new Map();
-      for (const r of reviews) { const rid = r.requestId; if (rid) reviewByRid.set(rid, r); } // 后写覆盖=取最新
+      for (const r of reviews) { const rid = r.requestId; if (rid && !reviewByRid.has(rid)) reviewByRid.set(rid, r); }
       const rows = decisions.map((d) => {
         const rid = d.request?.requestId;
         const rv = reviewByRid.get(rid) || null;
         return {
           requestId: rid, at: d.at, keyFingerprint: d.request?.keyFingerprint || null,
-          text: (d.request?.redactedBody?.messages || []).map((m) => `[${m.role}] ${includeFullText ? (m.head || '') : String(m.head || '').slice(0, 60)}`).join(' | ').slice(0, includeFullText ? undefined : 300),
+          text: (d.request?.redactedBody?.messages || []).map((m) => {
+            const full = includeFullText ? (m.content ?? m.head ?? '') : String(m.head ?? '').slice(0, 60);
+            return `[${m.role}] ${full}`;
+          }).join(' | ').slice(0, includeFullText ? undefined : 300),
+          // v0.7.1 七审 P2：redact 默认只存 head(160)——fullText=1 未必有真全文。标 truncated
+          // 让 Judge/标注侧能自检样本是否可用，避免拿截断文本评完整回答质量。
+          textTruncated: Boolean(includeFullText && (d.request?.redactedBody?.messages || []).some((m) => (m.content == null && m.head != null))),
           l1: { task: d.decision?.analysis?.task, tier: d.decision?.analysis?.tier, confidence: d.decision?.analysis?.confidence },
           semantic: rv ? { cascade: rv.cascade, task: rv.assessment?.task, tier: rv.assessment?.tier, confidence: rv.assessment?.confidence, disagreed: rv.disagreed, proposedModel: rv.proposed?.model, overheadCostYuan: rv.overheadCostYuan ?? null } : null,
           finalModel: d.outcome?.model || d.decision?.selectedModel, ok: d.outcome?.ok ?? null,
@@ -1558,8 +1596,16 @@ const shutdownManager = createShutdownManager({
   server,
   timeoutMs: Number(process.env.SHUTDOWN_TIMEOUT_MS || 20000),
   flush: async () => {
-    // 等待决策日志写链与预算账本落盘完成，避免最后几条记录丢失
-    await Promise.allSettled([decisionLog.writeChain, budgetTracker.pendingWrite]);
+    // v0.7.1 七审 P1-2：排空顺序①在途后台语义复核（≤8s，超时放弃——分类超时本身就该丢弃）
+    // ②决策日志写链 ③语义事件写链 ④预算账本。HTTP 响应结束≠复核结束，滚动重启前必须等完。
+    if (semanticBackgroundTasks.size > 0) {
+      logger.info('shutdown_drain_semantic_tasks', { count: semanticBackgroundTasks.size });
+      await Promise.race([
+        Promise.allSettled([...semanticBackgroundTasks]),
+        new Promise((r) => setTimeout(r, 8000)),
+      ]);
+    }
+    await Promise.allSettled([decisionLog.writeChain, semanticLog.writeChain, budgetTracker.pendingWrite]);
   },
 });
 installCrashHandlers(logger);

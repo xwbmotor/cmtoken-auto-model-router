@@ -109,6 +109,7 @@ test('cascade：大模型挂 + 小模型有产出 → 降级返回小模型（sm
   const lowConf = { task: 'default', tier: 'balanced', complexity: 0.5, confidence: 0.45, reason: '拿不准' };
   const fakeFetch = async (url) => {
     if (String(url).includes('/classify')) return { ok: true, status: 200, json: async () => lowConf };
+    await new Promise((r) => setTimeout(r, 300)); // v0.7.1 七审 P1-3：模拟 L3 白等 300ms 才挂
     throw new Error('上游 503');
   };
   const result = await classifySemantically({ messages: [{ role: 'user', content: '这个怎么样' }] }, cascadeConfig(), { fetchImpl: fakeFetch, apiKey: 'k' });
@@ -116,6 +117,11 @@ test('cascade：大模型挂 + 小模型有产出 → 降级返回小模型（sm
   assert.equal(result.provider, 'http-json');
   assert.ok(result.cascade.largeError.includes('503'));
   assert.equal(result.confidence, 0.45, '降级结果保留小模型原始置信度，由 server 采纳线决定去留');
+  // v0.7.1 七审 P1-3：降级路径时延必须含 L3 失败等待——原实现只记 smallLatencyMs（漏 300ms 白等）
+  assert.ok(result.cascade.largeLatencyMs >= 300, `largeLatencyMs 应含 L3 等待 ≥300ms，实际 ${result.cascade.largeLatencyMs}`);
+  assert.ok(result.cascade.totalLatencyMs >= 300, `totalLatencyMs 应 ≥300ms，实际 ${result.cascade.totalLatencyMs}`);
+  assert.equal(result.cascade.totalLatencyMs, result.cascade.smallLatencyMs + result.cascade.largeLatencyMs, 'total = small + large 恒等');
+  assert.ok(result.latencyMs >= 300, '顶层 latencyMs（旧字段兼容）也应为 total 口径');
 });
 
 test('cascade：两级都挂才抛（小模型挂 + 大模型挂）', async () => {

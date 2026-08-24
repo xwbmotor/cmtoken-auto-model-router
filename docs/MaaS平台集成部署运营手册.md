@@ -136,7 +136,7 @@ systemctl daemon-reload && systemctl enable --now auto-router
 
 ### 运营红线与切换判据
 
-- 语义复核 shadow→active 判据（已固化）：真实流量 ≥500 条、分层人工标注准确率达标（v0.7.0 起用 `GET /admin/api/annotation-export` 导出标注集）、复杂任务漏判有上限、错误率 ≤1%、观察 ≥7 天；切 active 后**从「语义灰度比例」5% 起步**（v0.7.0 独立灰度，requestId 稳定分桶），逐档 5%→10%→25%→50%→100%，对照组 `rollout_hold` 全程后台观察
+- 语义复核 shadow→active 判据（已固化）：真实流量 ≥500 条、分层人工标注准确率达标（v0.7.0 起用 `GET /admin/api/annotation-export` 导出标注集）、复杂任务漏判有上限、错误率 ≤1%、观察 ≥7 天；切 active 后**从「语义灰度比例」5% 起步**（v0.7.1 起默认即 5；独立灰度，按会话 HMAC 服务端秘密分桶，客户端无法操纵分组），逐档 5%→10%→25%→50%→100%，对照组 `rollout_hold` 全程后台观察
 - 模型退网：管理端关该模型启用开关 → fallbackOrder 自动重排，无需重启
 - 新模型上线四步：管理端录入（质量分/成本/时延/部署）→ eval gate 50 条实测 → replay 预估 → 小流量灰度
 

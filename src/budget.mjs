@@ -76,6 +76,9 @@ export class BudgetTracker {
     if (!fromUsage || actualYuan == null || !Number.isFinite(Number(actualYuan))) {
       this.state.estimatedSettles = (this.state.estimatedSettles || 0) + 1;
       this.state.settledEstimatedSpendYuan = Number(((this.state.settledEstimatedSpendYuan || 0) + reserved).toFixed(6));
+      // v0.7.1 七审 P1-4：估算结清也是回答成本（原实现只进总账不进分项——answerCost 恒 0 低估回答开销）
+      this.state.answerEstimatedSettles = (this.state.answerEstimatedSettles || 0) + 1;
+      this.state.answerEstimatedCostYuan = Number(((this.state.answerEstimatedCostYuan || 0) + reserved).toFixed(6));
       this.scheduleWrite();
       return; // 无 usage：保留预估口径结清（不冲正、不伪造实际值）
     }
@@ -155,6 +158,10 @@ export class BudgetTracker {
     const beansPerYuan = Number(this.config.budget?.beansPerYuan);
     const hasBeanRate = Number.isFinite(beansPerYuan) && beansPerYuan > 0;
     const settledTotal = (this.state.settledActualSpendYuan || 0) + (this.state.settledEstimatedSpendYuan || 0);
+    // v0.7.1 七审 P1-4：legacy=总账 − 三分项（存量无归因部分）。首次读取旧台账时四分项之和
+    // 自动补齐恒等式（此后 answerActual/answerEstimated/overhead 增长、legacy 冻结不变）。
+    const attributed = (this.state.answerCostYuan || 0) + (this.state.answerEstimatedCostYuan || 0) + (this.state.routingOverheadCostYuan || 0);
+    const legacyUnattributed = Math.max(0, Number((settledTotal - attributed).toFixed(6)));
     return {
       ...this.state,
       enabled: Boolean(this.config.budget?.enabled),
@@ -167,12 +174,20 @@ export class BudgetTracker {
         settledSpendBeans: Number((settledTotal * beansPerYuan).toFixed(2)),
         dailyBudgetBeans: Number(this.config.budget?.dailyBudgetBeans || 0) || Number(((Number(this.config.budget?.dailyBudgetYuan || 0)) * beansPerYuan).toFixed(2)),
       } : {}),
-      // v0.7.0 六审 P2：分项成本口径（answer + overhead = settledSpendYuan 的实际部分）。
-      // answerCostYuan=回答模型结算；routingOverheadCostYuan=L2/L3 分类调用（cash 记账）；
-      // 净节省 = （固定模型基线成本 − answerCostYuan） − routingOverheadCostYuan，由面板按窗口聚合。
-      answerCostYuan: Number((this.state.answerCostYuan || 0).toFixed(6)),
+      // v0.7.1 七审 P1-4：五元组分账 + 总账恒等式（可对账：四分项之和 == settledSpendYuan）。
+      //   answerActualCostYuan     回答模型按真实 usage 结算（原 answerCostYuan 更名，语义不变）
+      //   answerEstimatedCostYuan  回答模型无 usage 保留估算结清（新增——原实现只进总账漏分项）
+      //   routingOverheadCostYuan  L2/L3 分类调用（cash 记账）
+      //   legacyUnattributedCostYuan 升级前积累、无法归因到上述三者的存量（一次性迁移，只减不增）
+      // 恒等式：answerActual + answerEstimated + routingOverhead + legacyUnattributed == settledSpendYuan
+      // 净节省 = （固定模型基线成本 − answerActual − answerEstimated） − routingOverheadCostYuan。
+      answerActualCostYuan: Number((this.state.answerCostYuan || 0).toFixed(6)),
+      answerEstimatedCostYuan: Number((this.state.answerEstimatedCostYuan || 0).toFixed(6)),
       routingOverheadCostYuan: Number((this.state.routingOverheadCostYuan || 0).toFixed(6)),
+      legacyUnattributedCostYuan: Number((legacyUnattributed).toFixed(6)),
+      totalCostYuan: Number(settledTotal.toFixed(6)),
       answerSettles: this.state.answerSettles || 0,
+      answerEstimatedSettles: this.state.answerEstimatedSettles || 0,
       classifierSettles: this.state.classifierSettles || 0,
       pressure: Number(this.pressure().toFixed(4)),
       // estimateOnly 语义（v0.5.2）：已结算部分有真实 usage 支撑；「true」只描述未结算预占

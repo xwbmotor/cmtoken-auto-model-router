@@ -149,7 +149,7 @@ export async function classifyViaCascade(body, config, options) {
   }
   const smallLatencyMs = Date.now() - smallStarted;
   if (small && Number(small.confidence) >= acceptThreshold) {
-    return { ...small, cascade: { level: 'small', acceptThreshold, latencyMs: smallLatencyMs } };
+    return { ...small, cascade: { level: 'small', acceptThreshold, latencyMs: smallLatencyMs, smallLatencyMs, largeLatencyMs: null, totalLatencyMs: smallLatencyMs } };
   }
   // 第二级：升级 MaaS 大模型（小模型挂了兜底 / 小模型拿不准复核）。
   // v0.6.0：prompt 携带小模型判断（四审：原实现 smallAttempt 仅事后补日志元数据，
@@ -157,23 +157,30 @@ export async function classifyViaCascade(body, config, options) {
   // （degraded-small，由 server 按 finalAdoptionThreshold 决定采纳或退回规则层），双挂才抛。
   let escalated;
   const largeStarted = Date.now();
+  let largeLatencyMs = 0; // v0.7.1：提前定义——catch 分支也要计入 L3 失败等待时间
   try {
     escalated = await classifyViaOpenAIChat(body, config, { ...options, priorAssessment: small || null });
+    largeLatencyMs = Date.now() - largeStarted;
   } catch (largeError) {
+    largeLatencyMs = Date.now() - largeStarted;
     if (small) {
+      // v0.7.1 七审 P1-3：降级路径的耗时=small+L3失败等待（超时可达 timeoutMs 量级）。
+      // 原实现 latencyMs=smallLatencyMs 把 L3 白等的时间丢了——运营会严重低估 active 附加时延。
+      const degradedTotalMs = smallLatencyMs + largeLatencyMs;
       return {
         ...small,
         provider: 'http-json',
-        latencyMs: smallLatencyMs,
-        cascade: { level: 'small-degraded', acceptThreshold, latencyMs: smallLatencyMs, largeError: String(largeError.message).slice(0, 200) }
+        latencyMs: degradedTotalMs,
+        cascade: { level: 'small-degraded', acceptThreshold, latencyMs: degradedTotalMs, smallLatencyMs, largeLatencyMs, totalLatencyMs: degradedTotalMs, largeError: String(largeError.message).slice(0, 200) }
       };
     }
     const merged = new Error(`级联复核两级均失败：小模型 ${smallError ? smallError.message : '低置信未采纳'}；大模型 ${largeError.message}`);
     merged.cause = largeError;
     throw merged;
   }
-  const largeLatencyMs = Date.now() - largeStarted;
-  const meta = { escalatedFrom: 'http-json', cascade: { level: 'large', acceptThreshold, latencyMs: largeLatencyMs, totalLatencyMs: smallLatencyMs + largeLatencyMs } };
+  const totalLatencyMs = smallLatencyMs + largeLatencyMs;
+  // v0.7.1 七审 P1-3：三字段全量落盘（small/large/total），主指标=totalLatencyMs（级联真实附加时延）
+  const meta = { escalatedFrom: 'http-json', cascade: { level: 'large', acceptThreshold, latencyMs: largeLatencyMs, smallLatencyMs, largeLatencyMs, totalLatencyMs } };
   if (small) meta.smallAttempt = { task: small.task, tier: small.tier, confidence: small.confidence, latencyMs: smallLatencyMs };
   if (smallError) meta.smallError = String(smallError.message).slice(0, 200);
   return { ...escalated, ...meta };

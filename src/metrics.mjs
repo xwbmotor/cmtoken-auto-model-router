@@ -100,12 +100,21 @@ export function renderPrometheusMetrics(snapshot) {
   metric(lines, 'router_budget_pending_reserves', 'gauge', '在途预占数（已 reserve 未 settle 的请求数）', [
     `router_budget_pending_reserves ${Number(budget.pendingReserves || 0)}`,
   ]);
-  // v0.7.0 六审 P2：分项成本——回答模型 vs 分类器开销分账（净节省 = 基线 − answer − overhead）
-  metric(lines, 'router_budget_answer_cost_yuan', 'gauge', '当日回答模型已结算消费（元，按实际 usage）', [
-    `router_budget_answer_cost_yuan ${Number(budget.answerCostYuan || 0)}`,
+  // v0.7.1 七审 P1-4：五元组分账 + 恒等式（answerActual + answerEstimated + overhead + legacy == total）
+  metric(lines, 'router_budget_answer_actual_cost_yuan', 'gauge', '回答模型按真实 usage 结算（元）', [
+    `router_budget_answer_actual_cost_yuan ${Number(budget.answerActualCostYuan || 0)}`,
   ]);
-  metric(lines, 'router_budget_routing_overhead_cost_yuan', 'gauge', '当日路由分类开销（元，L2/L3 分类调用现金记账）', [
+  metric(lines, 'router_budget_answer_estimated_cost_yuan', 'gauge', '回答模型无 usage 保留估算结清（元）', [
+    `router_budget_answer_estimated_cost_yuan ${Number(budget.answerEstimatedCostYuan || 0)}`,
+  ]);
+  metric(lines, 'router_budget_routing_overhead_cost_yuan', 'gauge', '路由分类开销（元，L2/L3 分类调用现金记账）', [
     `router_budget_routing_overhead_cost_yuan ${Number(budget.routingOverheadCostYuan || 0)}`,
+  ]);
+  metric(lines, 'router_budget_legacy_unattributed_cost_yuan', 'gauge', '升级前存量无归因成本（元，只减不增）', [
+    `router_budget_legacy_unattributed_cost_yuan ${Number(budget.legacyUnattributedCostYuan || 0)}`,
+  ]);
+  metric(lines, 'router_budget_total_cost_yuan', 'gauge', '已结算总成本（元）= answerActual + answerEstimated + overhead + legacy', [
+    `router_budget_total_cost_yuan ${Number(budget.totalCostYuan || budget.settledSpendYuan || 0)}`,
   ]);
   metric(lines, 'router_budget_answer_settles', 'gauge', '当日回答模型结算次数（answerSettles）', [
     `router_budget_answer_settles ${Number(budget.answerSettles || 0)}`,
