@@ -529,7 +529,7 @@
         "stream": true,
         "tools": true,
         "json": true,
-        "vision": false
+        "vision": true
       },
       "contextWindow": 131072,
       "reasoningControl": {
