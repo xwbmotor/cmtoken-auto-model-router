@@ -124,6 +124,20 @@ export function validateConfig(config) {
       if (!Number.isFinite(v) || v < 0 || v > 100) throw new Error('semanticRouter.activeTrafficPercent 必须在 0 到 100 之间（语义分类独立灰度比例，按 requestId 稳定分桶）');
     }
   }
+  // v0.8.0 Judge：异步 shadow 评分器（十审边界：只离线评分，不进在线决策闭环）
+  if (config.judge) {
+    if (typeof config.judge.enabled !== 'boolean') throw new Error('judge.enabled 必须是布尔值');
+    const jm = config.judge.model;
+    if (typeof jm !== 'string' || !jm) throw new Error('judge.model 必须是非空字符串（Judge 模型 ID，如 glm-5.3）');
+    const sp = Number(config.judge.samplePercent);
+    if (config.judge.samplePercent === undefined || !Number.isFinite(sp) || sp < 0 || sp > 100) throw new Error('judge.samplePercent 必须在 0 到 100 之间（抽样比例，十审边界 1~5%）');
+    if (config.judge.taskCheckEnabled !== undefined && typeof config.judge.taskCheckEnabled !== 'boolean') throw new Error('judge.taskCheckEnabled 必须是布尔值');
+    if (config.judge.timeoutMs !== undefined && (!Number.isInteger(Number(config.judge.timeoutMs)) || Number(config.judge.timeoutMs) < 1000)) throw new Error('judge.timeoutMs 必须是 ≥1000 的整数（毫秒）');
+    if (config.judge.dailyMaxCalls !== undefined && (!Number.isInteger(Number(config.judge.dailyMaxCalls)) || Number(config.judge.dailyMaxCalls) < 1)) throw new Error('judge.dailyMaxCalls 必须是正整数（每日调用上限，成本护栏）');
+    if (config.judge.dailyMaxTokens !== undefined && (!Number.isInteger(Number(config.judge.dailyMaxTokens)) || Number(config.judge.dailyMaxTokens) < 1)) throw new Error('judge.dailyMaxTokens 必须是正整数（每日 token 上限，成本护栏）');
+    if (config.judge.circuitThreshold !== undefined && (!Number.isInteger(Number(config.judge.circuitThreshold)) || Number(config.judge.circuitThreshold) < 1)) throw new Error('judge.circuitThreshold 必须是正整数（连续失败熔断阈值）');
+    if (config.judge.cooldownMs !== undefined && (!Number.isInteger(Number(config.judge.cooldownMs)) || Number(config.judge.cooldownMs) < 1000)) throw new Error('judge.cooldownMs 必须是 ≥1000 的整数（熔断冷却毫秒）');
+  }
   if (config.decisionLog) {
     if (typeof config.decisionLog.enabled !== 'boolean') throw new Error('decisionLog.enabled 必须是布尔值');
     if (typeof config.decisionLog.dirPath !== 'string' || !config.decisionLog.dirPath) throw new Error('decisionLog.dirPath 必须是非空字符串');

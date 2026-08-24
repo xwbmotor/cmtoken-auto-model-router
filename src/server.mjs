@@ -7,6 +7,8 @@ import { loadConfig, projectRoot, saveConfig, validateConfig } from './config.mj
 import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice, recommendReasoningLevel } from './router.mjs';
 import { resolveModelScope, scopeIntersectsConfig, scopeAllows, scopeCacheStats } from './model-scope.mjs';
 import { classifySemantically, shouldUseSemanticRouter } from './semantic-router.mjs';
+// v0.8.0 Judge：异步 shadow 评分器（独立事件流 judge-reviews；十审边界：不进在线决策闭环）
+import { shouldSampleJudge, buildJudgeMessages, buildTaskCheckMessages, parseJudgeJson, normalizeDimension, normalizeVerdict, randomAbOrder, JudgeGuard, callJudgeModel, judgePromptHash, JUDGE_RUBRIC_VERSION } from './judge.mjs';
 import { BudgetTracker, estimateCostYuan } from './budget.mjs';
 import { FeedbackLog } from './feedback.mjs';
 import { DecisionLog } from './decision-log.mjs';
@@ -34,6 +36,76 @@ const decisionLog = await DecisionLog.create(projectRoot, config);
 // 两个流各持一个才能并行轮转互不踩脚；共享 enabled/目录/轮转参数，filePrefix 区分文件名）。
 // 事件按 requestId 关联决策日志，shadow 观察期数据重启不再丢。
 const semanticLog = await DecisionLog.create(projectRoot, { decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } });
+// v0.8.0：judge 事件流（第三条独立流——与决策/语义复核隔离，只写不改）
+const judgeLog = await DecisionLog.create(projectRoot, { decisionLog: { ...(config.decisionLog || {}), filePrefix: 'judge-reviews' } });
+const judgeGuard = new JudgeGuard(config.judge || {});
+// v0.8.0：judge 指标（进程级；/metrics 暴露。sampled 在入选时+1，完成/错误在管线内+1）
+const judgeCounters = { sampled: 0, qualityDone: 0, taskCheckDone: 0, errors: 0, tokens: 0, gaugeCircuit: 0 };
+function judgeBump(k, n = 1) { judgeCounters[k] = (judgeCounters[k] || 0) + n; }
+const judgeRuntime = {
+  get enabled() { return Boolean(config.judge?.enabled); },
+};
+// fire-and-forget judge 管线入口：请求完成后异步评分（绝不 await 在响应路径上）
+function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, sessionIdRaw, semanticAssessment }) {
+  try {
+    if (!judgeRuntime.enabled) return;
+    if (!outcome?.ok) return; // 只评成功回答
+    const jc = config.judge;
+    if (!shouldSampleJudge(requestId, jc.samplePercent, semanticBucketSecret)) return;
+    judgeBump('sampled');
+    if (!answerText || !String(answerText).trim()) return; // 无回答文本（空流/纯 tool call）不评
+    const task = trackSemanticTask((async () => {
+      const at = new Date().toISOString();
+      const gate = judgeGuard.canCall();
+      if (!gate.ok) {
+        judgeLog.writeRaw({ at, v: 1, requestId, event: 'skipped', reason: gate.reason });
+        return;
+      }
+      const base = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl).replace(/\/$/, '');
+      const apiKey = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
+      if (!apiKey) { judgeLog.writeRaw({ at, v: 1, requestId, event: 'skipped', reason: 'no_api_key' }); return; }
+      const model = jc.model;
+      const common = { model, baseUrl: base, apiKey, timeoutMs: Number(jc.timeoutMs) || 60000, fetchImpl: fetch };
+      // ① 质量评分（单份）
+      const q = await callJudgeModel({ ...common, messages: buildJudgeMessages({ messages: body.messages, answerText }) });
+      if (!q.ok) { judgeGuard.recordFailure(); judgeBump('errors'); judgeLog.writeRaw({ at, v: 1, requestId, event: 'error', stage: 'quality', error: q.error, latencyMs: q.latencyMs }); return; }
+      judgeGuard.recordCall(q.usage?.total_tokens || 0);
+      const parsed = parseJudgeJson(q.text);
+      if (!parsed) { judgeGuard.recordFailure(); judgeBump('errors'); judgeLog.writeRaw({ at, v: 1, requestId, event: 'error', stage: 'quality_parse', latencyMs: q.latencyMs }); return; }
+      judgeGuard.recordSuccess();
+      judgeBump('qualityDone'); judgeCounters.tokens += q.usage?.total_tokens || 0;
+      const quality = {
+        correctness: normalizeDimension(parsed.correctness),
+        instruction_following: normalizeDimension(parsed.instruction_following),
+        completeness: normalizeDimension(parsed.completeness),
+        safety: normalizeDimension(parsed.safety),
+        overall_comment: String(parsed.overall_comment || '').slice(0, 120) || null,
+      };
+      const judgeEvent = {
+        at, v: 1, requestId, event: 'quality', rubricVersion: JUDGE_RUBRIC_VERSION, rubricHash: judgePromptHash(),
+        judgeModel: model,
+        answeredModel: outcome.model, task: decision?.analysis?.task, tier: decision?.analysis?.tier,
+        sessionFingerprint: sessionFingerprintOf(sessionIdRaw),
+        quality, usage: q.usage, latencyMs: q.latencyMs,
+      };
+      // ② 分类核对（task_agree）——独立第二次调用，与质量分分开落
+      if (jc.taskCheckEnabled) {
+        const t = await callJudgeModel({ ...common, messages: buildTaskCheckMessages({ messages: body.messages, predictedTask: decision?.analysis?.task, predictedTier: decision?.analysis?.tier }) });
+        if (t.ok) {
+          judgeGuard.recordCall(t.usage?.total_tokens || 0);
+          const tp = parseJudgeJson(t.text);
+          if (tp) {
+            judgeEvent.taskCheck = { agree: tp.task_agree === true, reason: String(tp.reason || '').slice(0, 80) || null, suggested: tp.suggested_task || null, latencyMs: t.latencyMs };
+            judgeBump('taskCheckDone'); judgeCounters.tokens += t.usage?.total_tokens || 0;
+          } else judgeEvent.taskCheck = { agree: null, reason: 'parse_failed', latencyMs: t.latencyMs };
+        } else { judgeGuard.recordFailure(); judgeBump('errors'); }
+      }
+      judgeLog.writeRaw(judgeEvent);
+    })());
+    task.catch(() => {});
+    judgeCounters.gaugeCircuit = judgeGuard.snapshot().circuit === 'open' ? 2 : (judgeGuard.snapshot().circuit === 'half-open' ? 1 : 0);
+  } catch (e) { logger.warn('judge_hook_error', { requestId, error: String(e.message || e).slice(0, 200) }); }
+}
 
 // v0.7.1 七审 P1-2：后台语义复核任务注册表。shadow/rollout_hold 的 classifyAndCompare 是
 // fire-and-forget——HTTP 响应已结束但复核还在跑，容器滚动重启时进程直接退出会丢「正在复核
@@ -921,10 +993,15 @@ async function proxyCompletion(req, res) {
   // 失败、断开，每个请求恰好落一条 outcome 日志（顺带补齐 mid-flight 断流/客户端早退此前
   // 完全不落日志的缺口——同一正确性类别）。
   let requestLogWritten = false;
+  // v0.8.0 judge：请求级上下文。answerText 由两条交付路径（非流式 res.end 前 / 流式落账前）
+  // 填充（64KB 软上限），writeOutcomeLog 首次落账时交给异步 judge 管线（fire-and-forget）。
+  const judgeCtx = { answerText: null };
   const writeOutcomeLog = (outcome) => {
     if (requestLogWritten) return;
     requestLogWritten = true;
     decisionLog.write({ sessionFingerprint: sessionFingerprintOf(req.headers['x-session-id']), requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, outcome);
+    // v0.8.0 judge：异步 shadow 评分钩子（内部自带 enabled/抽样/护栏闸，失败静默不影响任何路径）
+    maybeJudgeRequest({ requestId: req.requestId, outcome, decision, body, answerText: judgeCtx.answerText, sessionIdRaw: req.headers['x-session-id'] });
   };
   const onClientClose = () => {
     clientGone = true;
@@ -1098,6 +1175,7 @@ async function proxyCompletion(req, res) {
         delivery.log = { entry: logEntry, outcome: usage ? { ...logOutcome, usage, actualCostYuan: usage.prompt != null && usage.completion != null ? computeActualCostFromUsage(usage, selectedConfig) : logOutcome.actualCostYuan } : logOutcome };
         delivery.delivered = true;
         delivery.guardActive = true;
+        judgeCtx.answerText = String(responseText || '').slice(0, 65536); // v0.8.0 judge
         clearTimeout(timer); return void res.end(responseText);
       }
       // 流式：逐块转发（背压安全），并从 SSE 尾块提取 usage（飞轮：实际 token 消耗）
@@ -1105,10 +1183,13 @@ async function proxyCompletion(req, res) {
       // 注意：undici 的 chunk 是 Uint8Array，toString('utf8') 不生效（会输出字节数字）——必须 Buffer 化
       const tailChunks = []; let tailBytes = 0;
       const trimTail = () => { if (tailBytes > 8192) { const merged = Buffer.concat(tailChunks).subarray(-4096); tailChunks.length = 0; tailChunks.push(merged); tailBytes = merged.length; } };
+      // v0.8.0 judge：流式回答全文累积（软上限 64KB——超过即截断保留头部，防长流撑内存）
+      const judgeChunks = []; let judgeBytes = 0;
       for await (const chunk of upstream.body) {
         if (body.stream === true) armTimer(); // 流式闲置超时：有数据流动就续命
         if (!res.write(chunk)) await new Promise((resolve) => res.once('drain', resolve));
         tailChunks.push(Buffer.from(chunk)); tailBytes += chunk.length; trimTail();
+        if (judgeBytes < 65536) { judgeChunks.push(Buffer.from(chunk)); judgeBytes += chunk.length; }
       }
       const sseTail = Buffer.concat(tailChunks).toString('utf8');
       if (isStream && !usage) usage = extractUsage('text/event-stream', sseTail);
@@ -1122,6 +1203,7 @@ async function proxyCompletion(req, res) {
       delivery.log = { entry: logEntry, outcome: usage ? { ...logOutcome, usage, actualCostYuan: usage.prompt != null && usage.completion != null ? computeActualCostFromUsage(usage, selectedConfig) : logOutcome.actualCostYuan } : logOutcome };
       delivery.delivered = true;
       delivery.guardActive = true;
+      judgeCtx.answerText = Buffer.concat(judgeChunks).toString('utf8').slice(0, 65536); // v0.8.0 judge
       const streamDone = new Promise((resolve) => res.end(() => resolve()));
       await streamDone;
       markOutcome(true);
@@ -1203,7 +1285,7 @@ const server = http.createServer(async (req, res) => {
       return errorJson(res, 401, 'Metrics Token 无效', 'authentication_error');
     }
     const disk = await decisionLog.diskUsage();
-    const body = renderPrometheusMetrics({ counters, health, budget: budgetTracker.snapshot(), decisionLog: { ...decisionLog.snapshot(), diskUsage: disk }, config, sessions: sessions.size, draining: shutdownManager.draining, inflight: shutdownManager.inflightCount() });
+    const body = renderPrometheusMetrics({ counters: { ...counters, judge: judgeCounters }, health, budget: budgetTracker.snapshot(), decisionLog: { ...decisionLog.snapshot(), diskUsage: disk }, config, sessions: sessions.size, draining: shutdownManager.draining, inflight: shutdownManager.inflightCount() });
     res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
     return res.end(body);
   }
@@ -1339,7 +1421,7 @@ const server = http.createServer(async (req, res) => {
       const next = await readJson(req);
       // v0.7.2 八审 P1：热切 active 前置校验——缺 secret 拒绝落盘（返回 4xx 让运营改 .env 后重启）
       assertSemanticBucketSecretForMode(next?.semanticRouter?.mode);
-      config = await saveConfig(next); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); return json(res, 200, config);
+      config = await saveConfig(next); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); judgeLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'judge-reviews' } }); judgeGuard.updateLimits(config.judge || {}); return json(res, 200, config);
     }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
   }
@@ -1507,7 +1589,7 @@ function subCategoryOf(task, subTask) {
   }
   if (req.method === 'GET' && url.pathname === '/admin/api/metrics') {
     const visibleRecent = recentKeyFilter ? recent.filter((x) => (x.keyFingerprint || '') === recentKeyFilter) : recent;
-    return json(res, 200, { counters, health, recent: visibleRecent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: sessions.size });
+    return json(res, 200, { counters, judge: judgeRuntime.enabled ? { ...judgeCounters } : null, health, recent: visibleRecent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: sessions.size });
   }
   // 分类器标准评测：spawn Python 脚本跑 heldout 集，输出三方（gold/小模型/规则层）准确率与混淆矩阵。
   // 回答"换分类器后准了多少"——换端点前后各点一次即可对比。评测只读模型文件，不影响线上。
@@ -1619,7 +1701,7 @@ function subCategoryOf(task, subTask) {
     try {
       const next = await loadConfig();
       assertSemanticBucketSecretForMode(next.semanticRouter?.mode);
-      config = next; budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); return json(res, 200, { ok: true, version: config.version });
+      config = next; budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); judgeLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'judge-reviews' } }); judgeGuard.updateLimits(config.judge || {}); return json(res, 200, { ok: true, version: config.version });
     }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
   }

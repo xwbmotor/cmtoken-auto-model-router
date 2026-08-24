@@ -78,6 +78,14 @@ export function renderPrometheusMetrics(snapshot) {
   const cascadeRows = Object.entries(semantic.byCascadeLevel || {}).map(([level, n]) => `router_semantic_cascade_total{level="${esc(level)}"} ${n}`);
   if (cascadeRows.length > 0) metric(lines, 'router_semantic_cascade_total', 'counter', 'cascade 各层产出计数（small=直采，large=升级L3，small-degraded=降级）', cascadeRows);
 
+  // v0.8.0 Judge：异步评分器各阶段计数（sampled=抽样入选，quality_done=完成质量评分，
+  // task_check_done=完成分类核对，skipped_* 与 error_* 见事件流 reason/stage）
+  const judge = counters.judge || {};
+  const judgeRows = ['sampled', 'qualityDone', 'taskCheckDone', 'errors'].map((k) => `router_judge_total{stage="${k}"} ${judge[k] || 0}`);
+  metric(lines, 'router_judge_total', 'counter', 'Judge 异步 shadow 评分各阶段计数（不进在线决策闭环；sampled=抽样入选，errors 含解析失败）', judgeRows);
+  if (judge.tokens) metric(lines, 'router_judge_tokens_total', 'counter', 'Judge 调用累计 token（成本护栏口径，与每日上限对照）', [`router_judge_tokens_total ${judge.tokens}`]);
+  if (judge.gaugeCircuit) metric(lines, 'router_judge_circuit_state', 'gauge', 'Judge 熔断状态（0=closed 1=half-open 2=open）', [`router_judge_circuit_state ${judge.gaugeCircuit}`]);
+
   // v0.7.0 六审步骤5：cascade 每层时延（sum/count 口径，均值=sum/count；P95 需按事件日志聚合）
   const latRows = Object.entries(semantic.cascadeLatency || {}).flatMap(([level, agg]) => [
     `router_semantic_cascade_latency_ms_sum{level="${esc(level)}"} ${agg.sumMs}`,

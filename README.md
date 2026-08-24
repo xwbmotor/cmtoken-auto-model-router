@@ -48,6 +48,7 @@
 - **语义独立灰度 v0.7.2 八审加固**：在 v0.7.1 HMAC + 服务端 secret 基础上，①`SEMANTIC_BUCKET_SECRET` 写入生产 compose（active 模式启动强校验，shadow 可缺省）——secret 跨重启稳定，实验组不被容器滚动打乱对照；②`semanticRollout` 三态（applied/rejected/hold）都带 `bucketKey`+`source`，审计分桶身份；③新增指标 `router_semantic_bucket_key_source_total{source=session|fingerprint|internal}`（internal 异常升高=在线探测实验组）；④SIGTERM 排空行为级 e2e 已入测试套（tests/shutdown-drain.test.mjs）；⑤`classifierLatencyMs` 统一 `totalLatencyMs` 口径。
 - **九审收口（v0.7.3）**：①`/admin/api/reload` 与启动/热切同校验 secret（先 load 临时 config→校验→替换，reload 不再是绕过口）②`bucketKey` 落盘为 HMAC 短指纹（`sid:<12hex>`）——原始 session ID/key 指纹不进日志③active 要求 secret ≥32 字节（弱值拒启动）④发布报告由 `test:release` 自动生成（commit SHA/dirty/config SHA256/退出码，`reports/`）⑤8s 关停上限的行为级断言（注入卡死任务，退出耗时∈[7.5s,10s]）⑥发版纪律：tag 必须打在 compose image bump 之后。
 - **十审收口（v0.7.4）**：①`test:release` 发布证据链门禁——clean HEAD+exact tag 才 validForRelease，报告不提交回 tag（自引用修复）②决策/复核日志 `request.sessionFingerprint`（`sidfp:<16hex>` HMAC）替代原 `sessionId` 落盘——原始 x-session-id 不进任何日志③指纹 16 hex（64bit）④reload 三场景回归测试⑤secret 校验口径：32 字节=长度下限≠熵。
+- **v0.8.0 Judge 异步质量评审**：抽样 1~5% 已完成请求异步打分（四维评分+分类核对，不进在线路由）；四重护栏（每日调用/token 预算、单次超时、连续失败熔断）；独立事件流 judge-reviews-*.jsonl；管理页 Judge 卡片；默认关闭，shadow 起步。
 
 
 
