@@ -8,7 +8,8 @@ const DEFAULTS = {
   dirPath: './data/decisions',
   maxFileBytes: 16 * 1024 * 1024,   // 单文件 16MB
   maxFiles: 14,                     // 最多保留 14 个轮转文件
-  redactMessages: true              // 默认脱敏：不落盘完整用户消息
+  redactMessages: true,             // 默认脱敏：不落盘完整用户消息
+  filePrefix: 'decisions'           // v0.7.0 六审 P1：泛化事件流前缀（semantic-reviews 复用同一套轮转/串行写）
 };
 
 export class DecisionLog {
@@ -33,7 +34,7 @@ export class DecisionLog {
     // 内部每条记录的 at 仍为 ISO UTC，便于跨时区对账。
     const formatter = this.options.timeZone ? new Intl.DateTimeFormat('en-CA', { timeZone: this.options.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }) : null;
     const ymd = formatter ? formatter.format(date).replace(/(\d{4})-(\d{2})-(\d{2})/, '$1-$2-$3') : date.toISOString().slice(0, 10);
-    return resolve(this.projectRoot, this.options.dirPath, `decisions-${ymd}.jsonl`);
+    return resolve(this.projectRoot, this.options.dirPath, `${this.options.filePrefix}-${ymd}.jsonl`);
   }
 
   async openExistingOrCreate() {
@@ -53,7 +54,8 @@ export class DecisionLog {
   async rotate() {
     const dir = resolve(this.projectRoot, this.options.dirPath);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const rotated = resolve(dir, `decisions-${this.currentFile.match(/decisions-(.+)\.jsonl$/)?.[1] || 'unknown'}-${stamp}.rotated.jsonl`);
+    // v0.7.0：filePrefix 泛化后轮转名直接复用当前文件 basename（前缀各异，不再硬编码 decisions-）
+    const rotated = resolve(dir, this.currentFile.replace(/\.jsonl$/, `-${stamp}.rotated.jsonl`));
     try {
       // 轮转 = 把当前文件改名；下一条日志会自动写到当天新文件
       await mkdir(dir, { recursive: true });
@@ -67,7 +69,10 @@ export class DecisionLog {
   }
 
   async prune(dir) {
-    const files = (await readdir(dir)).filter((f) => f.endsWith('.jsonl')).sort();
+    // v0.7.0 六审 P1：按前缀隔离轮转保留——decisions 与 semantic-reviews 各自 maxFiles 个名额，
+    // 互不挤占（原实现按目录全量 .jsonl 排序清理，semantic-reviews 上线会挤掉 decisions 的保留窗口）
+    const prefix = this.options.filePrefix;
+    const files = (await readdir(dir)).filter((f) => f.startsWith(prefix) && f.endsWith('.jsonl')).sort();
     while (files.length > this.options.maxFiles) {
       const victim = files.shift();
       await rm(resolve(dir, victim), { force: true });
@@ -125,6 +130,15 @@ export class DecisionLog {
     return this.writeChain;
   }
 
+  // v0.7.0 六审 P1：语义复核事件流写入口。与决策日志共用轮转/串行链但文件独立
+  // （semantic-reviews-*.jsonl）：shadow 后台分类结果按 requestId 关联原决策持久化，
+  // 服务重启不再丢观察期数据。事件体由调用方组装（fire-and-forget，失败静默计数）。
+  writeRaw(event) {
+    if (!this.options.enabled) return;
+    this.writeChain = this.writeChain.then(() => this.append(event)).catch(() => { this.errors += 1; });
+    return this.writeChain;
+  }
+
   async append(record) {
     if (!this.currentFile || this.fileFor() !== this.currentFile) await this.openExistingOrCreate();
     const line = JSON.stringify(record) + '\n';
@@ -151,6 +165,9 @@ export class DecisionLog {
 
   // 决策日志目录磁盘占用：遍历 *.jsonl 求和（供 /metrics 监控磁盘增长）
   async diskUsage() {
+    // v0.7.0：口径=日志目录全部 .jsonl（decisions + semantic-reviews 两流同目录）。
+    // semantic-reviews 每事件 ~1KB 且仅在 shadow/灰度分类发生时写入，量级远小于 decisions，
+    // 不单独分拆；告警阈值沿用原口径不变。
     const dir = resolve(this.projectRoot, this.options.dirPath);
     try {
       const entries = (await readdir(dir)).filter((f) => f.endsWith('.jsonl'));
@@ -168,8 +185,9 @@ export class DecisionLog {
   async recent(count = 200, { includeFullText = false, keyFingerprint = null } = {}) {
     if (!this.options.enabled && !this.currentFile) return [];
     const dir = resolve(this.projectRoot, this.options.dirPath);
+    // v0.7.0 六审 P1：按前缀过滤——decisions 与 semantic-reviews 同目录共存，各自只读自己的流
     let files = [];
-    try { files = (await readdir(dir)).filter((f) => f.endsWith('.jsonl')).sort().reverse(); } catch { return []; }
+    try { files = (await readdir(dir)).filter((f) => f.startsWith(this.options.filePrefix) && f.endsWith('.jsonl')).sort().reverse(); } catch { return []; }
     const want = keyFingerprint ? String(keyFingerprint).toLowerCase() : null;
     const rows = [];
     for (const file of files) {

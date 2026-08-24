@@ -46,6 +46,11 @@ async function dumpOrSkip(t) {
     return await runDump();
   } catch (error) {
     if (String(error.message).includes('SKIP_NO_PYTHON')) {
+      // v0.7.0 六审 P2：发布档（test:release，AMR_TEST_STRICT_SKIP=1）下 skip 即失败——
+      // 「159 通过 2 skip」不能宣称为全量验证；发布机器必须配 CLASSIFIER_PYTHON。
+      if (process.env.AMR_TEST_STRICT_SKIP === '1') {
+        throw new Error('发布档（AMR_TEST_STRICT_SKIP=1）不允许 skip：本机无可导入 sklearn/joblib 的 Python。请设 CLASSIFIER_PYTHON 指向带 sklearn/joblib 的解释器后重跑。');
+      }
       t.skip('本机无可导入 sklearn/joblib 的 Python——replay 数据集回放跳过（设 CLASSIFIER_PYTHON 可启用）');
       return null;
     }

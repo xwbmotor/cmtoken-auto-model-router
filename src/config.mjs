@@ -118,6 +118,11 @@ export function validateConfig(config) {
       const v = Number(config.semanticRouter.finalAdoptionThreshold);
       if (!Number.isFinite(v) || v < 0 || v > 1) throw new Error('semanticRouter.finalAdoptionThreshold 必须在 0 到 1 之间（语义复核最终采纳线，低于此值退回规则层决策）');
     }
+    // v0.7.0 六审 P1：语义路由独立灰度比例（与 routing.activeTrafficPercent 是两个实验变量）
+    if (config.semanticRouter.activeTrafficPercent !== undefined) {
+      const v = Number(config.semanticRouter.activeTrafficPercent);
+      if (!Number.isFinite(v) || v < 0 || v > 100) throw new Error('semanticRouter.activeTrafficPercent 必须在 0 到 100 之间（语义分类独立灰度比例，按 requestId 稳定分桶）');
+    }
   }
   if (config.decisionLog) {
     if (typeof config.decisionLog.enabled !== 'boolean') throw new Error('decisionLog.enabled 必须是布尔值');

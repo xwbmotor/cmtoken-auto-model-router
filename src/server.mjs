@@ -28,6 +28,10 @@ const serverHeadersTimeoutMs = Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 310
 let config = await loadConfig();
 const budgetTracker = await BudgetTracker.create(projectRoot, config);
 const decisionLog = await DecisionLog.create(projectRoot, config);
+// v0.7.0 六审 P1：语义复核事件流（独立实例——DecisionLog 实例状态含 currentFile/writeChain，
+// 两个流各持一个才能并行轮转互不踩脚；共享 enabled/目录/轮转参数，filePrefix 区分文件名）。
+// 事件按 requestId 关联决策日志，shadow 观察期数据重启不再丢。
+const semanticLog = await DecisionLog.create(projectRoot, { decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } });
 // 市场信号引擎（OpenRouter wisdom-of-market 内网飞轮）：聚合决策日志的份额/点名/失败率，
 // 样本不足自动休眠、幅度有界（±0.05），进程级单例供 router 热路径查询
 const marketSignal = new MarketSignal({ decisionLog });
@@ -667,7 +671,7 @@ function routingOverhead(assessment) {
   return { overheadUsage: assessment.overheadUsage, overheadCostYuan: costYuan, classifierLatencyMs: assessment.latencyMs || null };
 }
 
-function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, clientAuthHeader = null, allowedModelIds = null } = {}) {
+function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, clientAuthHeader = null, allowedModelIds = null, requestId = null } = {}) {
   if (track) counters.semantic.attempted += 1;
   return classifySemantically(body, config, semanticOptions(clientAuthHeader)).then((assessment) => {
     if (track) counters.semantic.succeeded += 1;
@@ -685,6 +689,12 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
     if (track && assessment?.cascade?.level) {
       counters.semantic.byCascadeLevel ??= {};
       counters.semantic.byCascadeLevel[assessment.cascade.level] = (counters.semantic.byCascadeLevel[assessment.cascade.level] || 0) + 1;
+      // v0.7.0 六审步骤5：每层时延累计（sum/count 供 Prometheus 求均值/P95 需自行按事件日志算）
+      const lv = assessment.cascade.level;
+      counters.semantic.cascadeLatency ??= {};
+      const agg = counters.semantic.cascadeLatency[lv] ??= { count: 0, sumMs: 0 };
+      agg.count += 1;
+      agg.sumMs += Number(assessment.cascade.latencyMs ?? 0);
     }
     const review = { at: new Date().toISOString(), assessment, base: { task: baseAnalysis.task, tier: baseAnalysis.tier, complexity: baseAnalysis.complexity, model: baseDecision.suggestedModel }, proposed: { task: semanticAnalysis.task, tier: semanticAnalysis.tier, complexity: semanticAnalysis.complexity, model: proposed.suggestedModel }, disagreed };
     // v0.6.1 五审 P1：L3 大模型分类调用成本入账（原实现完全不入预算台账——真实付费的黑洞）。
@@ -694,17 +704,23 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
     const overhead = routingOverhead(assessment);
     if (overhead) Object.assign(review, overhead);
     if (track) recordSemanticReview(review);
+    // v0.7.0 六审 P1：复核事件持久化（shadow/active 通用）。按 requestId 关联决策日志，
+    // 重启不丢；含三层结果对照、cascade 层级、开销与时延。语义复核频繁但单条小（<2KB），
+    // 与决策日志共用轮转策略（16MB×14 文件）足够 7 天观察期。
+    if (track) semanticLog.writeRaw({ at: review.at, v: 1, requestId, keyFingerprint: baseDecision.keyFingerprint || null, cascade: assessment.cascade?.level || null, cascadeLatencyMs: assessment.cascade?.latencyMs ?? null, smallAttempt: assessment.smallAttempt ? { task: assessment.smallAttempt.task, tier: assessment.smallAttempt.tier, confidence: assessment.smallAttempt.confidence, latencyMs: assessment.smallAttempt.latencyMs ?? null } : null, base: review.base, proposed: review.proposed, disagreed, ...overhead, assessment: { task: assessment.task, tier: assessment.tier, complexity: assessment.complexity, confidence: assessment.confidence } });
     return { assessment, semanticAnalysis, proposed, review };
   }).catch((error) => {
     if (track) {
       counters.semantic.errors += 1;
       recordSemanticReview({ at: new Date().toISOString(), error: error.message });
+      // v0.7.0 六审 P1：失败也持久化——否则错误率分母失真（只有成功事件存活 = 幸存者偏差）
+      semanticLog.writeRaw({ at: new Date().toISOString(), v: 1, requestId, error: String(error.message).slice(0, 300) });
     }
     throw error;
   });
 }
 
-async function resolveAutoDecision(body, { preview = false, clientAuthHeader = null } = {}) {
+async function resolveAutoDecision(body, { preview = false, clientAuthHeader = null, requestId = null } = {}) {
   const baseAnalysis = { ...analyzeRequest(body, config), routeMethod: 'rules' };
   const runtime = { health, analysisOverride: baseAnalysis, budgetPressure: budgetTracker.pressure(), ...(preview ? { trafficBucket: 0 } : {}) };
   // 套餐动态候选池：按客户端 key 解析 v1/models 可用集，交集非空才启用过滤（防命名不匹配全灭），失败回退全量
@@ -722,11 +738,23 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
   if (!shouldUseSemanticRouter(baseAnalysis, body, config)) return baseDecision;
   if (!preview) counters.semantic.eligible += 1;
   if (config.semanticRouter.mode === 'shadow' && !preview) {
-    classifyAndCompare(body, baseAnalysis, baseDecision, { clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null }).catch(() => {});
+    classifyAndCompare(body, baseAnalysis, baseDecision, { clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null, requestId }).catch(() => {});
     return { ...baseDecision, semanticReview: { status: 'shadow_pending' } };
   }
+  // v0.7.0 六审 P1：语义路由独立灰度。routing.activeTrafficPercent 控制的是「模型路由 vs 固定
+  // shadow 模型」的放量；语义分类采纳是另一个实验变量，必须独立分桶——否则 shadow→active 一步切
+  // 100%，实验混杂无法归因。按 requestId 稳定哈希分桶（同请求重试/复放落同桶），未放量请求照旧
+  // 走规则层决策 + 后台 shadow 观察（不丢对照组样本）。
+  const semanticPercent = Math.max(0, Math.min(100, Number(config.semanticRouter.activeTrafficPercent ?? 100)));
+  const semanticBucket = requestId ? Number(parseInt(createHash('sha256').update(`semantic:${requestId}`).digest('hex').slice(0, 8), 16) % 100) : 0;
+  const semanticRolloutApplied = config.semanticRouter.mode === 'active' && semanticBucket < semanticPercent;
+  if (config.semanticRouter.mode === 'active' && !semanticRolloutApplied && !preview) {
+    counters.semantic.rolloutHold = (counters.semantic.rolloutHold || 0) + 1;
+    classifyAndCompare(body, baseAnalysis, baseDecision, { clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null, requestId }).catch(() => {});
+    return { ...baseDecision, semanticReview: { status: 'rollout_hold', bucket: semanticBucket, percent: semanticPercent } };
+  }
   try {
-    const result = await classifyAndCompare(body, baseAnalysis, baseDecision, { track: !preview, clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null });
+    const result = await classifyAndCompare(body, baseAnalysis, baseDecision, { track: !preview, clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null, requestId });
     if (config.semanticRouter.mode === 'active') {
       // v0.6.0：采纳线独立成 finalAdoptionThreshold（四审：原 minConfidence 双语义——
       // cascade 里当升级线、这里当采纳线）。语义复核最终结果（无论来自小模型直接采纳、
@@ -735,10 +763,10 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
       const adoptionThreshold = Number(config.semanticRouter.finalAdoptionThreshold ?? config.semanticRouter.minConfidence ?? 0);
       if (result.assessment.confidence < adoptionThreshold) {
         counters.semantic.rejectedLowConfidence = (counters.semantic.rejectedLowConfidence || 0) + 1;
-        return { ...baseDecision, semanticReview: { status: 'rejected_low_confidence', ...result.review } };
+        return { ...baseDecision, semanticReview: { status: 'rejected_low_confidence', bucket: semanticBucket, percent: semanticPercent, ...result.review } };
       }
       counters.semantic.applied += 1;
-      return { ...result.proposed, semanticReview: { status: 'applied', ...result.review } };
+      return { ...result.proposed, semanticReview: { status: 'applied', bucket: semanticBucket, percent: semanticPercent, ...result.review } };
     }
     return { ...baseDecision, analysis: mergeSemanticAssessment(baseAnalysis, result.assessment, false), semanticReview: { status: 'shadow_complete', ...result.review } };
   } catch (error) {
@@ -771,7 +799,7 @@ async function proxyCompletion(req, res) {
   let decision;
   if (auto) {
     counters.auto += 1;
-    try { decision = await resolveAutoDecision(body, { clientAuthHeader: req.headers.authorization }); }
+    try { decision = await resolveAutoDecision(body, { clientAuthHeader: req.headers.authorization, requestId: req.requestId }); }
     catch (error) { counters.errors += 1; return errorJson(res, 503, error.message); }
   } else {
     counters.explicit += 1;
@@ -1233,7 +1261,7 @@ const server = http.createServer(async (req, res) => {
     } catch (error) { return errorJson(res, 400, error.message, 'invalid_request_error'); }
   }
   if (req.method === 'PUT' && url.pathname === '/admin/api/config') {
-    try { config = await saveConfig(await readJson(req)); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); return json(res, 200, config); }
+    try { config = await saveConfig(await readJson(req)); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); return json(res, 200, config); }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/preview') {
@@ -1454,6 +1482,36 @@ function subCategoryOf(task, subTask) {
       return json(res, 200, { count: rows.length, decisions: rows });
     } catch (error) { return errorJson(res, 500, error.message, 'decision_log_error'); }
   }
+  // v0.7.0 六审第四优先级：标注抽样导出。把决策日志 + 语义复核事件按 requestId 关联成标注行
+  // （每行=一次请求的完整可归因链），供人工标注正确 task/tier 或裁判打分。脱敏文本默认截断，
+  // fullText=1 才带完整消息。语义事件按 requestId 匹配（一天内重试的重复 requestId 取最新）。
+  if (req.method === 'GET' && url.pathname === '/admin/api/annotation-export') {
+    try {
+      const count = Math.max(1, Math.min(2000, Number(url.searchParams.get('count') || 200)));
+      const includeFullText = url.searchParams.get('fullText') === '1';
+      const decisions = await decisionLog.recent(count, { includeFullText: true }).catch(() => []);
+      const reviews = await semanticLog.recent(count * 2).catch(() => []);
+      const reviewByRid = new Map();
+      for (const r of reviews) { const rid = r.requestId; if (rid) reviewByRid.set(rid, r); } // 后写覆盖=取最新
+      const rows = decisions.map((d) => {
+        const rid = d.request?.requestId;
+        const rv = reviewByRid.get(rid) || null;
+        return {
+          requestId: rid, at: d.at, keyFingerprint: d.request?.keyFingerprint || null,
+          text: (d.request?.redactedBody?.messages || []).map((m) => `[${m.role}] ${includeFullText ? (m.head || '') : String(m.head || '').slice(0, 60)}`).join(' | ').slice(0, includeFullText ? undefined : 300),
+          l1: { task: d.decision?.analysis?.task, tier: d.decision?.analysis?.tier, confidence: d.decision?.analysis?.confidence },
+          semantic: rv ? { cascade: rv.cascade, task: rv.assessment?.task, tier: rv.assessment?.tier, confidence: rv.assessment?.confidence, disagreed: rv.disagreed, proposedModel: rv.proposed?.model, overheadCostYuan: rv.overheadCostYuan ?? null } : null,
+          finalModel: d.outcome?.model || d.decision?.selectedModel, ok: d.outcome?.ok ?? null,
+          latencyMs: d.outcome?.latencyMs ?? null, fallbackAttempt: d.outcome?.fallbackAttempt ?? null,
+          actualCostYuan: d.outcome?.actualCostYuan ?? null,
+          semanticStatus: d.decision?.semanticReview?.status || null,
+          // 标注列（人工/裁判填）：correctTask / correctTier / qualityScore(1-5) / notes
+          correctTask: null, correctTier: null, qualityScore: null, notes: null
+        };
+      });
+      return json(res, 200, { count: rows.length, exportedAt: new Date().toISOString(), rows });
+    } catch (error) { return errorJson(res, 500, error.message, 'annotation_export_error'); }
+  }
   // key 指纹筛选开关（最近请求面板 v0.4.27）：null=全部；8 位十六进制=只看该 key
   if (req.method === 'POST' && url.pathname === '/admin/api/recent-key-filter') {
     try {
@@ -1469,7 +1527,7 @@ function subCategoryOf(task, subTask) {
     } catch (error) { return errorJson(res, 400, error.message, 'invalid_body'); }
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/reload') {
-    try { config = await loadConfig(); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); return json(res, 200, { ok: true, version: config.version }); }
+    try { config = await loadConfig(); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); return json(res, 200, { ok: true, version: config.version }); }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
   }
   if (url.pathname === '/manual') {

@@ -61,13 +61,20 @@ export function renderPrometheusMetrics(snapshot) {
   const semantic = counters.semantic || {};
   // v0.6.1 五审 P2：补全漏斗后段——escalated（L2→L3 升级数）/rejectedLowConfidence（低于采纳线
   // 被拒数）此前只在内存 counters 有、Prometheus 不导出，运营无法从监控判断调阈值后 L3 调用率变化
-  const semanticRows = ['eligible', 'attempted', 'succeeded', 'disagreed', 'errors', 'applied', 'escalated', 'rejectedLowConfidence']
+  const semanticRows = ['eligible', 'attempted', 'succeeded', 'disagreed', 'errors', 'applied', 'escalated', 'rejectedLowConfidence', 'rolloutHold']
     .map((stage) => `router_semantic_total{stage="${stage}"} ${semantic[stage] || 0}`);
-  metric(lines, 'router_semantic_total', 'counter', '语义复核各阶段计数（escalated=L2升级L3，rejectedLowConfidence=低于采纳线被拒）', semanticRows);
+  metric(lines, 'router_semantic_total', 'counter', '语义复核各阶段计数（escalated=L2升级L3，rejectedLowConfidence=低于采纳线被拒，rolloutHold=独立灰度未放量走规则层）', semanticRows);
 
-  // v0.6.1 五审 P2：cascade 分层量（small=小模型直采 / large=升级大模型 / small-degraded=大模型挂降级）
+  // v0.6.1 五审 P2：cascade 分层量（small=小模型直采 / large=升级大模型 / small-degraded=降级）
   const cascadeRows = Object.entries(semantic.byCascadeLevel || {}).map(([level, n]) => `router_semantic_cascade_total{level="${esc(level)}"} ${n}`);
   if (cascadeRows.length > 0) metric(lines, 'router_semantic_cascade_total', 'counter', 'cascade 各层产出计数（small=直采，large=升级L3，small-degraded=降级）', cascadeRows);
+
+  // v0.7.0 六审步骤5：cascade 每层时延（sum/count 口径，均值=sum/count；P95 需按事件日志聚合）
+  const latRows = Object.entries(semantic.cascadeLatency || {}).flatMap(([level, agg]) => [
+    `router_semantic_cascade_latency_ms_sum{level="${esc(level)}"} ${agg.sumMs}`,
+    `router_semantic_cascade_latency_ms_count{level="${esc(level)}"} ${agg.count}`,
+  ]);
+  if (latRows.length > 0) metric(lines, 'router_semantic_cascade_latency_ms', 'counter', 'cascade 各层时延累计（sum/count，ms）；观察期评估 L2/L3 的时延代价', latRows);
 
   // v0.6.1 五审 P1-4：路由开销（L3 大模型分类调用）可观测——真实付费的隐藏成本首次进监控
   const overhead = counters.routingOverhead || {};
@@ -92,6 +99,19 @@ export function renderPrometheusMetrics(snapshot) {
   ]);
   metric(lines, 'router_budget_pending_reserves', 'gauge', '在途预占数（已 reserve 未 settle 的请求数）', [
     `router_budget_pending_reserves ${Number(budget.pendingReserves || 0)}`,
+  ]);
+  // v0.7.0 六审 P2：分项成本——回答模型 vs 分类器开销分账（净节省 = 基线 − answer − overhead）
+  metric(lines, 'router_budget_answer_cost_yuan', 'gauge', '当日回答模型已结算消费（元，按实际 usage）', [
+    `router_budget_answer_cost_yuan ${Number(budget.answerCostYuan || 0)}`,
+  ]);
+  metric(lines, 'router_budget_routing_overhead_cost_yuan', 'gauge', '当日路由分类开销（元，L2/L3 分类调用现金记账）', [
+    `router_budget_routing_overhead_cost_yuan ${Number(budget.routingOverheadCostYuan || 0)}`,
+  ]);
+  metric(lines, 'router_budget_answer_settles', 'gauge', '当日回答模型结算次数（answerSettles）', [
+    `router_budget_answer_settles ${Number(budget.answerSettles || 0)}`,
+  ]);
+  metric(lines, 'router_budget_classifier_settles', 'gauge', '当日分类器结算次数（classifierSettles）', [
+    `router_budget_classifier_settles ${Number(budget.classifierSettles || 0)}`,
   ]);
   if (budget.settledSpendBeans != null) {
     metric(lines, 'router_budget_settled_beans', 'gauge', '当日已结算消耗算力豆（对账口径）', [

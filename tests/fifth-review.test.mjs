@@ -153,10 +153,6 @@ test('openai-chat 评估器提取 usage（overheadUsage）并随 assessment 返�
 // server.mjs 的 semanticOptions 未导出——e2e 已由 passthrough.test/server-real 覆盖透传路径；
 // strict 路径的正确性由「仅 passthrough 分支才剥 Bearer」的代码路径保证 + 本测试锁定契约：
 // strict 模式下 classifyAndCompare 收到的 clientAuthHeader 不进入 apiKey 计算。
-test('semanticOptions 契约：仅 passthrough 允许客户端 key（strict 强制服务端 key）', async () => {
-  // 通过环境变量切换验证 server 逻辑不可行（模块已加载），此处锁行为契约：
-  // ROUTER_KEY_MODE !== 'passthrough' 时客户端 Authorization 不得成为分类器 key。
-  // 直接读 server.mjs 源码断言关键行存在（防回归的最低保障；行为测试在 e2e 层）。
-  const src = await readFile(new URL('../src/server.mjs', import.meta.url), 'utf8');
-  assert.ok(src.includes("const clientKey = passthrough && clientAuthHeader"), 'semanticOptions 必须以 passthrough 为前置条件使用客户端 key');
-});
+// v0.7.0 六审 P2：原「源码字符串断言」已删除——strict/passthrough 的 key 选择由
+// tests/semantic-key-selection.test.mjs 以 mock MaaS 行为级验证（变量改名不再误失败，
+// 逻辑绕过也无法误通过）。

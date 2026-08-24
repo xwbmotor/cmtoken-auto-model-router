@@ -156,9 +156,14 @@ export function classifierText(body, contextTurns = 2) {
   return tail.map((m) => flattenContent(m.content)).join('\n');
 }
 
-// 任务分类用的文本：排除系统提示词（模板词如「你是研发助手」会把所有请求都拽向 coding）
+// 任务分类用的文本：v0.7.0 六审 P2 起分两个口径——
+// ① taskText（语义口径）：与 L2/L3 的 classifierText 一致（user 为主、排除 system/assistant）。
+//    L1 的 task 正则/否定包裹/trivial 判定用这个：assistant 历史里的大段代码会把「接着问个
+//    普通问题」的请求拽向 coding，与 L2/L3 判定不一致 → 人为放大层间分歧率。
+// ② requestText（规模口径）：全部消息。复杂度信号的 length/turns/structure 计量按请求真实
+//    规模算（用户把长代码贴回来要求改写，工作量确实是 coding 级）。
 function taskText(body) {
-  return (body.messages || []).filter((m) => m.role !== 'system').map((m) => flattenContent(m.content)).join('\n');
+  return classifierText(body);
 }
 
 export function estimateInputTokens(text) {
@@ -168,6 +173,10 @@ export function estimateInputTokens(text) {
 
 export function analyzeRequest(body, config) {
   const text = taskText(body);
+  // v0.7.0 六审 P2：规模口径——复杂度信号（length/structure/objectives/clauses）按请求全量文本
+  // 计量（含 assistant 历史：用户贴回长代码要求改写，工作量确实按 coding 级算）；语义口径
+  // （task 正则/否定/trivial）用上面的 user-only text，与 L2/L3 判定一致。
+  const fullText = requestText(body);
   const patterns = resolveTaskPatterns(config.taskRules);
   let task = 'default';
   for (const [name, regex] of Object.entries(patterns)) {
@@ -186,17 +195,17 @@ export function analyzeRequest(body, config) {
   };
   const taskBase = trivial ? 0.08 : ({ reasoning: 0.38, coding: 0.3, creative: 0.22, extraction: 0.14, default: 0.1 }[task] || 0.1);
   addSignal('task_base', trivial ? '直接事实查询' : `任务类型：${task}`, taskBase);
-  const lengthSignal = text.length > 1500 ? 0.32 : text.length > 500 ? 0.22 : text.length > 200 ? 0.14 : text.length > 80 ? 0.07 : 0;
-  addSignal('length', `输入长度 ${text.length} 字符`, lengthSignal);
+  const lengthSignal = fullText.length > 1500 ? 0.32 : fullText.length > 500 ? 0.22 : fullText.length > 200 ? 0.14 : fullText.length > 80 ? 0.07 : 0;
+  addSignal('length', `输入长度 ${fullText.length} 字符`, lengthSignal);
   const turnSignal = Math.min(0.12, Math.max(0, turns - 2) * 0.02);
   addSignal('turns', `多轮上下文 ${turns} 条消息`, turnSignal);
-  const structuralCount = (text.match(/```|步骤|约束|要求|目标|前提|保证|同时|并且|必须|however|constraints?|requirements?/gi) || []).length;
+  const structuralCount = (fullText.match(/```|步骤|约束|要求|目标|前提|保证|同时|并且|必须|however|constraints?|requirements?/gi) || []).length;
   const structureSignal = Math.min(0.15, structuralCount * 0.03);
   addSignal('structure', `${structuralCount} 个约束或结构信号`, structureSignal);
-  const objectiveCount = new Set((text.match(MULTI_OBJECTIVE_PATTERN) || []).map((x) => x.toLowerCase())).size;
+  const objectiveCount = new Set((fullText.match(MULTI_OBJECTIVE_PATTERN) || []).map((x) => x.toLowerCase())).size;
   const objectiveSignal = Math.min(0.18, objectiveCount * 0.025);
   addSignal('objectives', `${objectiveCount} 个优化维度`, objectiveSignal);
-  const clauseCount = (text.match(/[，,；;？?]|以及|同时|并且|或者/g) || []).length;
+  const clauseCount = (fullText.match(/[，,；;？?]|以及|同时|并且|或者/g) || []).length;
   const clauseSignal = Math.min(0.12, Math.max(0, clauseCount - 1) * 0.018);
   addSignal('clauses', `${clauseCount + 1} 个问题分句`, clauseSignal);
   const hasVision = (body.messages || []).some((m) => Array.isArray(m.content) && m.content.some((p) => ['image_url', 'input_image'].includes(p?.type)));

@@ -84,6 +84,9 @@ export class BudgetTracker {
     // 的恰好相等（预占 10 实际 15 是正常冲正不是异常；原实现 exact 计数几乎恒 0，指标失去观测意义）
     this.state.settles = (this.state.settles || 0) + 1;
     this.state.exactSettles = (this.state.exactSettles || 0) + 1;
+    // v0.7.0 六审 P2：回答结算分项（与 chargeRouterOverhead 的 classifierSettles 分账对齐）
+    this.state.answerSettles = (this.state.answerSettles || 0) + 1;
+    this.state.answerCostYuan = Number(((this.state.answerCostYuan || 0) + actual).toFixed(6));
     this.state.settledActualSpendYuan = Number(((this.state.settledActualSpendYuan || 0) + actual).toFixed(6));
     this.scheduleWrite();
   }
@@ -115,11 +118,16 @@ export class BudgetTracker {
   // v0.6.1 五审 P1：路由开销现金入账（L3 大模型分类调用）。与主请求的 reserve→settle 不同，
   // 这笔费用在调用的瞬间就已确定（有真实 usage），直接进 settledActualSpendYuan（已结算实际），
   // 不占用预占语义。pressure() 的总消费口径自动包含（settledActualSpendYuan 是其加数之一）。
+  // v0.7.0 六审 P2：拆分台账——回答结算与分类器结算分账（answerCostYuan / routingOverheadCostYuan），
+  // 运营可直接算「净节省 = 回答节省 − 路由额外成本」；settles 与 settledActualSpendYuan 保持
+  // 总口径不变（总量正确），分项字段做加法对齐（answer + overhead = total）。
   async chargeRouterOverhead(costYuan) {
     this.rollover();
     const cost = Number(costYuan);
     if (!Number.isFinite(cost) || cost < 0) return;
     this.state.settles = (this.state.settles || 0) + 1;
+    this.state.classifierSettles = (this.state.classifierSettles || 0) + 1;
+    this.state.routingOverheadCostYuan = Number(((this.state.routingOverheadCostYuan || 0) + cost).toFixed(6));
     this.state.settledActualSpendYuan = Number(((this.state.settledActualSpendYuan || 0) + cost).toFixed(6));
     this.scheduleWrite();
   }
@@ -159,6 +167,13 @@ export class BudgetTracker {
         settledSpendBeans: Number((settledTotal * beansPerYuan).toFixed(2)),
         dailyBudgetBeans: Number(this.config.budget?.dailyBudgetBeans || 0) || Number(((Number(this.config.budget?.dailyBudgetYuan || 0)) * beansPerYuan).toFixed(2)),
       } : {}),
+      // v0.7.0 六审 P2：分项成本口径（answer + overhead = settledSpendYuan 的实际部分）。
+      // answerCostYuan=回答模型结算；routingOverheadCostYuan=L2/L3 分类调用（cash 记账）；
+      // 净节省 = （固定模型基线成本 − answerCostYuan） − routingOverheadCostYuan，由面板按窗口聚合。
+      answerCostYuan: Number((this.state.answerCostYuan || 0).toFixed(6)),
+      routingOverheadCostYuan: Number((this.state.routingOverheadCostYuan || 0).toFixed(6)),
+      answerSettles: this.state.answerSettles || 0,
+      classifierSettles: this.state.classifierSettles || 0,
       pressure: Number(this.pressure().toFixed(4)),
       // estimateOnly 语义（v0.5.2）：已结算部分有真实 usage 支撑；「true」只描述未结算预占
       estimateOnly: this.state.settledActualSpendYuan == null,

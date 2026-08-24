@@ -141,19 +141,22 @@ export async function classifyViaCascade(body, config, options) {
   // 第一级：自训练小模型。失败或低置信都记录，但低置信时小模型的判断要带给大模型做参照
   let small = null;
   let smallError = null;
+  const smallStarted = Date.now();
   try {
     small = await classifyViaHttpJson(body, config, options);
   } catch (error) {
     smallError = error;
   }
+  const smallLatencyMs = Date.now() - smallStarted;
   if (small && Number(small.confidence) >= acceptThreshold) {
-    return { ...small, cascade: { level: 'small', acceptThreshold } };
+    return { ...small, cascade: { level: 'small', acceptThreshold, latencyMs: smallLatencyMs } };
   }
   // 第二级：升级 MaaS 大模型（小模型挂了兜底 / 小模型拿不准复核）。
   // v0.6.0：prompt 携带小模型判断（四审：原实现 smallAttempt 仅事后补日志元数据，
   // 大模型看不到小模型结论，复核等于盲判）；大模型挂时若小模型有产出则降级返回小模型
   // （degraded-small，由 server 按 finalAdoptionThreshold 决定采纳或退回规则层），双挂才抛。
   let escalated;
+  const largeStarted = Date.now();
   try {
     escalated = await classifyViaOpenAIChat(body, config, { ...options, priorAssessment: small || null });
   } catch (largeError) {
@@ -161,15 +164,17 @@ export async function classifyViaCascade(body, config, options) {
       return {
         ...small,
         provider: 'http-json',
-        cascade: { level: 'small-degraded', acceptThreshold, largeError: String(largeError.message).slice(0, 200) }
+        latencyMs: smallLatencyMs,
+        cascade: { level: 'small-degraded', acceptThreshold, latencyMs: smallLatencyMs, largeError: String(largeError.message).slice(0, 200) }
       };
     }
     const merged = new Error(`级联复核两级均失败：小模型 ${smallError ? smallError.message : '低置信未采纳'}；大模型 ${largeError.message}`);
     merged.cause = largeError;
     throw merged;
   }
-  const meta = { escalatedFrom: 'http-json', cascade: { level: 'large', acceptThreshold } };
-  if (small) meta.smallAttempt = { task: small.task, tier: small.tier, confidence: small.confidence };
+  const largeLatencyMs = Date.now() - largeStarted;
+  const meta = { escalatedFrom: 'http-json', cascade: { level: 'large', acceptThreshold, latencyMs: largeLatencyMs, totalLatencyMs: smallLatencyMs + largeLatencyMs } };
+  if (small) meta.smallAttempt = { task: small.task, tier: small.tier, confidence: small.confidence, latencyMs: smallLatencyMs };
   if (smallError) meta.smallError = String(smallError.message).slice(0, 200);
   return { ...escalated, ...meta };
 }

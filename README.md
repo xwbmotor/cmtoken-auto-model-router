@@ -44,6 +44,10 @@
 - 管理面板双模式：简单模式只留预设与日常开关（运营人员）；专家模式开放全部参数（算法负责人）。右上角切换，选择记住在浏览器。
 - 切换影响预估：组件体检面板新增「切换影响预估」按钮——454 条 heldout 上回放三种决策链（规则主导/分级采纳/全量采纳），直接读出判准率/质量/成本/误判方向。
 - 三阈值分级采纳：`smallAcceptThreshold`(0.7) 小模型直采线——低于它升级大模型；`finalAdoptionThreshold`(0.5) 最终采纳线——语义复核结果低于它退回规则层；旧 `minConfidence` 为兼容别名。规则层置信度是证据强度函数（否定包裹/元讨论/多任务冲突下调），归因因素 `confidenceFactors` 落决策日志。
+- **复核事件持久化（v0.7.0）**：shadow/灰度下的每次语义复核按 `requestId` 落 `data/decisions/semantic-reviews-*.jsonl`（独立事件流，含 L1/L2/L3 各层 task·tier·confidence、cascade 层级、每层耗时、分歧结论、分类开销），重启不丢——决策日志 `semanticReview.status` 与事件流按 `requestId` 关联。
+- **语义独立灰度（v0.7.0）**：`semanticRouter.activeTrafficPercent`（0-100）——active 模式下按 `requestId` 稳定哈希分桶，桶内才采纳语义分类，桶外记 `rollout_hold` 照常后台观察（对照组样本不丢）。与模型路由整体灰度 `routing.activeTrafficPercent` 是两个独立实验变量。
+- **三层分类口径统一（v0.7.0）**：L1 语义信号（task 正则/否定包裹/trivial）与 L2/L3 共用 user-only 文本；规模信号（长度/轮次/结构复杂度）保留请求全量口径——用户贴回长代码要求改写，工作量确实按全量算。
+- **路由成本分账（v0.7.0）**：预算台账拆 `answerCostYuan`（回答结算）与 `routingOverheadCostYuan`（L2/L3 分类调用）两条线，指标 `router_budget_answer_cost_yuan` / `router_budget_routing_overhead_cost_yuan`——净节省 = 固定模型基线 − 回答费用 − 分类开销。
 - 误判方向分解：回放输出 underCalled（漏判难任务→质量风险）/ overCalled（多判→成本浪费）/ taskSwapped（同档互错），告诉运维错的方向而不是只给准确率。
 - 基线对照：影响模拟面板新增「随机基线（Pareto 前沿）/ 事后最优」对照——当前路由质量应落在两者之间；低于随机基线说明任务区分度不足。
 - 组件体检：一键在标准评测集（heldout 454 条，与训练切分同源）上评测分类小模型与规则层，输出准确率/宏F1/混淆矩阵/分歧率——换分类器前后各跑一次即可量化"准了多少"。
