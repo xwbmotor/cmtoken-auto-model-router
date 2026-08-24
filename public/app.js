@@ -307,7 +307,7 @@ function bindPolicy() {
   updateRangeLabels();
 }
 function renderModels() { $('models').innerHTML = config.models.map((m, i) => `<tr data-index="${i}"><td><input class="enabled" type="checkbox" ${m.enabled ? 'checked' : ''}></td><td><strong>${m.displayName || m.id}</strong><br><small>${m.id}</small></td><td><span class="tag ${m.ownership === 'self_hosted' ? 'self' : 'eco'}">${m.ownership === 'self_hosted' ? '自建' : '生态'}</span></td><td><input class="quality" type="number" min="0" max="1" step=".01" value="${m.quality.default}"></td><td><input class="cost" type="number" min="0" step=".01" value="${m.costIndex}"></td><td class="provider-cost">—</td><td><input class="latency" type="number" min="0" step=".01" value="${m.latencyIndex}"></td><td><input class="input-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.input ?? ''}"></td><td><input class="cached-price" type="number" min="0" step=".01" placeholder="无折扣" value="${m.pricingYuanPerMillionTokens?.inputCached ?? ''}"></td><td><input class="output-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.output ?? ''}"></td><td><input class="p95" type="number" min="0" step="1" placeholder="待观测" value="${m.performance?.totalP95Ms ?? ''}"></td><td><span class="pill ${m.calibrationStatus === 'verified' ? 'good' : 'muted'}">${m.calibrationStatus === 'verified' ? '已验证' : m.calibrationStatus === 'pilot' ? 'Pilot' : '待校准'}</span></td><td class="health">—</td></tr>`).join(''); }
-// 平台侧成本指数列（成本双指标）：来自 deployment 数据 (机×卡×卡价)/tps，独立于豆价 costIndex
+// 算力消耗指数列（成本双指标之一）：来自 deployment 数据 (机×卡×卡价)/tps，独立于用户侧豆价 costIndex
 function providerIndexClient(m) { const d = m.deployment; if (!d || !d.machines || !d.tps) return null; const cw = Number((config.costModel?.cardPrice || {})[d.deviceType] || 1); const unit = Number(d.machines) * (Number(d.cardsPerMachine) || 1) * cw / Number(d.tps); return { unit }; }
 function renderProviderColumn() { const units = config.models.map(providerIndexClient).map((x) => x?.unit).filter(Number.isFinite); const anchor = units.length ? Math.max(...units) : null; document.querySelectorAll('#models tr').forEach((row, i) => { const m = config.models[i]; const cell = row.querySelector('.provider-cost'); if (!cell) return; const p = providerIndexClient(m); cell.textContent = (p && anchor) ? Math.min(1, p.unit / anchor).toFixed(3) : '—'; }); }
 function computeCostIndexClient(models, cardPrice) { const costs = []; for (const m of models) { const d = m.deployment; if (!d || !d.machines || !d.tps) continue; const cardWeight = Number(cardPrice[d.deviceType] || 1); const hw = Number(d.machines) * (Number(d.cardsPerMachine) || 1) * cardWeight; costs.push({ id: m.id, unitCost: hw / Number(d.tps) }); } if (!costs.length) return null; const max = Math.max(...costs.map((c) => c.unitCost)); if (!(max > 0)) return null; return Object.fromEntries(costs.map((c) => [c.id, Number((c.unitCost / max).toFixed(3))])); }
@@ -489,7 +489,7 @@ function renderSimulation(result) {
   renderSensitivity(result.sensitivity);
   renderNoAutoCompare(result);
 }
-// 「不做 auto」对比表：调整后策略 vs 全量固定给每个单模型（质量/用户成本/平台成本/时延 + 百分比变化）
+// 「不做 auto」对比表：调整后策略 vs 全量固定给每个单模型（质量/用户成本/算力消耗/时延 + 百分比变化）
 function renderNoAutoCompare(result) {
   const box = $('noAutoCompare'); if (!box) return;
   const cmp = result.proposed?.comparison || result.comparison;
@@ -503,10 +503,10 @@ function renderNoAutoCompare(result) {
     const pills = [];
     if (dQ != null) pills.push(`<span class="pill ${dQ >= 0 ? 'good' : 'bad'}" title="质量变化">质量${fmt(dQ)}</span>`);
     if (dC != null) pills.push(`<span class="pill ${dC <= 0 ? 'good' : 'bad'}" title="用户成本变化">用户成本${fmt(dC)}</span>`);
-    if (dP != null) pills.push(`<span class="pill ${dP <= 0 ? 'good' : 'bad'}" title="平台成本变化">平台成本${fmt(dP)}</span>`);
+    if (dP != null) pills.push(`<span class="pill ${dP <= 0 ? 'good' : 'bad'}" title="算力消耗变化">算力消耗${fmt(dP)}</span>`);
     return `<tr><td><b>${escHtml(b.displayName || b.model)}</b>${b.feasible === false ? ' <span class="pill bad" style="font-size:11px">能力不足</span>' : ''}</td><td>${b.averageQuality?.toFixed(3) ?? '—'}</td><td>${b.averageCostIndex?.toFixed(3) ?? '—'}</td><td>${b.averageCostIndexProvider?.toFixed(3) ?? '—'}</td><td>${pills.join(' ')}</td></tr>`;
   }).join('');
-  box.innerHTML = `<p class="policy-section-title" style="margin:4px 0 6px">不做 auto 会怎样 <span class="help" data-help="把全部流量固定给某个模型（不做路由）的模拟结果 vs 当前调整后的策略。质量越高越好；用户成本=按豆价结算；平台成本=按算力资源消耗；负值=策略比固定该模型更省。">?</span></p><div class="table-wrap"><table><thead><tr><th>固定给单一模型</th><th>质量</th><th>用户成本</th><th>平台成本</th><th>当前策略相对它</th></tr></thead><tbody>${rowsHtml}</tbody></table></div><p class="hint" style="margin:6px 0 0">「不做 auto」= 同一批代表任务全部发给该模型。「当前策略相对它」列是百分比变化，绿=更优。这张表回答：不路由直接用某个模型，质量和成本各差多少。</p>`;
+  box.innerHTML = `<p class="policy-section-title" style="margin:4px 0 6px">不做 auto 会怎样 <span class="help" data-help="把全部流量固定给某个模型（不做路由）的模拟结果 vs 当前调整后的策略。质量越高越好；用户成本=按豆价结算；算力消耗=按自建算力资源消耗；负值=策略比固定该模型更省。">?</span></p><div class="table-wrap"><table><thead><tr><th>固定给单一模型</th><th>质量</th><th>用户成本</th><th>算力消耗</th><th>当前策略相对它</th></tr></thead><tbody>${rowsHtml}</tbody></table></div><p class="hint" style="margin:6px 0 0">「不做 auto」= 同一批代表任务全部发给该模型。「当前策略相对它」列是百分比变化，绿=更优。这张表回答：不路由直接用某个模型，质量和成本各差多少。</p>`;
 }
 // 调整手感：每个滑条「再拉多少才会变 / 拉到头也变不了的原因」
 function renderSensitivity(s) {
@@ -656,7 +656,7 @@ $('replaySwitch').onclick = async () => {
     const r = await api('/admin/api/classifier/replay', { method: 'POST' });
     const pct = (v) => `${(v * 100).toFixed(1)}%`;
     const signed = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
-    const row = (name, d, hint) => `<article><span>${name}</span><strong>判准率 ${pct(d.taskAcc)}</strong><small>质量 ${d.avgQuality.toFixed(3)} · 成本指数 ${d.avgCost.toFixed(3)}</small><small class="muted">漏判难任务 ${d.misread.underCalled} 条 · 多判 ${d.misread.overCalled} 条 · 同档互错 ${d.misread.taskSwapped} 条${hint || ''}</small></article>`;
+    const row = (name, d, hint) => `<article><span>${name}</span><strong>判准率 ${pct(d.taskAcc)}</strong><small>质量 ${d.avgQuality.toFixed(3)} · 用户成本指数 ${d.avgCost.toFixed(3)}</small><small class="muted">漏判难任务 ${d.misread.underCalled} 条 · 多判 ${d.misread.overCalled} 条 · 同档互错 ${d.misread.taskSwapped} 条${hint || ''}</small></article>`;
     const dist = (d) => Object.entries(d.modelDist).map(([m, n]) => `${m.replace('deepseekv4-flash', 'dsf').replace('qwen36-35b', 'qwen')}×${n}`).join(' ');
     const shifts = Object.entries(r.partial.modelShifts || {}).map(([k, n]) => `${k.replace('deepseekv4-flash', 'dsf').replace('qwen36-35b', 'qwen')} ${n} 条`).join('，') || '无变化';
     box.innerHTML = `

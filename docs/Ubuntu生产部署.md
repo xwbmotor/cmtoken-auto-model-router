@@ -123,7 +123,7 @@ docker compose -f docker-compose.prod.yml down                 # 停止
 | 配置发布历史 | `/opt/amr/config/history/` | 每次发布的配置快照，可回滚 |
 
 **持续迭代闭环**：跑一段时间后把 `data/decisions/*.jsonl` 发我（或整个 `/opt/amr/data` 打包），
-我可以做：流量构成分析（输入/输出比、任务类型分布）→ 校正 pricingMix/成本指数；失败/降级分析 →
+我可以做：流量构成分析（输入/输出比、任务类型分布）→ 校正 pricingMix/用户成本指数；失败/降级分析 →
 调熔断与 fallback；配合 feedback 做质量校准。`redactMessages: true` 已默认开启，日志不含用户
 消息原文，只有 token 数和分类标签，脱敏安全。
 
