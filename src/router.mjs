@@ -95,9 +95,45 @@ const MULTI_OBJECTIVE_PATTERN = /成本|费用|质量|效果|时延|延迟|效�
 // —— v0.6.0 规则层置信度证据模型（四审：关键词命中恒 0.86 不科学）——
 // 置信度反映证据强度而非命中即高。三个下调因素让边缘案例（否定句/元讨论/多任务冲突）
 // 落到 confidenceThreshold(默认0.7) 以下进入语义复核，正常强命中保持 0.86 不复核。
-const NEGATION_PATTERN = /不要|不用|无需|禁止|避免|并非|而不是|暂不|先不|别写|别用|别管|别生成|别给/i;
+// v0.6.1 五审 P2 修正：否定证据不再全文匹配即扣——「不要解释，直接写 Python 函数」「禁止
+// 递归，写循环版本」本身是明确 coding 请求，全局否定词会误伤（复核预算浪费 + 时延增加）。
+// 局部化规则：只有当否定词与任务动词在同一短语（被否定的动作紧跟其后）时才算「否定包裹」。
+// 近邻窗 ±12 字符内出现任务动作词 = 否定与任务绑定；否则否定针对的是别的东西（说明/解释等）。
+const NEGATION_PATTERN = /不要|不用|无需|禁止|避免|并非|而不是|暂不|先不|别写|别用|别管|别生成|别给/gi;
 const META_QUESTION_PATTERN = /什么是|通俗.{0,6}(语言|方式|词语|地)?(解释|讲解|介绍|说明)|科普/i;
 const META_SUMMARIZE_PATTERN = /(总结|概括|翻译|改写|解释|讲解|评审意见)(一下|下)?[^。？！]{0,10}(这段|上述|下面|以上|该段|这份)/i;
+
+// 否定局部化（v0.6.1 五审 P2）：否定词到其后第一个分句边界（或 +10 字符）构成「否定作用域」。
+// 「否定包裹任务」= 胜出任务正则的【全部】命中都落在否定作用域内——被否定的关键词撑不起任务
+// 标签（「不要写代码」的 代码 被否定）；只要存在肯定命中（「不要解释，直接写函数」的 函数 在
+// 作用域外）任务成立不扣分（「禁止递归，写循环版本」否定的是实现方式而非任务本身）。
+const CLAUSE_BOUNDARY = /[，。；、,.;:？！?！\n]/;
+function negationWrappedTask(text, taskRegex) {
+  if (!taskRegex) return false;
+  const negProbe = new RegExp(NEGATION_PATTERN.source, 'i');
+  if (!negProbe.test(text)) return false;
+  // 否定作用域列表
+  const negG = new RegExp(NEGATION_PATTERN.source, 'gi');
+  const scopes = [];
+  let m;
+  while ((m = negG.exec(text)) !== null) {
+    let to = Math.min(text.length, m.index + m[0].length + 10);
+    for (let i = m.index + m[0].length; i < to; i += 1) {
+      if (CLAUSE_BOUNDARY.test(text[i])) { to = i; break; }
+    }
+    scopes.push([m.index, to]);
+  }
+  // 任务正则全部命中 vs 被否定命中
+  const g = new RegExp(taskRegex.source, taskRegex.flags.includes('g') ? taskRegex.flags : taskRegex.flags + 'g');
+  let matches = 0;
+  let negated = 0;
+  while ((m = g.exec(text)) !== null) {
+    matches += 1;
+    if (scopes.some(([a, b]) => m.index >= a && m.index < b)) negated += 1;
+    if (m.index === g.lastIndex) g.lastIndex += 1; // 零宽匹配防死循环
+  }
+  return matches > 0 && matches === negated;
+}
 
 function flattenContent(content) {
   if (typeof content === 'string') return content;
@@ -107,6 +143,17 @@ function flattenContent(content) {
 
 export function requestText(body) {
   return (body.messages || []).map((m) => flattenContent(m.content)).join('\n');
+}
+
+// v0.6.1 五审 P2：语义分类器专用文本口径（L2/L3 与 L1 统一）。
+// requestText 含 system+assistant+全部历史——成本估算需要它（token 计费按全部输入），但语义
+// 分类不能用它：system 提示「你是编程助手」、assistant 历史里的代码都会把分类器拽向 coding。
+// 口径：以最后一条 user 消息为主，补充有限的前置 user 上下文（最近 2 条），排除 system/assistant。
+export function classifierText(body, contextTurns = 2) {
+  const userMessages = (body.messages || []).filter((m) => m.role === 'user');
+  if (userMessages.length === 0) return requestText(body); // 无 user 消息（罕见）：退回全量兜底
+  const tail = userMessages.slice(-(contextTurns + 1));
+  return tail.map((m) => flattenContent(m.content)).join('\n');
 }
 
 // 任务分类用的文本：排除系统提示词（模板词如「你是研发助手」会把所有请求都拽向 coding）
@@ -126,9 +173,13 @@ export function analyzeRequest(body, config) {
   for (const [name, regex] of Object.entries(patterns)) {
     if (regex.test(text)) { task = name; break; }
   }
+  // v0.6.1 五审 P2：turns/trivial 只看 user 消息。原实现用全部消息数——常见 system+user 两条
+  // 消息的「今天星期几」不再是 trivial（turns=2 > 1），置信度从 0.98 跌到 0.55 进复核，
+  // 复现「简单问题难度/置信度不合理」。system 提示与 assistant 历史不是「用户追问」。
+  const userTurns = Array.isArray(body.messages) ? body.messages.filter((m) => m.role === 'user').length : 0;
   const turns = Array.isArray(body.messages) ? body.messages.length : 0;
   const trimmed = text.trim();
-  const trivial = turns <= 1 && TRIVIAL_FACT_PATTERN.test(trimmed);
+  const trivial = userTurns === 1 && TRIVIAL_FACT_PATTERN.test(trimmed);
   const signals = [];
   const addSignal = (key, label, contribution) => {
     if (contribution > 0) signals.push({ key, label, contribution: Number(contribution.toFixed(3)) });
@@ -184,7 +235,7 @@ export function analyzeRequest(body, config) {
     if (trivial) return { value: 0.98, factors: [] };
     let base = task === 'default' ? 0.55 : 0.86;
     const factors = [];
-    if (NEGATION_PATTERN.test(trimmed) && task !== 'default') { base -= 0.35; factors.push('negation'); }
+    if (task !== 'default' && negationWrappedTask(trimmed, patterns[task])) { base -= 0.35; factors.push('negation'); }
     if (task !== 'default' && (META_QUESTION_PATTERN.test(trimmed) || META_SUMMARIZE_PATTERN.test(trimmed))) { base -= 0.25; factors.push('meta-discussion'); }
     if (task !== 'default' && matchedCount >= 2) { base -= 0.2 * (matchedCount - 1); factors.push('multi-task-conflict'); }
     return { value: Number(Math.min(0.9, Math.max(0.3, base)).toFixed(3)), factors };

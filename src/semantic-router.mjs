@@ -8,7 +8,7 @@
 //                  大模型也不行才把错误抛给调用方（由上层退回规则层决策）。
 //                  成本逻辑：大部分请求小模型能定，只有拿不准的少数才付大模型的调用成本。
 //   - disabled   ：不复核（等价 semanticRouter.enabled=false，显式声明用）
-import { requestText } from './router.mjs';
+import { classifierText, requestText } from './router.mjs';
 
 const ALLOWED_TASKS = new Set(['default', 'coding', 'reasoning', 'creative', 'extraction']);
 const ALLOWED_TIERS = new Set(['simple', 'balanced', 'complex']);
@@ -22,7 +22,8 @@ export function semanticProvider(config) {
 export function shouldUseSemanticRouter(analysis, body, config) {
   const policy = config.semanticRouter;
   if (!policy?.enabled || semanticProvider(config) === 'disabled') return false;
-  const text = requestText(body).trim();
+  // v0.6.1 五审 P2：文本口径统一（L2/L3 与 L1 同口径）——分类输入不再包含 system/assistant
+  const text = classifierText(body).trim();
   if (text.length < Number(policy.minCharacters || 12)) return false;
   return analysis.confidence < Number(policy.confidenceThreshold ?? 0.7);
 }
@@ -55,7 +56,9 @@ async function classifyViaOpenAIChat(body, config, options) {
   if (!chat.model) throw new Error('openai-chat 评估器缺少模型配置');
   const base = (options.baseUrl || config.upstreamBaseUrl).replace(/\/$/, '');
   if (!options.apiKey) throw new Error('语义分类器缺少上游 API Key');
-  const text = requestText(body).slice(-Number(policy.maxInputCharacters || 6000));
+  // v0.6.1 五审 P2：分类文本与 L1 同口径（user 为主，排除 system/assistant）——原 requestText
+  // 会把 system 提示与 assistant 历史代码一并送分类，系统性拽向 coding
+  const text = classifierText(body).slice(-Number(policy.maxInputCharacters || 6000));
   // v0.6.0：携带前级判断（cascade 升级时）。大模型复核不是盲判——小模型结论作为参照意见
   // 注入 prompt，明确「仅参考，可同意可推翻」；证明有效性的最终标准是决策日志对比。
   const prior = options.priorAssessment ? `\n\n小模型初判（仅参考，可同意可推翻）：{"task":"${options.priorAssessment.task}","tier":"${options.priorAssessment.tier}","confidence":${options.priorAssessment.confidence},"reason":"${(options.priorAssessment.reason || '').slice(0, 80)}"}` : '';
@@ -79,7 +82,13 @@ async function classifyViaOpenAIChat(body, config, options) {
     if (!response.ok) throw new Error(`语义分类器返回 HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
     const payload = await response.json();
     const assessment = parseSemanticAssessment(payload?.choices?.[0]?.message?.content);
-    return { ...assessment, provider: 'openai-chat', model: chat.model, latencyMs: Date.now() - started };
+    // v0.6.1 五审 P1：提取大模型分类调用的真实 usage（原实现只取 choices——L3 升级产生的
+    // 真实 token 费用从未进预算台账，shadow 阶段是「真实付费但不改路由」的隐藏成本）
+    const u = payload?.usage;
+    const overheadUsage = (u && Number.isFinite(u.prompt_tokens) && Number.isFinite(u.completion_tokens))
+      ? { prompt: u.prompt_tokens, completion: u.completion_tokens }
+      : null;
+    return { ...assessment, provider: 'openai-chat', model: chat.model, latencyMs: Date.now() - started, ...(overheadUsage ? { overheadUsage } : {}) };
   } finally {
     clearTimeout(timer);
   }
@@ -93,7 +102,8 @@ async function classifyViaHttpJson(body, config, options) {
   const endpoint = policy.httpJson || {};
   const url = process.env.SEMANTIC_CLASSIFIER_URL || endpoint.url;
   if (!url) throw new Error('http-json 评估器缺少 url 配置');
-  const text = requestText(body).slice(-Number(policy.maxInputCharacters || 6000));
+  // v0.6.1 五审 P2：同 openai-chat——分类文本与 L1 同口径（user 为主，排除 system/assistant）
+  const text = classifierText(body).slice(-Number(policy.maxInputCharacters || 6000));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('语义分类器超时')), Number(endpoint.timeoutMs || policy.timeoutMs || 2000));
   const started = Date.now();

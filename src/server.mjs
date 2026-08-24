@@ -632,8 +632,12 @@ async function probeUpstream() {
 function semanticOptions(clientAuthHeader = null) {
   // v0.6.0：passthrough 模式下大模型分类器允许透传本次客户端 key（四审：原实现只读服务端
   // key，passthrough 无服务端 key 时 cascade 升级必报「缺少上游 API Key」）。客户端 key 优先。
+  // v0.6.1 五审 P1 修正：仅 passthrough 允许客户端 key。strict 模式下客户端 Authorization 是
+  // ROUTER_ACCESS_KEY（本路由的准入凭证），不是 MaaS key——拿它打 MaaS 必 401，还会把 Router
+  // Key 泄漏给上游。strict 一律用服务端 key。
   const serverKey = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
-  const clientKey = clientAuthHeader ? String(clientAuthHeader).replace(/^Bearer\s+/i, '') : null;
+  const passthrough = process.env.ROUTER_KEY_MODE === 'passthrough';
+  const clientKey = passthrough && clientAuthHeader ? String(clientAuthHeader).replace(/^Bearer\s+/i, '') : null;
   const apiKey = clientKey || serverKey;
   return {
     baseUrl: process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl,
@@ -646,16 +650,49 @@ function recordSemanticReview(review) {
   if (semanticReviews.length > 100) semanticReviews.length = 100;
 }
 
-function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, clientAuthHeader = null } = {}) {
+// v0.6.1 五审 P1：路由开销（L3 大模型分类调用）入账。返回 { overheadUsage, overheadCostYuan,
+// classifierLatencyMs }——由调用方并进 review/决策日志，金额现金入预算台账（已确定无需预占冲正）。
+function routingOverhead(assessment) {
+  if (!assessment?.overheadUsage) return null;
+  const modelConfig = config.models.find((item) => item.id === assessment.model);
+  const costYuan = computeActualCostFromUsage(assessment.overheadUsage, modelConfig);
+  // 现金入账进 settledActual（有真实 usage 支撑），不进在途预占 estimatedSpendYuan——
+  // 预占语义是「未结算」，分类费已确定，走 estimated 会虚增 pendingReserves 压力。budget.enabled=false 也照记（对账口径）。
+  if (costYuan != null) budgetTracker.chargeRouterOverhead(costYuan).catch?.(() => {});
+  counters.routingOverhead ??= { calls: 0, costYuan: 0, promptTokens: 0, completionTokens: 0 };
+  counters.routingOverhead.calls += 1;
+  counters.routingOverhead.costYuan = Number((counters.routingOverhead.costYuan + (costYuan || 0)).toFixed(6));
+  counters.routingOverhead.promptTokens += assessment.overheadUsage.prompt || 0;
+  counters.routingOverhead.completionTokens += assessment.overheadUsage.completion || 0;
+  return { overheadUsage: assessment.overheadUsage, overheadCostYuan: costYuan, classifierLatencyMs: assessment.latencyMs || null };
+}
+
+function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, clientAuthHeader = null, allowedModelIds = null } = {}) {
   if (track) counters.semantic.attempted += 1;
   return classifySemantically(body, config, semanticOptions(clientAuthHeader)).then((assessment) => {
     if (track) counters.semantic.succeeded += 1;
     if (track && assessment?.escalatedFrom) counters.semantic.escalated = (counters.semantic.escalated || 0) + 1;
     const semanticAnalysis = mergeSemanticAssessment(baseAnalysis, assessment, true);
-    const proposed = routeRequest(body, config, { health, analysisOverride: semanticAnalysis, budgetPressure: budgetTracker.pressure(), trafficBucket: baseDecision.rollout.trafficBucket });
+    // v0.6.1 五审 P1：语义重路由沿用首次路由的租户候选范围。原实现只传 health/analysisOverride/
+    // budgetPressure/trafficBucket——L2/L3 重判 task/tier 后第二次 routeRequest 拿全量模型池打分，
+    // active 模式可能提出租户无权调用的模型（上游 403/404 + 无谓 fallback）。shadow 的 proposed
+    // 对比同样要用同口径候选池，否则分歧率统计失真。
+    const proposed = routeRequest(body, config, { health, analysisOverride: semanticAnalysis, budgetPressure: budgetTracker.pressure(), trafficBucket: baseDecision.rollout.trafficBucket, ...(allowedModelIds ? { allowedModelIds } : {}) });
     const disagreed = assessment.tier !== baseAnalysis.tier || assessment.task !== baseAnalysis.task || proposed.suggestedModel !== baseDecision.suggestedModel;
     if (track && disagreed) counters.semantic.disagreed += 1;
+    // v0.6.1 五审 P2：cascade 分层计数（small 直采 / large 升级 / small-degraded 降级）——
+    // 运营调 smallAcceptThreshold 时需要看到 L3 调用率（=成本）的对应变化
+    if (track && assessment?.cascade?.level) {
+      counters.semantic.byCascadeLevel ??= {};
+      counters.semantic.byCascadeLevel[assessment.cascade.level] = (counters.semantic.byCascadeLevel[assessment.cascade.level] || 0) + 1;
+    }
     const review = { at: new Date().toISOString(), assessment, base: { task: baseAnalysis.task, tier: baseAnalysis.tier, complexity: baseAnalysis.complexity, model: baseDecision.suggestedModel }, proposed: { task: semanticAnalysis.task, tier: semanticAnalysis.tier, complexity: semanticAnalysis.complexity, model: proposed.suggestedModel }, disagreed };
+    // v0.6.1 五审 P1：L3 大模型分类调用成本入账（原实现完全不入预算台账——真实付费的黑洞）。
+    // 按 assessment.model 的 token 定价 × 真实 usage 现金入账（非预占：金额已确定无需冲正）；
+    // 决策日志随 review.assessment 携带 overheadUsage/overheadCostYuan；shadow 阶段该成本由
+    // 平台承担（只观察不改路由），active 阶段计入该请求总成本。
+    const overhead = routingOverhead(assessment);
+    if (overhead) Object.assign(review, overhead);
     if (track) recordSemanticReview(review);
     return { assessment, semanticAnalysis, proposed, review };
   }).catch((error) => {
@@ -685,11 +722,11 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
   if (!shouldUseSemanticRouter(baseAnalysis, body, config)) return baseDecision;
   if (!preview) counters.semantic.eligible += 1;
   if (config.semanticRouter.mode === 'shadow' && !preview) {
-    classifyAndCompare(body, baseAnalysis, baseDecision, { clientAuthHeader }).catch(() => {});
+    classifyAndCompare(body, baseAnalysis, baseDecision, { clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null }).catch(() => {});
     return { ...baseDecision, semanticReview: { status: 'shadow_pending' } };
   }
   try {
-    const result = await classifyAndCompare(body, baseAnalysis, baseDecision, { track: !preview, clientAuthHeader });
+    const result = await classifyAndCompare(body, baseAnalysis, baseDecision, { track: !preview, clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null });
     if (config.semanticRouter.mode === 'active') {
       // v0.6.0：采纳线独立成 finalAdoptionThreshold（四审：原 minConfidence 双语义——
       // cascade 里当升级线、这里当采纳线）。语义复核最终结果（无论来自小模型直接采纳、
@@ -776,6 +813,17 @@ async function proxyCompletion(req, res) {
   // 异常路径（断流时 res.write 抛错或上游迭代器抛错进 catch），此守卫不重复落账（outcomeSettled 闸兜底）。
   let clientGone = false;
   const delivery = { delivered: false, usage: null, log: null, guardActive: false };
+  // v0.6.1 五审 P1：决策日志幂等闸。预算（settledAttempt）与成功计数（outcomeSettled）各有闸门，
+  // 唯独 decisionLog.write 无闸——成功流式会双写（close 守卫 + res.end 回调各一次，本地 200 条
+  // 实测 9 个重复 requestId），污染市场信号/胜率/训练集。收敛为请求级唯一写入口：无论成功、
+  // 失败、断开，每个请求恰好落一条 outcome 日志（顺带补齐 mid-flight 断流/客户端早退此前
+  // 完全不落日志的缺口——同一正确性类别）。
+  let requestLogWritten = false;
+  const writeOutcomeLog = (outcome) => {
+    if (requestLogWritten) return;
+    requestLogWritten = true;
+    decisionLog.write({ sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, outcome);
+  };
   const onClientClose = () => {
     clientGone = true;
     if (!delivery.guardActive) {
@@ -784,6 +832,7 @@ async function proxyCompletion(req, res) {
       if (!outcomeSettled) {
         markOutcome(false, new Error('client_disconnected'));
         settleAttempt(null, false);
+        writeOutcomeLog({ ok: false, model: actxCtx?.model, error: 'client_disconnected', latencyMs: actxCtx ? Date.now() - actxCtx.started : null });
         logger.warn('client_abandoned_upstream_wait', { requestId: req.requestId });
       }
       return;
@@ -791,10 +840,11 @@ async function proxyCompletion(req, res) {
     if (res.writableFinished && delivery.delivered) {
       markOutcome(true);
       settleWithUsageGlobal(delivery.usage);
-      if (delivery.log) decisionLog.write(delivery.log.entry, decision, delivery.log.outcome);
+      if (delivery.log) writeOutcomeLog(delivery.log.outcome);
     } else {
       markOutcome(false, new Error('client_disconnected'));
       settleAttempt(null, false);
+      writeOutcomeLog({ ok: false, model: actxCtx?.model, error: 'client_disconnected', latencyMs: actxCtx ? Date.now() - actxCtx.started : null });
       logger.warn('client_write_failed', { requestId: req.requestId, delivered: delivery.delivered, writableFinished: res.writableFinished });
     }
   };
@@ -877,7 +927,7 @@ async function proxyCompletion(req, res) {
         outcomeSettled = false;
         markOutcome(false, new Error('client_disconnected'));
         logger.warn('client_abandoned_upstream_wait', { requestId: req.requestId, model, latencyMs: Date.now() - started });
-        decisionLog.write({ sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, { ok: false, model, error: 'client_disconnected', latencyMs: Date.now() - started });
+        writeOutcomeLog({ ok: false, model, error: 'client_disconnected', latencyMs: Date.now() - started });
         clearTimeout(timer);
         return res.destroy();
       }
@@ -913,7 +963,7 @@ async function proxyCompletion(req, res) {
         if (clientGone) {
           clearTimeout(timer);
           logger.warn('client_abandoned_during_body_read', { requestId: req.requestId, model });
-          decisionLog.write({ sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, { ok: false, model, error: 'client_disconnected_during_body_read', usage, latencyMs: latency });
+          writeOutcomeLog({ ok: false, model, error: 'client_disconnected_during_body_read', usage, latencyMs: latency });
           return;
         }
         // Success accounting stays with the close guard (v0.5.3 fix): delivered-then-finished semantics.
@@ -943,7 +993,7 @@ async function proxyCompletion(req, res) {
         // 非流式：一次性写回。成功落账由 close 守卫按「writableFinished && delivered」判定——
         // v0.5.3 修三审 P1：v0.5.2 在 text() 读毕即记成功，客户端已断开时记了假成功。
         delivery.usage = usage;
-        delivery.log = { entry: logEntry, outcome: logOutcome };
+        delivery.log = { entry: logEntry, outcome: usage ? { ...logOutcome, usage, actualCostYuan: usage.prompt != null && usage.completion != null ? computeActualCostFromUsage(usage, selectedConfig) : logOutcome.actualCostYuan } : logOutcome };
         delivery.delivered = true;
         delivery.guardActive = true;
         clearTimeout(timer); return void res.end(responseText);
@@ -967,14 +1017,16 @@ async function proxyCompletion(req, res) {
       // 因此发起 end() 前先激活守卫并标记 delivered：close 与 end 回调谁先到都只落一次账
       // （outcomeSettled 闸互斥；writableFinished 区分「收完才关」与「没收完就断」）。
       delivery.usage = usage;
-      delivery.log = { entry: logEntry, outcome: logOutcome };
+      delivery.log = { entry: logEntry, outcome: usage ? { ...logOutcome, usage, actualCostYuan: usage.prompt != null && usage.completion != null ? computeActualCostFromUsage(usage, selectedConfig) : logOutcome.actualCostYuan } : logOutcome };
       delivery.delivered = true;
       delivery.guardActive = true;
       const streamDone = new Promise((resolve) => res.end(() => resolve()));
       await streamDone;
       markOutcome(true);
       settleWithUsage(usage);
-      decisionLog.write(logEntry, decision, { ...logOutcome, usage, actualCostYuan: usage && usage.prompt != null && usage.completion != null ? computeActualCostFromUsage(usage, selectedConfig) : logOutcome.actualCostYuan });
+      // v0.6.1 五审 P1：改走请求级幂等闸（原直接 decisionLog.write——close 守卫若先到已写一条，
+      // 此处再写即双写；200 条实测 9 个重复 requestId 全部为流式）
+      writeOutcomeLog({ ...logOutcome, usage, actualCostYuan: usage && usage.prompt != null && usage.completion != null ? computeActualCostFromUsage(usage, selectedConfig) : logOutcome.actualCostYuan });
       // 流式尾块拿到 usage 后补算实际成本并更新 token 计数器
       if (usage && selectedConfig?.pricingYuanPerMillionTokens && usage.prompt != null && usage.completion != null) {
         const actual = computeActualCostFromUsage(usage, selectedConfig);
@@ -988,8 +1040,10 @@ async function proxyCompletion(req, res) {
       if (res.headersSent) {
         // mid-flight 中断（流式断流/非流式写回失败）：单次失败落账 + 预算保留估算
         // （v0.5.2：markOutcome/settleAttempt 声明在 try 外，此处可见——原实现引用 try 内 const 抛 ReferenceError）
+        // v0.6.1 五审 P1：补决策日志（原实现只记 metrics 不落日志——与双写同属「每请求恰一条」缺口）
         markOutcome(false, error);
         settleAttempt(null, false);
+        writeOutcomeLog({ ok: false, model, error: String(error.message || error).slice(0, 500), latencyMs: Date.now() - started, fallbackAttempt: i });
         clearTimeout(timer); res.destroy(error); return;
       }
       // attempt 前段失败（尚未发送响应头）：预算结算 + 健康降权，请求级错误由循环外 counters.errors 统一记
@@ -1005,7 +1059,8 @@ async function proxyCompletion(req, res) {
   counters.outcome[auto ? 'auto' : 'explicit'].error += 1;
   const failure = { at: new Date().toISOString(), requested: decision.requestedModel, selected: attempts.at(-1), suggested: decision.suggestedModel, task: decision.analysis.task, reasoningLevel: decision.reasoningLevel, reasoningApplied: false, keyFingerprint: keyFingerprint(req.headers.authorization), ok: false, error: lastError?.message };
   record(failure);
-  decisionLog.write({ sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, { ok: false, model: attempts.at(-1), error: (lastError?.message || '').slice(0, 500) });
+  // v0.6.1 五审 P1：走请求级幂等闸（防 attempt 前段 close 守卫已写过失败日志后这里再写一条）
+  writeOutcomeLog({ ok: false, model: attempts.at(-1), error: (lastError?.message || '').slice(0, 500) });
   return errorJson(res, 502, lastError?.message || '所有候选模型均调用失败', 'upstream_error');
 }
 

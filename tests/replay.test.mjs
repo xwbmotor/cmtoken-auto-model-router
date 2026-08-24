@@ -28,7 +28,7 @@ function runDump() {
       if (existsSync(venv)) candidates.push(venv);
       candidates.push('python');
       const cmd = await candidates.reduce(async (acc, c) => await acc || (await tryRun(c) ? c : null), null);
-      if (!cmd) { reject(new Error('找不到可导入 sklearn/joblib 的 Python（检查 CLASSIFIER_PYTHON / .venv / PATH）')); return; }
+      if (!cmd) { reject(new Error('SKIP_NO_PYTHON')); return; } // v0.6.1 五审 P2：无 Python 环境 → skip 而非 fail
       const child = spawn(cmd, [join(projectRoot, 'scripts', 'evaluate_classifier.py'), '--dump'], { cwd: projectRoot });
       let out = ''; let err = '';
       child.stdout.on('data', (d) => { out += d; });
@@ -37,10 +37,26 @@ function runDump() {
     })();
   });
 }
+
+// v0.6.1 五审 P2：无可用 Python（sklearn/joblib）时明确 skip，不让整个 Node 测试套件失败。
+// codex 在干净环境实测 152/154：两项 replay 因缺可导入 sklearn 的 Python 而 fail——
+// 可选依赖缺失应降级为跳过（t.skip 语义），CI 中可用 CLASSIFIER_PYTHON 指定解释器恢复全量。
+async function dumpOrSkip(t) {
+  try {
+    return await runDump();
+  } catch (error) {
+    if (String(error.message).includes('SKIP_NO_PYTHON')) {
+      t.skip('本机无可导入 sklearn/joblib 的 Python——replay 数据集回放跳过（设 CLASSIFIER_PYTHON 可启用）');
+      return null;
+    }
+    throw error;
+  }
+}
 import { join } from 'node:path';
 
-test('replay：dump 逐条含 text/confidence/tier/complexity，三种策略可聚合', async () => {
-  const dump = await runDump();
+test('replay：dump 逐条含 text/confidence/tier/complexity，三种策略可聚合', async (t) => {
+  const dump = await dumpOrSkip(t);
+  if (!dump) return;
   assert.ok(dump.length >= 400, `dump 应约 454 条，实际 ${dump.length}`);
   for (const key of ['index', 'gold', 'clf', 'rule', 'confidence', 'tier', 'complexity', 'text']) {
     assert.ok(key in dump[0], `dump 行缺 ${key}`);
@@ -53,9 +69,10 @@ test('replay：dump 逐条含 text/confidence/tier/complexity，三种策略可�
   assert.ok(fullAcc > rulesAcc + 0.2, `全量采纳判准率(${fullAcc.toFixed(3)}) 应明显高于规则层(${rulesAcc.toFixed(3)})`);
 });
 
-test('replay 端到端：真实 server /admin/api/classifier/replay 返回三策略完整结构', async () => {
+test('replay 端到端：真实 server /admin/api/classifier/replay 返回三策略完整结构', async (t) => {
   const { startServer } = await import('./helpers.mjs').catch(() => ({}));
-  const dump = await runDump();
+  const dump = await dumpOrSkip(t);
+  if (!dump) return;
   // 直接调用内部函数不可行（未导出），端到端走真实服务；服务未起视为环境跳过
   let adminToken = process.env.ADMIN_TOKEN || '';
   try {

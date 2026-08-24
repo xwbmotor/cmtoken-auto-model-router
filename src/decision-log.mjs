@@ -101,7 +101,11 @@ export class DecisionLog {
         analysis: decision.analysis ? {
           task: decision.analysis.task, tier: decision.analysis.tier,
           complexity: decision.analysis.complexity, confidence: decision.analysis.confidence,
-          signals: decision.analysis.signals
+          signals: decision.analysis.signals,
+          // v0.6.1 五审 P2：置信度归因因素落盘（原白名单漏掉——negation/meta-discussion 等因素
+          // 在内存里有、持久化时被丢弃，「决策日志可归因」的交付描述不成立）
+          ...(Array.isArray(decision.analysis.confidenceFactors) && decision.analysis.confidenceFactors.length > 0
+            ? { confidenceFactors: decision.analysis.confidenceFactors } : {})
         } : null,
         candidates: (decision.candidates || []).map((c) => ({ model: c.model, score: c.score, quality: c.quality })),
         rejected: decision.rejected || [],

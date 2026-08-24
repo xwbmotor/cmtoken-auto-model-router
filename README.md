@@ -34,16 +34,16 @@
 - 管理页面：模型参数、策略发布、路由预演、健康与流量指标
 - 运营策略预设、Auto 灰度比例、发布前十类任务影响模拟和高影响二次确认
 - 可解释难度信号；发布时自动备份上一版本到 `config/history/`
-- 低置信度语义复核：默认 Shadow 采集分歧，不阻塞主请求；评估器可插拔——`openai-chat`（MaaS 大模型）、`http-json`（自训练小模型 HTTP 端点）或 `cascade`（级联：小模型先判，失败或低置信升级大模型兜底，`minConfidence` 兼任升级线）
+- 低置信度语义复核：默认 Shadow 采集分歧，不阻塞主请求；评估器可插拔——`openai-chat`（MaaS 大模型）、`http-json`（自训练小模型 HTTP 端点）或 `cascade`（级联：小模型先判，置信度 ≥ `smallAcceptThreshold`(0.7) 直采、低置信升级大模型复核，大模型挂降级回小模型，双挂才回退规则层）
 - 决策日志：每次路由决策落盘 JSONL（默认脱敏、按天轮转），`/admin/api/decisions` 导出，直接用于标注集采集
 - benchmark 先验：通用评测基准（GPQA Diamond / HLE / Terminal-Bench / SciCode / AA-LCR 等）映射为 `quality` 冷启动初值，留痕 `benchmarkScores`（`scripts/benchmark-to-quality.mjs` + `config/benchmark-data.json`）
-- 校准判定：模型累计真实样本达标且失败率低于阈值时，`calibrationStatus` 从 pilot/unverified 自动翻 verified，`uncertaintyPenalty` 归零（benchmark 先验让位给实时后验）
+- 可靠性判定：模型累计真实样本达标且失败率低于阈值时，`reliabilityStatus`（旧字段名 `calibrationStatus` 兼容读取）从 pilot/unverified 自动翻 verified，`uncertaintyPenalty` 归零（benchmark 先验让位给实时后验）
 - 生产就绪：结构化 JSON 日志、Prometheus `/metrics`（含决策日志磁盘监控）、优雅关停排空 in-flight、令牌桶限流（防成本失控）、`/health` 存活 + `/health/ready` 上游连通性就绪探针
 - 反向代理集成：详见 [docs/反代集成.md](docs/反代集成.md)（Nginx/Caddy/HAProxy 示例，含流式超时与 TLS 终结）
 - 路由设计说明：详见 [docs/路由设计说明.md](docs/路由设计说明.md)（为何默认 DeepSeek、容差分流机制、shadow→active 量化切换条件——部署团队必读）
 - 管理面板双模式：简单模式只留预设与日常开关（运营人员）；专家模式开放全部参数（算法负责人）。右上角切换，选择记住在浏览器。
 - 切换影响预估：组件体检面板新增「切换影响预估」按钮——454 条 heldout 上回放三种决策链（规则主导/分级采纳/全量采纳），直接读出判准率/质量/成本/误判方向。
-- 小模型采纳门槛：active 模式新增 `semanticRouter.minConfidence`，小模型复核结果置信度低于此值退回规则层（防止小模型瞎猜带偏路由），可从 0（激进/全采纳）调到 1（保守/全不采纳）。级联方式下此值兼任升级线：小模型置信度低于它就升级大模型兜底。
+- 三阈值分级采纳：`smallAcceptThreshold`(0.7) 小模型直采线——低于它升级大模型；`finalAdoptionThreshold`(0.5) 最终采纳线——语义复核结果低于它退回规则层；旧 `minConfidence` 为兼容别名。规则层置信度是证据强度函数（否定包裹/元讨论/多任务冲突下调），归因因素 `confidenceFactors` 落决策日志。
 - 误判方向分解：回放输出 underCalled（漏判难任务→质量风险）/ overCalled（多判→成本浪费）/ taskSwapped（同档互错），告诉运维错的方向而不是只给准确率。
 - 基线对照：影响模拟面板新增「随机基线（Pareto 前沿）/ 事后最优」对照——当前路由质量应落在两者之间；低于随机基线说明任务区分度不足。
 - 组件体检：一键在标准评测集（heldout 454 条，与训练切分同源）上评测分类小模型与规则层，输出准确率/宏F1/混淆矩阵/分歧率——换分类器前后各跑一次即可量化"准了多少"。

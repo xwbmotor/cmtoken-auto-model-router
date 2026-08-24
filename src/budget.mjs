@@ -112,6 +112,18 @@ export class BudgetTracker {
     return new BudgetTracker(path, config, state);
   }
 
+  // v0.6.1 五审 P1：路由开销现金入账（L3 大模型分类调用）。与主请求的 reserve→settle 不同，
+  // 这笔费用在调用的瞬间就已确定（有真实 usage），直接进 settledActualSpendYuan（已结算实际），
+  // 不占用预占语义。pressure() 的总消费口径自动包含（settledActualSpendYuan 是其加数之一）。
+  async chargeRouterOverhead(costYuan) {
+    this.rollover();
+    const cost = Number(costYuan);
+    if (!Number.isFinite(cost) || cost < 0) return;
+    this.state.settles = (this.state.settles || 0) + 1;
+    this.state.settledActualSpendYuan = Number(((this.state.settledActualSpendYuan || 0) + cost).toFixed(6));
+    this.scheduleWrite();
+  }
+
   updateConfig(config) { this.config = config; this.rollover(); }
 
   rollover() {

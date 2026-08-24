@@ -59,9 +59,28 @@ export function renderPrometheusMetrics(snapshot) {
   metric(lines, 'router_task_total', 'counter', '任务类型分布', taskRows);
 
   const semantic = counters.semantic || {};
-  const semanticRows = ['eligible', 'attempted', 'succeeded', 'disagreed', 'errors', 'applied']
+  // v0.6.1 五审 P2：补全漏斗后段——escalated（L2→L3 升级数）/rejectedLowConfidence（低于采纳线
+  // 被拒数）此前只在内存 counters 有、Prometheus 不导出，运营无法从监控判断调阈值后 L3 调用率变化
+  const semanticRows = ['eligible', 'attempted', 'succeeded', 'disagreed', 'errors', 'applied', 'escalated', 'rejectedLowConfidence']
     .map((stage) => `router_semantic_total{stage="${stage}"} ${semantic[stage] || 0}`);
-  metric(lines, 'router_semantic_total', 'counter', '语义复核各阶段计数', semanticRows);
+  metric(lines, 'router_semantic_total', 'counter', '语义复核各阶段计数（escalated=L2升级L3，rejectedLowConfidence=低于采纳线被拒）', semanticRows);
+
+  // v0.6.1 五审 P2：cascade 分层量（small=小模型直采 / large=升级大模型 / small-degraded=大模型挂降级）
+  const cascadeRows = Object.entries(semantic.byCascadeLevel || {}).map(([level, n]) => `router_semantic_cascade_total{level="${esc(level)}"} ${n}`);
+  if (cascadeRows.length > 0) metric(lines, 'router_semantic_cascade_total', 'counter', 'cascade 各层产出计数（small=直采，large=升级L3，small-degraded=降级）', cascadeRows);
+
+  // v0.6.1 五审 P1-4：路由开销（L3 大模型分类调用）可观测——真实付费的隐藏成本首次进监控
+  const overhead = counters.routingOverhead || {};
+  metric(lines, 'router_routing_overhead_calls_total', 'counter', '路由层大模型分类调用次数（L3 升级）', [
+    `router_routing_overhead_calls_total ${overhead.calls || 0}`,
+  ]);
+  metric(lines, 'router_routing_overhead_cost_yuan', 'counter', '路由层分类调用累计成本（元）', [
+    `router_routing_overhead_cost_yuan ${overhead.costYuan || 0}`,
+  ]);
+  metric(lines, 'router_routing_overhead_tokens_total', 'counter', '路由层分类调用累计 token（prompt/completion）', [
+    `router_routing_overhead_tokens_total{type="prompt"} ${overhead.promptTokens || 0}`,
+    `router_routing_overhead_tokens_total{type="completion"} ${overhead.completionTokens || 0}`,
+  ]);
 
   metric(lines, 'router_budget_estimated_spend_yuan', 'gauge', '当日估算花费（元，estimateOnly）', [
     `router_budget_estimated_spend_yuan ${Number(budget.estimatedSpendYuan || 0)}`,
