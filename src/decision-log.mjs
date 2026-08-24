@@ -94,6 +94,9 @@ export class DecisionLog {
         selectedModel: decision.selectedModel,
         shadow: decision.shadow,
         routeMethod: decision.analysis?.routeMethod || 'rules',
+        // v0.5.2：点名请求的真实任务类型（服务层把 task 记为 'explicit'，真实槽位在此）。
+        // 市场信号重建读这个字段产生点名加成；白名单漏掉=字段在持久化时丢失（Codex 二审实证 persistedExplicitTask=null）
+        explicitTask: decision.explicitTask || null,
         reasoningLevel: decision.reasoningLevel,
         analysis: decision.analysis ? {
           task: decision.analysis.task, tier: decision.analysis.tier,

@@ -16,7 +16,9 @@ export function renderPrometheusMetrics(snapshot) {
   const lines = [];
 
   const outcome = counters.outcome || {};
+  const successTotal = (outcome.auto?.success || 0) + (outcome.explicit?.success || 0);
   metric(lines, 'router_requests_total', 'counter', '路由完成的请求总数（按请求模式与结果）', [
+    `router_requests_success_total ${successTotal}`,
     `router_requests_total{mode="auto",outcome="success"} ${outcome.auto?.success || 0}`,
     `router_requests_total{mode="auto",outcome="error"} ${outcome.auto?.error || 0}`,
     `router_requests_total{mode="explicit",outcome="success"} ${outcome.explicit?.success || 0}`,

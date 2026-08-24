@@ -313,14 +313,23 @@ export function routeRequest(body, config, runtime = {}) {
     if (reasons.length) { rejected.push({ model: model.id, reasons }); continue; }
 
     // 质量分三级来源——30 小类实测（分层平滑）> 大类实测 > 默认 0.75：
-    // finalScore = sub*(n/(n+k)) + major*(k/(n+k))，k=8——小类样本少时信大类，样本足时信小类
+    // finalScore = sub*(n/(n+k)) + major*(k/(n+k))。v0.5.2 参数保守化（Codex 二审：k=8 时 n=5 小类
+    // 权重 38.5%，debugging 0.580(n=5) 把 0.955 拉到 0.811，5 条样本撼动大类结论过于激进）：
+    //   - k 默认 8→32：n=5 权重 13.5%、n=8 为 20%（同样 n 下小类话语权减半）
+    //   - subtaskMinSamples 默认 4：n<4 视为无小类证据，直接用大类分
+    //   - subtaskMaxAdjust 默认 0.06：小类对大类分的修正幅度封顶（±0.06），防小样本极端值击穿
     const subScore = model.benchmarkScores?.subtasks?.[analysis.subTask];
     const majorScore = Number(model.quality?.[analysis.task] ?? model.quality['default'] ?? 0.75);
     let quality = majorScore;
     if (subScore && Number.isFinite(Number(subScore.avg)) && subScore.n > 0) {
-      const k = Number(config.routing?.subtaskSmoothK ?? 8);
-      const w = subScore.n / (subScore.n + k);
-      quality = Number(subScore.avg) * w + majorScore * (1 - w);
+      const k = Number(config.routing?.subtaskSmoothK ?? 32);
+      const minSamples = Number(config.routing?.subtaskMinSamples ?? 4);
+      const maxAdjust = Number(config.routing?.subtaskMaxAdjust ?? 0.06);
+      if (subScore.n >= minSamples) {
+        const w = subScore.n / (subScore.n + k);
+        const blended = Number(subScore.avg) * w + majorScore * (1 - w);
+        quality = Math.max(majorScore - maxAdjust, Math.min(majorScore + maxAdjust, blended));
+      }
     }
     const uncertainty = model.calibrationStatus === 'verified' ? 0 : config.routing.uncertaintyPenalty;
     const selfBonus = config.routing.preferSelfHosted && model.ownership === 'self_hosted' ? config.routing.selfHostedBonus : 0;
@@ -363,18 +372,22 @@ export function routeRequest(body, config, runtime = {}) {
   const ordered = [...pool, ...candidates.filter((x) => !pool.includes(x)).sort((a, b) => b.score - a.score)];
   // 任务偏好分流：指定模型与最优模型的分差 ≤ 容差时选指定模型（quality 不受损前提下的定向分流，
   // 如并发余量大的模型接 extraction/creative；预算压力拉高成本权重时分差扩大，自然回落最优模型）
+  // 任务偏好分流（v0.5.2 收紧）：目标必须在 qualified 池内（不可绕过相对质量闸门/绝对质量线），
+  // 且分差 >= 0 才参与容差判断（原实现 target 分数高于 best 时负分差天然满足「<= 容差」，
+  // 超限 fallback 模型可被偏好直接提升到首位）。fallback 保留在 ordered 尾部只作兜底。
   const prefs = config.routing?.taskPreferences || {};
   const pref = prefs[analysis.task];
   let preferenceApplied = false;
   let preferenceNote = null;
-  if (pref?.model && ordered.length > 1) {
-    const best = ordered[0];
-    const target = ordered.find((x) => x.model === pref.model);
-    if (target && best.model !== pref.model && best.score - target.score <= Number(pref.tolerance ?? 0.02) + 1e-9) {
+  if (pref?.model && pool.length > 1) {
+    const best = pool[0];
+    const target = pool.find((x) => x.model === pref.model);
+    const diff = target ? best.score - target.score : null;
+    if (target && best.model !== pref.model && diff >= 0 && diff <= Number(pref.tolerance ?? 0.02) + 1e-9) {
       ordered.splice(ordered.indexOf(target), 1);
       ordered.unshift(target);
       preferenceApplied = true;
-      preferenceNote = `taskPreferences[${analysis.task}]: ${target.model} 与最优 ${best.model} 分差 ${(best.score - target.score).toFixed(3)} ≤ 容差 ${pref.tolerance}`;
+      preferenceNote = `taskPreferences[${analysis.task}]: ${target.model} 与最优 ${best.model} 分差 ${diff.toFixed(3)} ≤ 容差 ${pref.tolerance}（qualified 池内）`;
     }
   }
   const suggestedModel = ordered[0].model;

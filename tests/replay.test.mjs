@@ -11,12 +11,24 @@ const config = JSON.parse(await readFile(new URL('../config/router.json', import
 function runDump() {
   return new Promise((resolve, reject) => {
     const venv = join(projectRoot, '.venv', 'Scripts', 'python.exe');
-    const cmd = existsSync(venv) ? venv : 'python';
-    const child = spawn(cmd, [join(projectRoot, 'scripts', 'evaluate_classifier.py'), '--dump'], { cwd: projectRoot });
-    let out = ''; let err = '';
-    child.stdout.on('data', (d) => { out += d; });
-    child.stderr.on('data', (d) => { err += d; });
-    child.on('close', (code) => (code === 0 ? resolve(JSON.parse(out)) : reject(new Error(err))));
+    // Python 解析顺序（v0.5.2，Codex 二审：.venv 记录的绝对路径可能失效——existsSync ≠ 可执行）：
+    //   CLASSIFIER_PYTHON 显式指定 > .venv（探活通过才用）> PATH 上的 python
+    const tryRun = (cmd) => new Promise((res) => {
+      const probe = spawn(cmd, ['--version'], { stdio: 'ignore' });
+      probe.on('error', () => res(false));
+      probe.on('close', (code) => res(code === 0));
+    });
+    (async () => {
+      let cmd = null;
+      if (process.env.CLASSIFIER_PYTHON) cmd = process.env.CLASSIFIER_PYTHON;
+      else if (existsSync(venv) && await tryRun(venv)) cmd = venv;
+      else cmd = 'python';
+      const child = spawn(cmd, [join(projectRoot, 'scripts', 'evaluate_classifier.py'), '--dump'], { cwd: projectRoot });
+      let out = ''; let err = '';
+      child.stdout.on('data', (d) => { out += d; });
+      child.stderr.on('data', (d) => { err += d; });
+      child.on('close', (code) => (code === 0 ? resolve(JSON.parse(out)) : reject(new Error(`${cmd}: ${err}`))));
+    })();
   });
 }
 import { join } from 'node:path';

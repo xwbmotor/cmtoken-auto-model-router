@@ -41,37 +41,59 @@ export class BudgetTracker {
     this.rollover();
   }
 
-  // 预占：记账 estimated，返回 reserveId；结算时冲正差额
+  // 预占（v0.5.2 改纯内存+异步落盘）：记账 estimated 返回 reserveId。估算为 null（模型未定价）时
+  // 记 unpricedRequests 但不建预占——结算无需冲正。
   async reserve(estimateYuan) {
+    this.rollover();
     const id = ++this.reserveSeq;
-    this.reserves.set(id, Number(estimateYuan) || 0);
-    if (estimateYuan != null) await this.consume(estimateYuan);
+    if (estimateYuan == null || !Number.isFinite(Number(estimateYuan))) {
+      this.reserves.set(id, null);
+      this.state.unpricedRequests += 1;
+      this.scheduleWrite();
+      return id;
+    }
+    this.reserves.set(id, Number(estimateYuan));
+    this.state.pricedRequests += 1;
+    this.state.estimatedSpendYuan = Number((this.state.estimatedSpendYuan + Number(estimateYuan)).toFixed(6));
+    this.scheduleWrite();
     return id;
   }
 
-  // 结算：用实际额替换预占额（差额冲正）；actual=null 表示无 usage（保留估算，标记 estimated）
+  // 结算（v0.5.2 重写）：用实际额原子替换预占额。台账三项分解（Codex 建议）：
+  //   estimatedSpendYuan：未结算预占（随结算递减，崩丢=少记不重记，保守安全）
+  //   settledActualSpendYuan：已按实际 usage 结算的累计（只增）
+  //   settledEstimatedSpendYuan：无 usage 而保留估算结清的累计（只增）
+  // 冲正只做一次差额：estimated -= reserved（回滚预占），settled += actual。
+  // 修 v0.5.1 bug：原实现「先减 reserved，再 consume(actual-reserved)」——预占10实际15 记成 5（系统性少记）。
   async settle(id, actualYuan, fromUsage) {
     const reserved = this.reserves.get(id);
     if (reserved === undefined) return;
     this.reserves.delete(id);
-    if (!fromUsage || actualYuan == null || !Number.isFinite(actualYuan)) {
+    if (!fromUsage || actualYuan == null || !Number.isFinite(Number(actualYuan))) {
       this.state.estimatedSettles = (this.state.estimatedSettles || 0) + 1;
-      return; // 保留预估，不冲正
+      this.state.settledEstimatedSpendYuan = Number(((this.state.settledEstimatedSpendYuan || 0) + reserved).toFixed(6));
+      this.scheduleWrite();
+      return; // 无 usage：保留预估口径结清（不冲正、不伪造实际值）
     }
-    const delta = Number(actualYuan) - reserved;
-    if (Math.abs(delta) < 1e-7) { this.state.exactSettles = (this.state.exactSettles || 0) + 1; return; }
-    this.state.actualSpendYuan = Number(((this.state.actualSpendYuan || 0) + actualYuan).toFixed(6));
+    const actual = Number(actualYuan);
+    const delta = actual - reserved;
+    this.state.exactSettles = Math.abs(delta) < 1e-7 ? (this.state.exactSettles || 0) + 1 : this.state.exactSettles || 0;
+    this.state.settles = (this.state.settles || 0) + 1;
+    this.state.settledActualSpendYuan = Number(((this.state.settledActualSpendYuan || 0) + actual).toFixed(6));
     this.state.estimatedSpendYuan = Number(Math.max(0, this.state.estimatedSpendYuan - reserved).toFixed(6));
-    if (delta > 0) await this.consume(delta);
-    else this.state.estimatedSpendYuan = Number(Math.max(0, this.state.estimatedSpendYuan + (-delta)).toFixed(6));
-    // 注意：delta<0 时把多预占的部分直接从 spend 扣除（等价回滚），不另立字段
+    this.scheduleWrite();
+  }
+
+  // 磁盘落盘保持异步批量（v0.5.2）：settle/reserve 不再 await 磁盘写——预算是记账不是闸门，
+  // 热路径不因 JSON 台账序列化阻塞（Codex：原实现每请求串行等一次磁盘写，吞吐瓶颈）。
+  scheduleWrite() {
     const snapshot = JSON.stringify(this.state, null, 2) + '\n';
     this.pendingWrite = this.pendingWrite.then(async () => {
       await mkdir(dirname(this.path), { recursive: true });
       const temp = `${this.path}.${process.pid}.${Date.now()}.tmp`;
       await writeFile(temp, snapshot, { encoding: 'utf-8', mode: 0o600 });
       await rename(temp, this.path);
-    });
+    }).catch(() => {});
     return this.pendingWrite;
   }
 
@@ -104,17 +126,22 @@ export class BudgetTracker {
     this.rollover();
     const beansPerYuan = Number(this.config.budget?.beansPerYuan);
     const hasBeanRate = Number.isFinite(beansPerYuan) && beansPerYuan > 0;
+    const settledTotal = (this.state.settledActualSpendYuan || 0) + (this.state.settledEstimatedSpendYuan || 0);
     return {
       ...this.state,
       enabled: Boolean(this.config.budget?.enabled),
       dailyBudgetYuan: Number(this.config.budget?.dailyBudgetYuan || 0),
+      settledSpendYuan: Number(settledTotal.toFixed(6)),
+      pendingReserves: this.reserves.size,
       ...(hasBeanRate ? {
         beansPerYuan,
         estimatedSpendBeans: Number((this.state.estimatedSpendYuan * beansPerYuan).toFixed(2)),
+        settledSpendBeans: Number((settledTotal * beansPerYuan).toFixed(2)),
         dailyBudgetBeans: Number(this.config.budget?.dailyBudgetBeans || 0) || Number(((Number(this.config.budget?.dailyBudgetYuan || 0)) * beansPerYuan).toFixed(2)),
       } : {}),
       pressure: Number(this.pressure().toFixed(4)),
-      estimateOnly: true,
+      // estimateOnly 语义（v0.5.2）：已结算部分有真实 usage 支撑；「true」只描述未结算预占
+      estimateOnly: this.state.settledActualSpendYuan == null,
     };
   }
 

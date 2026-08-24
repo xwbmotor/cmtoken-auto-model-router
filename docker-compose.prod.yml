@@ -26,7 +26,7 @@ services:
       SEMANTIC_CLASSIFIER_URL: http://classifier:8788/classify   # 分类器服务名（容器网络内），勿用 127.0.0.1
       TZ: ${TZ:-Asia/Shanghai}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      METRICS_TOKEN: ${METRICS_TOKEN}      # /metrics 抓取 token（可选但生产建议）
+      METRICS_TOKEN: ${METRICS_TOKEN:?METRICS_TOKEN is required}   # /metrics 抓取 token（v0.5.2 起生产必填，启动校验兜底）
       # strict 模式才需要（passthrough 下可省）：
       # ROUTER_ACCESS_KEY: ${ROUTER_ACCESS_KEY}
       # MAAS_API_KEY: ${MAAS_API_KEY}

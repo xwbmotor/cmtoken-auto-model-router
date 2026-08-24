@@ -44,11 +44,37 @@ export function validateConfig(config) {
   }
   if (!config.routing || !['active', 'shadow'].includes(config.routing.mode)) throw new Error('routing.mode 必须是 active 或 shadow');
   if (config.routing.costTier != null && !['budget', 'balanced', 'quality', 'max', 'custom'].includes(config.routing.costTier)) throw new Error('routing.costTier 必须是 budget/balanced/quality/max/custom');
-  const bounded = [['qualityFloor', 0, 1], ['qualityWeight', 0, 3], ['costWeight', 0, 1], ['latencyWeight', 0, 1], ['selfHostedBonus', 0, 1], ['activeTrafficPercent', 0, 100], ['complexQualityMargin', 0, 0.3], ['providerCostWeight', 0, 1]];
+  const bounded = [['qualityFloor', 0, 1], ['qualityWeight', 0, 3], ['costWeight', 0, 1], ['latencyWeight', 0, 1], ['selfHostedBonus', 0, 1], ['activeTrafficPercent', 0, 100], ['complexQualityMargin', 0, 0.3], ['providerCostWeight', 0, 1], ['subtaskSmoothK', 1, 1000], ['subtaskMinSamples', 0, 1000], ['subtaskMaxAdjust', 0, 1]];
   for (const [name, min, max] of bounded) {
     if (config.routing[name] === undefined) continue; // 未配置视为默认值（如 providerCostWeight 缺省=0），向后兼容旧配置
     const value = Number(config.routing[name]);
     if (!Number.isFinite(value) || value < min || value > max) throw new Error(`routing.${name} 必须在 ${min} 到 ${max} 之间`);
+  }
+  // v0.5.2：相对质量损失上限（对象形式 simple/balanced/complex 各 0~1；数字形式=统一值）
+  if (config.routing.relQualityCap !== undefined) {
+    const rqc = config.routing.relQualityCap;
+    const asNum = (v) => Number(v);
+    if (typeof rqc === 'number' || typeof rqc === 'string') {
+      const v = asNum(rqc);
+      if (!Number.isFinite(v) || v < 0 || v > 1) throw new Error('routing.relQualityCap（数字形式）必须在 0 到 1 之间');
+    } else if (rqc && typeof rqc === 'object' && !Array.isArray(rqc)) {
+      for (const tier of ['simple', 'balanced', 'complex']) {
+        if (rqc[tier] === undefined) continue;
+        const v = asNum(rqc[tier]);
+        if (!Number.isFinite(v) || v < 0 || v > 1) throw new Error(`routing.relQualityCap.${tier} 必须在 0 到 1 之间`);
+      }
+    } else {
+      throw new Error('routing.relQualityCap 必须是数字或 { simple, balanced, complex } 对象');
+    }
+  }
+  // v0.5.2：taskPreferences 校验（model 必须在池内、tolerance 0~1）
+  if (config.routing.taskPreferences) {
+    const ids = new Set(config.models.map((m) => m.id));
+    for (const [task, pref] of Object.entries(config.routing.taskPreferences)) {
+      if (!pref || typeof pref !== 'object') throw new Error(`routing.taskPreferences.${task} 必须是 { model, tolerance } 对象`);
+      if (!ids.has(pref.model)) throw new Error(`routing.taskPreferences.${task}.model "${pref.model}" 不在模型池中`);
+      if (pref.tolerance !== undefined && (!Number.isFinite(Number(pref.tolerance)) || Number(pref.tolerance) < 0 || Number(pref.tolerance) > 1)) throw new Error(`routing.taskPreferences.${task}.tolerance 必须在 0 到 1 之间`);
+    }
   }
   if (!Number.isInteger(Number(config.routing.maxAttempts)) || config.routing.maxAttempts < 1 || config.routing.maxAttempts > config.models.length) throw new Error('maxAttempts 必须为 1 到模型数量之间的整数');
   if (config.routing.scoreStrategy !== undefined && !['weighted'].includes(config.routing.scoreStrategy)) throw new Error(`routing.scoreStrategy 无效: ${config.routing.scoreStrategy}（当前仅支持 weighted）`);

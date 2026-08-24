@@ -112,12 +112,35 @@ const SIMULATION_SAMPLES = [
   { id: 'code-refactor', label: '代码重构', body: { messages: withContext('我们有一个 30 万行的 Java 单体系统，交易核心模块每到大促就出现数据库连接池耗尽和慢 SQL 告警。请做一次完整的重构设计：1）先用三段论分析根因，区分架构问题、代码问题和容量问题，并说明验证方法；2）给出目标架构，要求读写分离、热点数据本地缓存、异步削峰，同时保证分布式事务一致性，说明每种一致性方案（强一致、最终一致、补偿）的适用场景和代价；3）制定分步迁移计划，每一步要可回滚，给出灰度策略和观察指标；4）列出迁移过程中的十大风险及对应预案；5）给出容量估算模型：假设峰值 QPS 从当前 2000 涨到 12000，按读写比 8:2、缓存命中率 90% 目标推演数据库、缓存、应用层的扩容需求。', { sysRole: '架构', turns: 2, docChars: 3000 }), max_tokens: 8192 } }
 ];
 
+// 分类器评测/回放的 Python 解析（v0.5.2）：CLASSIFIER_PYTHON > .venv（探活通过才用）> PATH python。
+// Codex 二审：.venv 的 python.exe 可能记录失效绝对路径——existsSync 不等于可执行，spawn error 静默炸。
+let classifierPythonCache = null;
+async function resolveClassifierPython() {
+  if (classifierPythonCache) return classifierPythonCache;
+  const probe = (cmd) => new Promise((resolve) => {
+    const p = spawn(cmd, ['--version'], { stdio: 'ignore', windowsHide: true });
+    p.on('error', () => resolve(false));
+    p.on('close', (code) => resolve(code === 0));
+  });
+  const venvPython = join(projectRoot, '.venv', 'Scripts', 'python.exe');
+  const candidates = [];
+  if (process.env.CLASSIFIER_PYTHON) candidates.push(process.env.CLASSIFIER_PYTHON);
+  if (existsSync(venvPython)) candidates.push(venvPython);
+  candidates.push('python');
+  for (const c of candidates) {
+    if (await probe(c)) { classifierPythonCache = c; return c; }
+  }
+  return null;
+}
+
 // 启动安全校验（按 KEY_MODE 分支——passthrough 客户端直接持 MaaS key，ROUTER_ACCESS_KEY 无意义）：
 // - 非本机绑定时 ADMIN_TOKEN 恒必填（管理页必须落锁）
 // - strict 模式额外要求 ROUTER_ACCESS_KEY（否则任何人都能以路由器身份白嫖上游）
 // - passthrough 模式不要求 ROUTER_ACCESS_KEY（客户端 key 真伪由上游 401 判定）
+// - v0.5.2：非本机绑定时 METRICS_TOKEN 也必填（否则 /metrics 暴露模型清单/流量规模/预算——信息泄露面）
 if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
   if (!process.env.ADMIN_TOKEN) throw new Error('绑定到非本机地址时必须设置 ADMIN_TOKEN');
+  if (!process.env.METRICS_TOKEN) throw new Error('绑定到非本机地址时必须设置 METRICS_TOKEN（/metrics 防公开）');
   if (process.env.ROUTER_KEY_MODE !== 'passthrough' && !process.env.ROUTER_ACCESS_KEY) {
     throw new Error('strict 模式绑定到非本机地址时必须设置 ROUTER_ACCESS_KEY（passthrough 模式可省）');
   }
@@ -710,6 +733,50 @@ async function proxyCompletion(req, res) {
   counters.task[decision.analysis.task] = (counters.task[decision.analysis.task] || 0) + 1;
   const fallback = decision.fallbackOrder.filter((m) => m !== decision.selectedModel);
   const attempts = [decision.selectedModel, ...fallback].slice(0, auto ? config.routing.maxAttempts : 1);
+  // 记账上下文（try/catch 外声明——v0.5.2 修复 v0.5.1 作用域 bug：markStreamOutcome/reserveId 原声明在 try 内，
+  // catch 不可见，断流时先抛 ReferenceError 掩盖原始错误）。生命周期（每个 attempt 恰好一次）：
+  //   reserve(估算) → [成功: markOutcome(true) + settle(实际 usage；无 usage 保留估算)] | [失败: markOutcome(false) + settle(null) 保留估算]
+  let reserveId = null;
+  let estimatedCostYuan = null;
+  let settledAttempt = false; // 预算落账闸（防 fallback 重试路径双结算）
+  let outcomeSettled = true;  // 成功/失败落账闸（true=无在途 attempt，调用 no-op）
+  let actxCtx = null;         // { model, started, ttftMs, isStream } 当前 attempt 快照
+  const settleAttempt = (actualYuan, fromUsage) => {
+    if (settledAttempt) return;
+    settledAttempt = true;
+    if (reserveId == null) return;
+    const id = reserveId; reserveId = null;
+    budgetTracker.settle(id, actualYuan, fromUsage).catch(() => {});
+  };
+  const markSelectedBy = (model) => {
+    counters.selected[model] = (counters.selected[model] || 0) + 1;
+    const selectedBy = counters.selectedBy[model] ||= { explicit: 0, auto: 0, autoPreference: 0 };
+    if (!auto) selectedBy.explicit += 1;
+    else if (decision.preference?.model === model) { selectedBy.autoPreference += 1; selectedBy.auto += 1; }
+    else selectedBy.auto += 1;
+  };
+  // 单次落账（v0.5.2）：成功只在「响应体完整交付」后记；失败只在 mid-flight 中断记
+  // （attempt 前段失败由 catch 的 updateHealth+post-loop counters.errors 记，不在此重复）
+  const markOutcome = (ok, err) => {
+    if (outcomeSettled || !actxCtx) return; outcomeSettled = true;
+    const c = actxCtx;
+    if (ok) {
+      updateHealth(c.model, true, c.ttftMs);
+      maybePromoteVerified(c.model);
+      counters.success += 1;
+      counters.outcome[c.auto ? 'auto' : 'explicit'].success += 1;
+      markSelectedBy(c.model);
+      counters.ttft ??= { count: 0, sumMs: 0 };
+      counters.ttft.count += 1; counters.ttft.sumMs += c.ttftMs;
+      if (c.isStream) { counters.stream ??= { completed: 0, aborted: 0 }; counters.stream.completed += 1; }
+    } else {
+      updateHealth(c.model, false, Date.now() - c.started);
+      counters.failures += 1;
+      counters.outcome[c.auto ? 'auto' : 'explicit'].error += 1;
+      if (c.isStream) { counters.stream ??= { completed: 0, aborted: 0 }; counters.stream.aborted += 1; }
+      if (err) logger.warn(c.isStream ? 'stream_aborted' : 'client_write_failed', { requestId: req.requestId, model: c.model, error: String(err.message || err) });
+    }
+  };
   const controller = new AbortController();
   // 超时语义（v0.4.26 修复流式长回答被掐）：
   //   非流式 = 整请求总超时；流式 = 闲置超时（收到任何上游数据即续命）。
@@ -746,48 +813,27 @@ async function proxyCompletion(req, res) {
       // 流式：此处只留 TTFT 观测，成功/失败在流尾落账（markStreamOutcome），中断只记失败不双记。
       const firstByteLatencyMs = latency;
       const selectedConfig = config.models.find((item) => item.id === model);
-      const estimatedCostYuan = estimateCostYuan(body, decision.analysis, selectedConfig, config, decision.reasoningLevel);
+      estimatedCostYuan = estimateCostYuan(body, decision.analysis, selectedConfig, config, decision.reasoningLevel);
       // 预算预占-结算：请求开始预占估算额，结束按实际 usage 冲正（无 usage 保留估算并标记 estimated）
-      const reserveId = await budgetTracker.reserve(estimatedCostYuan);
-      const markSelectedBy = () => {
-        counters.selected[model] = (counters.selected[model] || 0) + 1;
-        const selectedBy = counters.selectedBy[model] ||= { explicit: 0, auto: 0, autoPreference: 0 };
-        if (!auto) selectedBy.explicit += 1;
-        else if (decision.preference?.model === model) { selectedBy.autoPreference += 1; selectedBy.auto += 1; }
-        else selectedBy.auto += 1;
-      };
-      const markSuccess = () => {
-        updateHealth(model, true, firstByteLatencyMs);
-        maybePromoteVerified(model);
-        counters.success += 1;
-        counters.outcome[auto ? 'auto' : 'explicit'].success += 1;
-        markSelectedBy();
-        counters.ttft ??= { count: 0, sumMs: 0 };
-        counters.ttft.count += 1; counters.ttft.sumMs += firstByteLatencyMs;
-      };
-      // 流式专用：只允许落一次账（正常完成或中断），防「首包记成功+中断记失败」双记
-      let streamSettled = false;
-      const markStreamOutcome = (ok, err) => {
-        if (streamSettled) return; streamSettled = true;
-        if (ok) {
-          markSuccess();
-          counters.stream ??= { completed: 0, aborted: 0 };
-          counters.stream.completed += 1;
-        } else {
-          updateHealth(model, false, Date.now() - started);
-          counters.failures += 1;
-          counters.outcome[auto ? 'auto' : 'explicit'].error += 1;
-          counters.stream ??= { completed: 0, aborted: 0 };
-          counters.stream.aborted += 1;
-          if (err) logger.warn('stream_aborted', { requestId: req.requestId, model, error: String(err.message || err) });
+      reserveId = await budgetTracker.reserve(estimatedCostYuan);
+      settledAttempt = false; outcomeSettled = false; // 新 attempt：重置两道落账闸
+      actxCtx = { model, started, ttftMs: firstByteLatencyMs, isStream: body.stream === true, auto };
+      // 有 usage 按实际 token 冲正；无 usage 保留估算并标记 estimated（v0.5.2：settleWithUsage 统一入口）
+      const settleWithUsage = (u) => {
+        if (u && u.prompt != null && u.completion != null) {
+          const actual = computeActualCostFromUsage(u, selectedConfig);
+          if (actual != null) { settleAttempt(actual, true); return; }
         }
+        settleAttempt(null, false);
       };
-      if (!isStream) markSuccess();
       // 飞轮：非流式在此整体缓冲解析 usage（拿到实际 token 数）；流式在转发循环中从尾块提取
       let responseText = null;
       if (!isStream && upstream.body) {
         responseText = await upstream.text();
         usage = extractUsage(upstream.headers.get('content-type'), responseText);
+        // 非流式：响应体完整读毕才算成功（v0.5.2 修复——原实现 text() 前记成功，读断即成功+失败双记）
+        markOutcome(true);
+        settleWithUsage(usage);
       }
       // 实际成本：有 usage 时按真实 token 结算（对账口径），否则保留预估值
       const actualCostYuan = usage ? computeActualCostFromUsage(usage, selectedConfig) : null;
@@ -809,7 +855,7 @@ async function proxyCompletion(req, res) {
         'x-router-route-method': decision.analysis.routeMethod || 'rules'
       };
       res.writeHead(200, headers);
-      if (!upstream.body) return res.end();
+      if (!upstream.body) { markOutcome(true); settleWithUsage(null); clearTimeout(timer); return res.end(); }
       if (responseText !== null) {
         // 非流式：body 已被 text() 消费，这里一次性写回客户端；usage/actualCostYuan 已解析完毕，落日志
         if (!res.write(responseText)) await new Promise((resolve) => res.once('drain', resolve));
@@ -828,6 +874,9 @@ async function proxyCompletion(req, res) {
       }
       const sseTail = Buffer.concat(tailChunks).toString('utf8');
       if (isStream && !usage) usage = extractUsage('text/event-stream', sseTail);
+      // 流式正常完成：流尾统一落成功账（v0.5.2 修复——原实现流尾只写日志不落账，success/健康/预算全缺）
+      markOutcome(true);
+      settleWithUsage(usage);
       decisionLog.write(logEntry, decision, { ...logOutcome, usage, actualCostYuan: usage && usage.prompt != null && usage.completion != null ? computeActualCostFromUsage(usage, selectedConfig) : logOutcome.actualCostYuan });
       // 流式尾块拿到 usage 后补算实际成本并更新 token 计数器
       if (usage && selectedConfig?.pricingYuanPerMillionTokens && usage.prompt != null && usage.completion != null) {
@@ -838,12 +887,15 @@ async function proxyCompletion(req, res) {
     } catch (error) {
       lastError = error;
       if (res.headersSent) {
-        // 流式已开头发送但中途断流：不算成功（markStreamOutcome 保证只落一次账），
-        // 预算按已发生部分结算（无 usage 则保留预估并标记 estimated）
-        markStreamOutcome(false, error);
-        budgetTracker.settle(reserveId, estimatedCostYuan, false).catch(() => {});
+        // mid-flight 中断（流式断流/非流式写回失败）：单次失败落账 + 预算保留估算
+        // （v0.5.2：markOutcome/settleAttempt 声明在 try 外，此处可见——原实现引用 try 内 const 抛 ReferenceError）
+        markOutcome(false, error);
+        settleAttempt(null, false);
         clearTimeout(timer); res.destroy(error); return;
       }
+      // attempt 前段失败（尚未发送响应头）：预算结算 + 健康降权，请求级错误由循环外 counters.errors 统一记
+      settleAttempt(null, false);
+      outcomeSettled = true; // 该 attempt 已死，防后续误落成功账
       updateHealth(model, false, Date.now() - started);
       if (error.retryable !== false && i + 1 < attempts.length) { counters.fallback += 1; continue; }
       break;
@@ -1200,8 +1252,8 @@ function subCategoryOf(task, subTask) {
   // 回答"换分类器后准了多少"——换端点前后各点一次即可对比。评测只读模型文件，不影响线上。
   if (req.method === 'POST' && url.pathname === '/admin/api/classifier/evaluate') {
     const script = join(projectRoot, 'scripts', 'evaluate_classifier.py');
-    const venvPython = join(projectRoot, '.venv', 'Scripts', 'python.exe');
-    const pythonCmd = process.env.CLASSIFIER_PYTHON || (existsSync(venvPython) ? venvPython : 'python');
+    const pythonCmd = await resolveClassifierPython(); // v0.5.2：探活优先级 CLASSIFIER_PYTHON > .venv(探活) > python
+    if (!pythonCmd) return errorJson(res, 500, '找不到可用的 Python（检查 CLASSIFIER_PYTHON 环境变量或安装 python）', 'classifier_eval_error');
     const child = spawn(pythonCmd, [script, ...(url.searchParams.get('dump') === '1' ? ['--dump'] : [])], { cwd: projectRoot, windowsHide: true });
     let stdout = '';
     let stderr = '';
@@ -1222,8 +1274,8 @@ function subCategoryOf(task, subTask) {
   // 输出：任务判准率、模型分布变化、成本指数与质量变化、误判方向分解（漏判难任务=质量风险 / 多判难任务=成本浪费）。
   if (req.method === 'POST' && url.pathname === '/admin/api/classifier/replay') {
     const script = join(projectRoot, 'scripts', 'evaluate_classifier.py');
-    const venvPython = join(projectRoot, '.venv', 'Scripts', 'python.exe');
-    const pythonCmd = process.env.CLASSIFIER_PYTHON || (existsSync(venvPython) ? venvPython : 'python');
+    const pythonCmd = await resolveClassifierPython(); // v0.5.2：同 evaluate 探活优先级
+    if (!pythonCmd) return errorJson(res, 500, '找不到可用的 Python（检查 CLASSIFIER_PYTHON 环境变量或安装 python）', 'classifier_replay_error');
     const child = spawn(pythonCmd, [script, '--dump'], { cwd: projectRoot, windowsHide: true });
     let stdout = ''; let stderr = '';
     const timer = setTimeout(() => child.kill(), 120000);
