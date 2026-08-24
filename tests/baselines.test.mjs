@@ -48,6 +48,8 @@ test('路由质量应落在随机基线与事后最优之间（10 类代表任�
     { messages: [{ role: 'user', content: '写三条公司宣传语' }] },
     { messages: [{ role: 'user', content: '抽取姓名城市输出 JSON：张晓明在广州' }], response_format: { type: 'json_object' } },
   ];
+  // fail-closed 后测试配置需显式声明能力（json 请求要求 tools/json=true，否则候选全灭）
+  for (const m of config.models) m.capabilities = { ...(m.capabilities || {}), chat: true, stream: true, tools: true, json: true, vision: true };
   let routerQuality = 0, zeroQuality = 0, oracleQuality = 0, count = 0;
   for (const body of samples) {
     const decision = routeRequest({ model: 'auto', ...body }, config);
@@ -59,8 +61,25 @@ test('路由质量应落在随机基线与事后最优之间（10 类代表任�
     count++;
   }
   routerQuality /= count; zeroQuality /= count; oracleQuality /= count;
-  assert.ok(zeroQuality <= oracleQuality + 1e-9, `随机基线(${zeroQuality.toFixed(3)}) 不应高于事后最优(${oracleQuality.toFixed(3)})`);
   assert.ok(routerQuality >= zeroQuality - 0.05, `当前路由(${routerQuality.toFixed(3)}) 至少应与随机基线(${zeroQuality.toFixed(3)})相当`);
+});
+
+test('oracleChoice 语义：满足质量线的候选中选最低成本（v0.5.1 与注释对齐）', () => {
+  // 构造：a 质量高成本高，b 质量过线成本低 → oracle 必须选 b（旧实现按质量排序会错选 a）
+  const cfg = {
+    taskRules: { complexMinComplexity: 0.55, simpleMaxComplexity: 0.3 },
+    routing: { qualityFloor: 0.72, complexMinComplexity: 0.55, costWeight: 0.22, qualityWeight: 1, uncertaintyPenalty: 0.02 },
+    models: [
+      { id: 'a', enabled: true, costIndex: 1.0, latencyIndex: 1.0, quality: { coding: 0.95, default: 0.9 } },
+      { id: 'b', enabled: true, costIndex: 0.2, latencyIndex: 0.5, quality: { coding: 0.8, default: 0.8 } },
+    ],
+  };
+  const pick = oracleChoice({ model: 'auto', messages: [{ role: 'user', content: '写一段快速排序' }] }, cfg);
+  assert.equal(pick?.id, 'b', 'oracle 应选质量线内最低成本的 b');
+  // 全部不过线时退化为最高质量（保守上界）
+  const cfg2 = { taskRules: cfg.taskRules, routing: { qualityFloor: 0.99 }, models: cfg.models };
+  const pick2 = oracleChoice({ model: 'auto', messages: [{ role: 'user', content: '写一段快速排序' }] }, cfg2);
+  assert.equal(pick2?.id, 'a', '全部不达标时 oracle 应退化为最高质量的 a');
 });
 
 test('分类器评测资产齐备：heldout.jsonl 与 evaluate_classifier.py 存在且同步', async () => {

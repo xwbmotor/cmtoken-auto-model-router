@@ -65,8 +65,10 @@ export class MarketSignal {
       if (!Number.isFinite(at) || at < since) continue;
       const d = row.decision || {};
       if (!d.requestedModel || d.requestedModel === 'auto') continue;
-      const task = d.analysis?.task;
-      if (!task || !byTask[task]) continue; // 只给已存在的任务槽加分（不凭空造槽）
+      // 点名请求在服务层 task 被记为 'explicit'，真实任务存于 decision.explicitTask（v0.5.1 起补记）；
+      // 旧日志无该字段时跳过（宁缺毋滥）——否则 explicitBoost 恒为 0
+      const task = d.explicitTask || (d.analysis?.task !== 'explicit' ? d.analysis?.task : null);
+      if (!task || !byTask[task]) continue;
       const m = byTask[task].models[d.requestedModel];
       if (m) m.explicit += 1;
     }
@@ -85,12 +87,13 @@ export class MarketSignal {
         const share = m.n / slot.total;
         const failRate = m.n > 0 ? m.fails / m.n : 0;
         // 无明显偏好（份额接近）或高失败率时不给正向加成
+        // 历史份额不再作正向信号（路由器学习自己的历史决策 = 自我强化闭环；
+        // 曾因旧份额 98.2% 白得 +0.05）。正向只保留 explicit 点名（绕过 auto 的真偏好），
+        // 负向保留失败率降权。share 仍统计展示，不参与 adjust。
         let adjust = 0;
         const explicitBoost = Math.min(0.02, m.explicit * 0.005); // 每次点名 +0.005，封顶 0.02
         if (failRate >= 0.3) adjust = -this.maxAdjust;                       // 失败率 ≥30%：最大降权
         else if (failRate >= 0.1) adjust = -this.maxAdjust * (failRate / 0.3); // 线性降权区
-        else if (shareGap >= this.minShareGap && share === topN) adjust = this.maxAdjust; // 明显赢家：加成
-        else if (share === topN) adjust = this.maxAdjust * 0.5;               // 弱偏好：半额
         taskSignals[model] = { n: m.n, fails: m.fails, explicit: m.explicit,
           share: Number((share * 100).toFixed(1)), adjust: Number(adjust.toFixed(4)),
           explicitBoost: Number(explicitBoost.toFixed(4)) };

@@ -189,10 +189,15 @@ export function recommendReasoningLevel(analysis, config) {
   return 'standard';
 }
 
+// 能力硬过滤（fail-closed）：请求要求 tools/json/vision 而模型该能力未显式声明（null/undefined）
+// 时拒绝——「未知能力」不能承接生产流量，否则带工具请求可能被发给不支持工具的模型白吃 4xx。
+// chat/stream 例外放行（所有对话模型基线能力，历史配置普遍未显式声明）。
 function capabilityEligible(model, requirements) {
   const missing = [];
   for (const [capability, required] of Object.entries(requirements)) {
-    if (required && model.capabilities?.[capability] === false) missing.push(capability);
+    if (!required) continue;
+    if (capability === 'chat' || capability === 'stream') continue;
+    if (model.capabilities?.[capability] !== true) missing.push(capability);
   }
   return missing;
 }
@@ -254,10 +259,15 @@ export function oracleChoice(body, config, runtime = {}) {
   // 质量回退链：任务无实测跑分（如 agent/web-search 小类）→ 用 default 档，避免 NaN 参与排序
   const qualityOf = (m) => Number(m.quality?.[analysis.task] ?? m.quality['default'] ?? 0.75);
   const floor = Number(config.routing?.qualityFloor || 0.72);
+  // 与注释一致：满足质量线的候选里选「最低成本」（GraphRouter/MixLLM 的 cost-aware oracle 上界）；
+  // 全部不达标时退化为「最高质量」（保守上界）
   const qualified = eligible.filter((m) => qualityOf(m) >= floor);
-  const pool = qualified.length ? qualified : eligible;
-  pool.sort((a, b) => qualityOf(b) - qualityOf(a) || Number(a.costIndex) - Number(b.costIndex));
-  return pool[0];
+  if (qualified.length) {
+    qualified.sort((a, b) => Number(a.costIndex) - Number(b.costIndex) || qualityOf(b) - qualityOf(a));
+    return qualified[0];
+  }
+  eligible.sort((a, b) => qualityOf(b) - qualityOf(a) || Number(a.costIndex) - Number(b.costIndex));
+  return eligible[0];
 }
 
 // Zero-Router 决策：确定性哈希把同一请求始终分给同一前沿模型（可复现，避免随机抖动干扰对比）
@@ -279,6 +289,8 @@ export function routeRequest(body, config, runtime = {}) {
   const health = runtime.health || {};
   const candidates = [];
   const rejected = [];
+  // 相对质量损失上限按 tier 分档（simple 0.08 / standard 0.04 / complex 0.02），可被 routing.relQualityCap 覆盖
+  const relCapAnchor = Number(config.routing?.relQualityCap?.[analysis.tier] ?? (analysis.tier === 'simple' ? 0.08 : analysis.tier === 'complex' ? 0.02 : 0.04));
   for (const model of config.models) {
     const reasons = [];
     if (!model.enabled) reasons.push('disabled');
@@ -300,7 +312,16 @@ export function routeRequest(body, config, runtime = {}) {
     reasons.push(...capabilityEligible(model, analysis.requirements).map((x) => `missing_${x}`));
     if (reasons.length) { rejected.push({ model: model.id, reasons }); continue; }
 
-    const quality = Number(model.quality?.[analysis.task] ?? model.quality['default'] ?? 0.75);
+    // 质量分三级来源——30 小类实测（分层平滑）> 大类实测 > 默认 0.75：
+    // finalScore = sub*(n/(n+k)) + major*(k/(n+k))，k=8——小类样本少时信大类，样本足时信小类
+    const subScore = model.benchmarkScores?.subtasks?.[analysis.subTask];
+    const majorScore = Number(model.quality?.[analysis.task] ?? model.quality['default'] ?? 0.75);
+    let quality = majorScore;
+    if (subScore && Number.isFinite(Number(subScore.avg)) && subScore.n > 0) {
+      const k = Number(config.routing?.subtaskSmoothK ?? 8);
+      const w = subScore.n / (subScore.n + k);
+      quality = Number(subScore.avg) * w + majorScore * (1 - w);
+    }
     const uncertainty = model.calibrationStatus === 'verified' ? 0 : config.routing.uncertaintyPenalty;
     const selfBonus = config.routing.preferSelfHosted && model.ownership === 'self_hosted' ? config.routing.selfHostedBonus : 0;
     const dynamicPenalty = livePenalty(model.id, health, config);
@@ -322,6 +343,7 @@ export function routeRequest(body, config, runtime = {}) {
       baseScore: Number(baseScore.toFixed(4)),
       marketAdjust: Number(marketAdjust.toFixed(4)),
       qualityQualified: quality >= effectiveQualityFloor,
+      qualityLoss: 0,
       effectiveQualityFloor,
       costIndex: model.costIndex,
       latencyIndex: model.latencyIndex,
@@ -329,8 +351,14 @@ export function routeRequest(body, config, runtime = {}) {
     });
   }
   if (!candidates.length) throw new Error('没有满足硬性能力和健康状态要求的候选模型');
-  const qualified = candidates.filter((x) => x.qualityQualified);
-  const pool = qualified.length ? qualified : candidates;
+  // 相对质量损失上限：与「本任务最强候选」的质量差超过 tier 档位即出局（先按质量带过滤再优化成本——
+  // 加权求和允许成本项淹没质量差，导致复杂任务低质量模型胜出）。全部超限退回绝对地板，仍无则全量兜底。
+  const maxQuality = Math.max(...candidates.map((x) => x.quality));
+  for (const x of candidates) x.qualityLoss = Number((maxQuality - x.quality).toFixed(4));
+  let qualified = candidates.filter((x) => x.qualityQualified && x.qualityLoss <= relCapAnchor);
+  if (!qualified.length) qualified = candidates.filter((x) => x.qualityQualified);
+  if (!qualified.length) qualified = candidates;
+  const pool = qualified;
   pool.sort((a, b) => b.score - a.score || a.costIndex - b.costIndex);
   const ordered = [...pool, ...candidates.filter((x) => !pool.includes(x)).sort((a, b) => b.score - a.score)];
   // 任务偏好分流：指定模型与最优模型的分差 ≤ 容差时选指定模型（quality 不受损前提下的定向分流，

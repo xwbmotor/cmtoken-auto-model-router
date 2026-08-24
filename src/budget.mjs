@@ -34,7 +34,45 @@ export class BudgetTracker {
     this.config = config;
     this.state = state;
     this.pendingWrite = Promise.resolve();
+    // 预占-结算：请求开始预占估算额（防低预估逃逸预算窗口），结束按实际 usage 冲正。
+    // reserves 仅内存态（进程崩溃丢预占 = 少记不重记，预算偏保守方向安全）
+    this.reserves = new Map(); // id -> yuan
+    this.reserveSeq = 0;
     this.rollover();
+  }
+
+  // 预占：记账 estimated，返回 reserveId；结算时冲正差额
+  async reserve(estimateYuan) {
+    const id = ++this.reserveSeq;
+    this.reserves.set(id, Number(estimateYuan) || 0);
+    if (estimateYuan != null) await this.consume(estimateYuan);
+    return id;
+  }
+
+  // 结算：用实际额替换预占额（差额冲正）；actual=null 表示无 usage（保留估算，标记 estimated）
+  async settle(id, actualYuan, fromUsage) {
+    const reserved = this.reserves.get(id);
+    if (reserved === undefined) return;
+    this.reserves.delete(id);
+    if (!fromUsage || actualYuan == null || !Number.isFinite(actualYuan)) {
+      this.state.estimatedSettles = (this.state.estimatedSettles || 0) + 1;
+      return; // 保留预估，不冲正
+    }
+    const delta = Number(actualYuan) - reserved;
+    if (Math.abs(delta) < 1e-7) { this.state.exactSettles = (this.state.exactSettles || 0) + 1; return; }
+    this.state.actualSpendYuan = Number(((this.state.actualSpendYuan || 0) + actualYuan).toFixed(6));
+    this.state.estimatedSpendYuan = Number(Math.max(0, this.state.estimatedSpendYuan - reserved).toFixed(6));
+    if (delta > 0) await this.consume(delta);
+    else this.state.estimatedSpendYuan = Number(Math.max(0, this.state.estimatedSpendYuan + (-delta)).toFixed(6));
+    // 注意：delta<0 时把多预占的部分直接从 spend 扣除（等价回滚），不另立字段
+    const snapshot = JSON.stringify(this.state, null, 2) + '\n';
+    this.pendingWrite = this.pendingWrite.then(async () => {
+      await mkdir(dirname(this.path), { recursive: true });
+      const temp = `${this.path}.${process.pid}.${Date.now()}.tmp`;
+      await writeFile(temp, snapshot, { encoding: 'utf-8', mode: 0o600 });
+      await rename(temp, this.path);
+    });
+    return this.pendingWrite;
   }
 
   static async create(projectRoot, config) {

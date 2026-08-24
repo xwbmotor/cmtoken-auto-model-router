@@ -112,8 +112,15 @@ const SIMULATION_SAMPLES = [
   { id: 'code-refactor', label: '代码重构', body: { messages: withContext('我们有一个 30 万行的 Java 单体系统，交易核心模块每到大促就出现数据库连接池耗尽和慢 SQL 告警。请做一次完整的重构设计：1）先用三段论分析根因，区分架构问题、代码问题和容量问题，并说明验证方法；2）给出目标架构，要求读写分离、热点数据本地缓存、异步削峰，同时保证分布式事务一致性，说明每种一致性方案（强一致、最终一致、补偿）的适用场景和代价；3）制定分步迁移计划，每一步要可回滚，给出灰度策略和观察指标；4）列出迁移过程中的十大风险及对应预案；5）给出容量估算模型：假设峰值 QPS 从当前 2000 涨到 12000，按读写比 8:2、缓存命中率 90% 目标推演数据库、缓存、应用层的扩容需求。', { sysRole: '架构', turns: 2, docChars: 3000 }), max_tokens: 8192 } }
 ];
 
-if (!['127.0.0.1', 'localhost', '::1'].includes(host) && (!process.env.ADMIN_TOKEN || !process.env.ROUTER_ACCESS_KEY)) {
-  throw new Error('绑定到非本机地址时必须同时设置 ADMIN_TOKEN 和 ROUTER_ACCESS_KEY');
+// 启动安全校验（按 KEY_MODE 分支——passthrough 客户端直接持 MaaS key，ROUTER_ACCESS_KEY 无意义）：
+// - 非本机绑定时 ADMIN_TOKEN 恒必填（管理页必须落锁）
+// - strict 模式额外要求 ROUTER_ACCESS_KEY（否则任何人都能以路由器身份白嫖上游）
+// - passthrough 模式不要求 ROUTER_ACCESS_KEY（客户端 key 真伪由上游 401 判定）
+if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
+  if (!process.env.ADMIN_TOKEN) throw new Error('绑定到非本机地址时必须设置 ADMIN_TOKEN');
+  if (process.env.ROUTER_KEY_MODE !== 'passthrough' && !process.env.ROUTER_ACCESS_KEY) {
+    throw new Error('strict 模式绑定到非本机地址时必须设置 ROUTER_ACCESS_KEY（passthrough 模式可省）');
+  }
 }
 
 function json(res, status, value, extraHeaders = {}) {
@@ -546,10 +553,25 @@ async function probeUpstream() {
   if (probeCache.result && now - probeCache.at < PROBE_TTL_MS) return probeCache.result;
   const base = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl)?.replace(/\/$/, '');
   const key = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
-  if (!base || !key) {
+  // passthrough 且无服务端 key：改探无鉴权可达性（401/403 也证明上游活着）——
+  // passthrough 本就可不配服务端 key，「没配 key 就永远 not_ready」是 strict 语义误用
+  const passthroughNoKey = process.env.ROUTER_KEY_MODE === 'passthrough' && !key;
+  if (!base || (!key && !passthroughNoKey)) {
     const result = { reachable: false, error: 'upstream_not_configured' };
     probeCache = { at: now, result };
     return result;
+  }
+  if (passthroughNoKey) {
+    try {
+      const res = await fetch(`${base}/models`, { signal: AbortSignal.timeout(Number(process.env.UPSTREAM_PROBE_TIMEOUT_MS || 10000)) });
+      const result = { reachable: true, status: res.status, error: null, mode: 'passthrough_unauthenticated' };
+      probeCache = { at: now, result };
+      return result;
+    } catch (error) {
+      const result = { reachable: false, error: error.name || 'fetch_error', mode: 'passthrough_unauthenticated' };
+      probeCache = { at: now, result };
+      return result;
+    }
   }
   try {
     const res = await fetch(`${base}/models`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(Number(process.env.UPSTREAM_PROBE_TIMEOUT_MS || 10000)) });
@@ -602,7 +624,9 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
   // 套餐动态候选池：按客户端 key 解析 v1/models 可用集，交集非空才启用过滤（防命名不匹配全灭），失败回退全量
   const scope = await resolveModelScope({
     baseUrl: process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl,
-    apiKey: process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY,
+    // 套餐查询用客户端 key（passthrough 语义：查调用方租户的可用集，不是服务端账号的）；
+    // 客户端没带 key（strict）才回落服务端 key——此时本就无租户语义
+    apiKey: clientAuthHeader ? clientAuthHeader.replace(/^Bearer\s+/i, '') : (process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY),
     authorizationHeader: clientAuthHeader,
     passthrough: process.env.ROUTER_KEY_MODE === 'passthrough'
   });
@@ -668,7 +692,7 @@ async function proxyCompletion(req, res) {
     // explicit：reasoningLevel 不再硬编码 off——按请求本身复杂度定档（点名思考型模型问复杂问题应保留思考）
     const explicitAnalysis = analyzeRequest(body, config);
     const explicitLevel = recommendReasoningLevel(explicitAnalysis, config);
-    decision = { requestedModel: body.model, selectedModel: body.model, suggestedModel: body.model, shadow: false, analysis: { ...explicitAnalysis, task: 'explicit', tier: 'explicit', routeMethod: 'explicit' }, reasoningLevel: explicitLevel, candidates: [], rejected: [], fallbackOrder: [body.model], configVersion: config.version };
+    decision = { requestedModel: body.model, selectedModel: body.model, suggestedModel: body.model, shadow: false, analysis: { ...explicitAnalysis, task: 'explicit', tier: 'explicit', routeMethod: 'explicit' }, explicitTask: explicitAnalysis.task, reasoningLevel: explicitLevel, candidates: [], rejected: [], fallbackOrder: [body.model], configVersion: config.version };
   }
   decision.selectedModel = sessionModel(req, decision);
   // 思考预算守卫：选中的是思考型模型但客户端给的 max_tokens 低于其安全下限时强制关思考——
@@ -718,19 +742,47 @@ async function proxyCompletion(req, res) {
       // 飞轮：转发前先判定是否流式——流式不缓冲整个响应（内存安全），usage 从 SSE 尾块解析
       const isStream = body.stream === true;
       let usage = null;
-      updateHealth(model, true, latency);
-      maybePromoteVerified(model);
-      counters.success += 1;
-      counters.outcome[auto ? 'auto' : 'explicit'].success += 1;
-      counters.selected[model] = (counters.selected[model] || 0) + 1;
-      // 按请求来源细分：显式点名 vs auto 调度（auto 里再分容差分流），负荷均衡观测的核心
-      const selectedBy = counters.selectedBy[model] ||= { explicit: 0, auto: 0, autoPreference: 0 };
-      if (!auto) selectedBy.explicit += 1;
-      else if (decision.preference?.model === model) { selectedBy.autoPreference += 1; selectedBy.auto += 1; }
-      else selectedBy.auto += 1;
+      // 记账纪律：首包到达 ≠ 成功。非流式：响应体整体读完才算成功（text() 后记）；
+      // 流式：此处只留 TTFT 观测，成功/失败在流尾落账（markStreamOutcome），中断只记失败不双记。
+      const firstByteLatencyMs = latency;
       const selectedConfig = config.models.find((item) => item.id === model);
       const estimatedCostYuan = estimateCostYuan(body, decision.analysis, selectedConfig, config, decision.reasoningLevel);
-      budgetTracker.consume(estimatedCostYuan).catch(() => {});
+      // 预算预占-结算：请求开始预占估算额，结束按实际 usage 冲正（无 usage 保留估算并标记 estimated）
+      const reserveId = await budgetTracker.reserve(estimatedCostYuan);
+      const markSelectedBy = () => {
+        counters.selected[model] = (counters.selected[model] || 0) + 1;
+        const selectedBy = counters.selectedBy[model] ||= { explicit: 0, auto: 0, autoPreference: 0 };
+        if (!auto) selectedBy.explicit += 1;
+        else if (decision.preference?.model === model) { selectedBy.autoPreference += 1; selectedBy.auto += 1; }
+        else selectedBy.auto += 1;
+      };
+      const markSuccess = () => {
+        updateHealth(model, true, firstByteLatencyMs);
+        maybePromoteVerified(model);
+        counters.success += 1;
+        counters.outcome[auto ? 'auto' : 'explicit'].success += 1;
+        markSelectedBy();
+        counters.ttft ??= { count: 0, sumMs: 0 };
+        counters.ttft.count += 1; counters.ttft.sumMs += firstByteLatencyMs;
+      };
+      // 流式专用：只允许落一次账（正常完成或中断），防「首包记成功+中断记失败」双记
+      let streamSettled = false;
+      const markStreamOutcome = (ok, err) => {
+        if (streamSettled) return; streamSettled = true;
+        if (ok) {
+          markSuccess();
+          counters.stream ??= { completed: 0, aborted: 0 };
+          counters.stream.completed += 1;
+        } else {
+          updateHealth(model, false, Date.now() - started);
+          counters.failures += 1;
+          counters.outcome[auto ? 'auto' : 'explicit'].error += 1;
+          counters.stream ??= { completed: 0, aborted: 0 };
+          counters.stream.aborted += 1;
+          if (err) logger.warn('stream_aborted', { requestId: req.requestId, model, error: String(err.message || err) });
+        }
+      };
+      if (!isStream) markSuccess();
       // 飞轮：非流式在此整体缓冲解析 usage（拿到实际 token 数）；流式在转发循环中从尾块提取
       let responseText = null;
       if (!isStream && upstream.body) {
@@ -785,8 +837,14 @@ async function proxyCompletion(req, res) {
       clearTimeout(timer); return res.end();
     } catch (error) {
       lastError = error;
+      if (res.headersSent) {
+        // 流式已开头发送但中途断流：不算成功（markStreamOutcome 保证只落一次账），
+        // 预算按已发生部分结算（无 usage 则保留预估并标记 estimated）
+        markStreamOutcome(false, error);
+        budgetTracker.settle(reserveId, estimatedCostYuan, false).catch(() => {});
+        clearTimeout(timer); res.destroy(error); return;
+      }
       updateHealth(model, false, Date.now() - started);
-      if (res.headersSent) { clearTimeout(timer); res.destroy(error); return; }
       if (error.retryable !== false && i + 1 < attempts.length) { counters.fallback += 1; continue; }
       break;
     }

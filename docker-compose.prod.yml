@@ -1,26 +1,35 @@
-# 生产部署：docker compose -f docker-compose.prod.yml up -d
-# 首次部署前：在宿主机准备 /opt/amr/config/router.json（含 upstream 凭证）和空 /opt/amr/data/
-# 镜像构建后导入：docker load -i amr-image-<ver>.tar.gz 或私有 registry 拉取
+# 生产部署（双服务）：docker compose -f docker-compose.prod.yml up -d
+# 首次部署前：在宿主机准备 /opt/amr/config/router.json（含上游地址与凭证策略）和空 /opt/amr/data/
+# 镜像：docker load -i amr-image-<ver>.tar.gz && docker load -i amr-classifier-<ver>.tar.gz（或私有 registry）
+#
+# 凭证策略（三选一，见 docs/使用说明.md「环境变量」）：
+# - passthrough（默认，本文件）：客户端直接持平台 MaaS key，路由器原样透传，计费落调用方租户。
+#   无需 MAAS_API_KEY；ROUTER_ACCESS_KEY 可省（上游 401 由客户端 key 真伪决定）。
+# - strict：取消注释 ROUTER_ACCESS_KEY + MAAS_API_KEY，客户端持 ROUTER_ACCESS_KEY。
 services:
   auto-model-router:
-    image: cmt-auto-model-router:0.4.24
+    image: cmt-auto-model-router:0.5.1
     container_name: auto-model-router
     restart: unless-stopped
     hostname: auto-model-router
+    depends_on:
+      classifier:
+        condition: service_healthy
     ports:
       - "0.0.0.0:8787:8787"          # 仅内网放行；如走反代/网关，可改 127.0.0.1:8787:8787
     environment:
       NODE_ENV: production
       # ⚠️ 凭证全部经 env 注入，不进镜像、不进 git
-      ROUTER_KEY_MODE: passthrough    # 客户端直接用平台 MaaS key，路由器原样透传，计费落调用方租户（key「一样的」场景）
-      ADMIN_TOKEN: ${ADMIN_TOKEN}          # 管理页登录 token
+      ROUTER_KEY_MODE: passthrough    # passthrough=客户端 MaaS key 透传 | strict=ROUTER_ACCESS_KEY
+      ADMIN_TOKEN: ${ADMIN_TOKEN}          # 管理页登录 token（非本机绑定时必填）
       MAAS_BASE_URL: ${MAAS_BASE_URL}      # 上游 MaaS 平台地址
+      SEMANTIC_CLASSIFIER_URL: http://classifier:8788/classify   # 分类器服务名（容器网络内），勿用 127.0.0.1
       TZ: ${TZ:-Asia/Shanghai}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      METRICS_TOKEN: ${METRICS_TOKEN}      # /metrics 抓取 token（可选但生产建议）
       # strict 模式才需要（passthrough 下可省）：
       # ROUTER_ACCESS_KEY: ${ROUTER_ACCESS_KEY}
       # MAAS_API_KEY: ${MAAS_API_KEY}
-      METRICS_TOKEN: ${METRICS_TOKEN}      # /metrics 抓取 token（可选但生产建议）
     volumes:
       - /opt/amr/config:/app/config        # router.json + history/（配置发布历史）
       - /opt/amr/data:/app/data            # decision log + budget ledger + 训练数据
@@ -29,8 +38,20 @@ services:
       driver: json-file
       options: { max-size: "50m", max-file: "3" }
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      # 就绪探针查 /health/ready：上游可达 + 未在排空才算 ready（/health 只表进程活着）
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       start_period: 10s
       retries: 3
+
+  classifier:
+    image: cmt-amr-classifier:0.5.1
+    container_name: amr-classifier
+    restart: unless-stopped
+    hostname: classifier
+    expose:
+      - "8788"                             # 仅容器网络内可见，不对外
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "2" }

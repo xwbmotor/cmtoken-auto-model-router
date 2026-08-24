@@ -27,6 +27,24 @@ export function renderPrometheusMetrics(snapshot) {
     `router_fallbacks_total ${counters.fallback || 0}`,
   ]);
 
+  // v0.5.1: TTFT（首 token 时延）独立观测 + 流式完成/中断计数（流尾单次落账）
+  const ttft = counters.ttft || { count: 0, sumMs: 0 };
+  metric(lines, 'router_ttft_ms', 'summary', '首 token 时延（流式 TTFT，毫秒）', [
+    `router_ttft_ms_count ${ttft.count}`,
+    `router_ttft_ms_sum ${ttft.sumMs}`,
+  ]);
+  const stream = counters.stream || { completed: 0, aborted: 0 };
+  metric(lines, 'router_stream_total', 'counter', '流式请求完成/中断计数（流尾单次落账）', [
+    `router_stream_total{outcome="completed"} ${stream.completed || 0}`,
+    `router_stream_total{outcome="aborted"} ${stream.aborted || 0}`,
+  ]);
+
+  // v0.5.1: 预算预占-结算统计（估算落账 vs 实际 usage 冲正）
+  metric(lines, 'router_budget_settle_total', 'counter', '预算结算计数（exact=实际 usage 冲正, estimated=无 usage 保留估算）', [
+    `router_budget_settle_total{kind="exact"} ${budget.exactSettles || 0}`,
+    `router_budget_settle_total{kind="estimated"} ${budget.estimatedSettles || 0}`,
+  ]);
+
   const selectedRows = Object.entries(counters.selected || {}).map(([model, n]) => `router_selected_total{model="${esc(model)}"} ${n}`);
   metric(lines, 'router_selected_total', 'counter', '实际选中各模型的次数', selectedRows);
   // 来源细分：显式点名 / auto 调度 / auto 容差分流（负荷均衡观测：auto 分流占 qwen 承载的比例）

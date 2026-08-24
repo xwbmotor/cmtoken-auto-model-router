@@ -34,7 +34,7 @@ test('样本不足自动休眠：adjust 恒 0', async () => {
   assert.equal(ms.status().tasksActive, 0);
 });
 
-test('份额赢家获正向加成（幅度有界 ≤ maxAdjust）', async () => {
+test('份额赢家不再获正向加成（v0.5.1 移除自强化）+ 失败率降权仍生效', async () => {
   const rows = [];
   for (let i = 0; i < 10; i++) rows.push(row(0, 'coding', 'a'));      // a 占 10/12 = 83%
   for (let i = 0; i < 2; i++) rows.push(row(0, 'coding', 'b'));
@@ -42,10 +42,31 @@ test('份额赢家获正向加成（幅度有界 ≤ maxAdjust）', async () => 
   await ms.rebuild();
   const adjA = ms.adjustFor('coding', 'a');
   const adjB = ms.adjustFor('coding', 'b');
-  assert.ok(adjA > 0, `a 应有正加成，得到 ${adjA}`);
-  assert.equal(adjA, 0.05);   // 明显赢家 = 满额
-  assert.equal(adjB, 0);      // 落后者不罚（跑分已定位，信号只奖不追罚）
+  assert.equal(adjA, 0, `份额赢家 a 不应再因份额获得加成（自强化已移除），得到 ${adjA}`);
+  assert.equal(adjB, 0);
   assert.equal(ms.status().tasksActive, 1);
+});
+
+test('高失败率仍被降权（负向信号保留）', async () => {
+  const rows = [];
+  for (let i = 0; i < 10; i++) rows.push(row(0, 'coding', 'a', false)); // 10/12 失败 = 83% 失败率
+  for (let i = 0; i < 2; i++) rows.push(row(0, 'coding', 'b'));
+  const ms = new MarketSignal({ decisionLog: fakeLog(rows), minSamplePerTask: 8, maxAdjust: 0.05 });
+  await ms.rebuild();
+  assert.equal(ms.adjustFor('coding', 'a'), -0.05); // ≥30% 失败率：满额降权
+});
+
+test('explicit 点名产生正加成（绕过 auto 的真偏好）', async () => {
+  const rows = [];
+  for (let i = 0; i < 10; i++) rows.push(row(0, 'coding', 'a'));
+  for (let i = 0; i < 2; i++) rows.push(row(0, 'coding', 'b'));
+  // 5 次 explicit 点名 b（decisionLog 行：requestedModel=b, explicitTask=coding）
+  for (let i = 0; i < 5; i++) rows.push({ at: new Date().toISOString(), decision: { requestedModel: 'b', explicitTask: 'coding', analysis: { task: 'explicit' } } });
+  const ms = new MarketSignal({ decisionLog: fakeLog(rows), minSamplePerTask: 8, maxAdjust: 0.05, minShareGap: 0.15 });
+  await ms.rebuild();
+  const adjB = ms.adjustFor('coding', 'b');
+  assert.ok(adjB > 0, `explicit 点名 b 应有正加成，得到 ${adjB}`);
+  assert.equal(adjB, 0.02); // 5 次 × 0.005 = 0.025 → 封顶 0.02
 });
 
 test('高失败率降权（-maxAdjust）', async () => {
