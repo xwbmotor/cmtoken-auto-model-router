@@ -47,7 +47,7 @@ test('metrics: 输出合法 Prometheus 文本格式', () => {
       semantic: { eligible: 3, attempted: 2, succeeded: 1, disagreed: 1, errors: 0, applied: 0 },
     },
     health: { 'qwen36-35b': { circuitState: 'closed', ewmaLatencyMs: 1200.4 } },
-    budget: { estimatedSpendYuan: 1.23, pressure: 0.05 },
+    budget: { estimatedSpendYuan: 1.23, pressure: 0.05, settledSpendYuan: 8.6, pendingReserves: 2, settledSpendBeans: 602 },
     decisionLog: { written: 16, errors: 0 },
     config: { version: '0.4.1' },
     sessions: 2,
@@ -60,6 +60,10 @@ test('metrics: 输出合法 Prometheus 文本格式', () => {
   assert.ok(body.includes('router_circuit_state{model="qwen36-35b"} 0'));
   assert.ok(body.includes('router_draining 0'));
   assert.ok(body.includes('router_config_version{version="0.4.1"} 1'));
+  // v0.5.4 四审：文档宣称的两个预算指标落地（此前虚名从未输出）
+  assert.ok(body.includes('router_budget_settled_yuan 8.6'));
+  assert.ok(body.includes('router_budget_pending_reserves 2'));
+  assert.ok(body.includes('router_budget_settled_beans 602'));
   assert.ok(!body.includes('undefined') && !body.includes('NaN'));
 });
 

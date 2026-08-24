@@ -80,9 +80,10 @@ export class BudgetTracker {
       return; // 无 usage：保留预估口径结清（不冲正、不伪造实际值）
     }
     const actual = Number(actualYuan);
-    const delta = actual - reserved;
-    this.state.exactSettles = Math.abs(delta) < 1e-7 ? (this.state.exactSettles || 0) + 1 : this.state.exactSettles || 0;
+    // v0.5.4 修四审：exact 语义 = 「按实际 usage 冲正」（fromUsage 即 exact），不再要求 |delta|<1e-7
+    // 的恰好相等（预占 10 实际 15 是正常冲正不是异常；原实现 exact 计数几乎恒 0，指标失去观测意义）
     this.state.settles = (this.state.settles || 0) + 1;
+    this.state.exactSettles = (this.state.exactSettles || 0) + 1;
     this.state.settledActualSpendYuan = Number(((this.state.settledActualSpendYuan || 0) + actual).toFixed(6));
     this.scheduleWrite();
   }

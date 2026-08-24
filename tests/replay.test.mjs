@@ -20,10 +20,15 @@ function runDump() {
       probe.on('close', (code) => res(code === 0));
     });
     (async () => {
-      let cmd = null;
-      if (process.env.CLASSIFIER_PYTHON) cmd = process.env.CLASSIFIER_PYTHON;
-      else if (existsSync(venv) && await tryRun(venv)) cmd = venv;
-      else cmd = 'python';
+      // v0.5.4 修四审 P1：所有候选统一 import 级探活（原实现 tryRun 只用于 .venv 分支，
+      // CLASSIFIER_PYTHON 和 PATH python 不探活直接 spawn——本机 PATH python 能 import joblib
+      // 却不能反序列化 sklearn 模型时 replay 直接 2 fail，与 server.resolveClassifierPython 行为不一致）
+      const candidates = [];
+      if (process.env.CLASSIFIER_PYTHON) candidates.push(process.env.CLASSIFIER_PYTHON);
+      if (existsSync(venv)) candidates.push(venv);
+      candidates.push('python');
+      const cmd = await candidates.reduce(async (acc, c) => await acc || (await tryRun(c) ? c : null), null);
+      if (!cmd) { reject(new Error('找不到可导入 sklearn/joblib 的 Python（检查 CLASSIFIER_PYTHON / .venv / PATH）')); return; }
       const child = spawn(cmd, [join(projectRoot, 'scripts', 'evaluate_classifier.py'), '--dump'], { cwd: projectRoot });
       let out = ''; let err = '';
       child.stdout.on('data', (d) => { out += d; });

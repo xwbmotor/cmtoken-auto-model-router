@@ -4,7 +4,7 @@
 
 export function shouldPromoteVerified(model, healthState, calibration) {
   if (!calibration?.enabled) return null;
-  if (!model || model.calibrationStatus === 'verified') return null;
+  if (!model || model.reliabilityStatus === 'verified') return null;
   if (!healthState) return null;
   const total = (Number(healthState.successes) || 0) + (Number(healthState.failures) || 0);
   const minSamples = Number(calibration.minSamples ?? 200);

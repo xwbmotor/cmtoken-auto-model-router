@@ -29,6 +29,10 @@ export function validateConfig(config) {
     if (!['self_hosted', 'ecosystem'].includes(model.ownership)) throw new Error(`模型 ${model.id} ownership 无效`);
     if (!model.quality || typeof model.quality.default !== 'number') throw new Error(`模型 ${model.id} 缺少 quality.default`);
     if (model.calibrationStatus !== undefined && !['pilot', 'unverified', 'verified'].includes(model.calibrationStatus)) throw new Error(`模型 ${model.id} calibrationStatus 无效（可选 pilot/unverified/verified）`);
+    // v0.5.4 修四审：calibrationStatus → reliabilityStatus 更名（「已验证」实际只验证 HTTP 可用性，
+    // 不是回答质量——原名让质量校准和可用性校准混为一谈）。旧字段兼容读取（calibrationStatus 仍生效）。
+    if (model.reliabilityStatus !== undefined && !['pilot', 'unverified', 'verified'].includes(model.reliabilityStatus)) throw new Error(`模型 ${model.id} reliabilityStatus 无效（可选 pilot/unverified/verified）`);
+    model.reliabilityStatus ??= model.calibrationStatus;
     if (model.benchmarkScores !== undefined && model.benchmarkScores !== null && (typeof model.benchmarkScores !== 'object' || Array.isArray(model.benchmarkScores))) throw new Error(`模型 ${model.id} benchmarkScores 必须是对象或 null`);
     if (model.deployment !== undefined && model.deployment !== null) {
       const d = model.deployment;
@@ -44,7 +48,7 @@ export function validateConfig(config) {
   }
   if (!config.routing || !['active', 'shadow'].includes(config.routing.mode)) throw new Error('routing.mode 必须是 active 或 shadow');
   if (config.routing.costTier != null && !['budget', 'balanced', 'quality', 'max', 'custom'].includes(config.routing.costTier)) throw new Error('routing.costTier 必须是 budget/balanced/quality/max/custom');
-  const bounded = [['qualityFloor', 0, 1], ['qualityWeight', 0, 3], ['costWeight', 0, 1], ['latencyWeight', 0, 1], ['selfHostedBonus', 0, 1], ['activeTrafficPercent', 0, 100], ['complexQualityMargin', 0, 0.3], ['providerCostWeight', 0, 1], ['subtaskSmoothK', 1, 1000], ['subtaskMinSamples', 0, 1000], ['subtaskMaxAdjust', 0, 1]];
+  const bounded = [['qualityFloor', 0, 1], ['qualityWeight', 0, 3], ['costWeight', 0, 1], ['latencyWeight', 0, 1], ['selfHostedBonus', 0, 1], ['activeTrafficPercent', 0, 100], ['complexQualityMargin', 0, 0.3], ['providerCostWeight', 0, 1], ['subtaskSmoothK', 1, 1000], ['subtaskMinSamples', 0, 1000], ['subtaskMaxAdjust', 0, 1], ['sessionStickinessMaxGap', 0, 1]];
   for (const [name, min, max] of bounded) {
     if (config.routing[name] === undefined) continue; // 未配置视为默认值（如 providerCostWeight 缺省=0），向后兼容旧配置
     const value = Number(config.routing[name]);

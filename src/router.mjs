@@ -331,7 +331,7 @@ export function routeRequest(body, config, runtime = {}) {
         quality = Math.max(majorScore - maxAdjust, Math.min(majorScore + maxAdjust, blended));
       }
     }
-    const uncertainty = model.calibrationStatus === 'verified' ? 0 : config.routing.uncertaintyPenalty;
+    const uncertainty = model.reliabilityStatus === 'verified' ? 0 : config.routing.uncertaintyPenalty;
     const selfBonus = config.routing.preferSelfHosted && model.ownership === 'self_hosted' ? config.routing.selfHostedBonus : 0;
     const dynamicPenalty = livePenalty(model.id, health, config);
     const complexMargin = analysis.tier === 'complex' ? Number(config.routing.complexQualityMargin || 0) : 0;
@@ -356,7 +356,8 @@ export function routeRequest(body, config, runtime = {}) {
       effectiveQualityFloor,
       costIndex: model.costIndex,
       latencyIndex: model.latencyIndex,
-      calibrationStatus: model.calibrationStatus
+      calibrationStatus: model.calibrationStatus,
+      reliabilityStatus: model.reliabilityStatus || model.calibrationStatus
     });
   }
   if (!candidates.length) throw new Error('没有满足硬性能力和健康状态要求的候选模型');

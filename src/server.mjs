@@ -467,7 +467,8 @@ function maybePromoteVerified(model) {
   const modelConfig = config.models.find((item) => item.id === model);
   const verdict = shouldPromoteVerified(modelConfig, health[model], config.calibration);
   if (!verdict) return;
-  modelConfig.calibrationStatus = 'verified';
+  modelConfig.reliabilityStatus = 'verified';
+  modelConfig.calibrationStatus = 'verified'; // 旧字段同步写（未升级的旧 UI 仍读此字段）
   logger.info('model_calibrated', { model, samples: verdict.samples, failureRate: verdict.failureRate });
   saveConfig(config).then((next) => { config = next;
   if (marketSignal) { marketSignal.updateConfig(config); marketSignal.rebuild().catch(() => {}); } }).catch((error) => logger.warn('model_calibrated_save_failed', { model, error: error.message }));
@@ -477,8 +478,25 @@ function sessionModel(req, decision) {
   const id = req.headers['x-session-id'];
   if (!id) return decision.selectedModel;
   const current = sessions.get(id);
-  if (current && current.expiresAt > Date.now() && decision.fallbackOrder.includes(current.model)) return current.model;
-  sessions.set(id, { model: decision.selectedModel, expiresAt: Date.now() + config.routing.sessionStickinessTtlMs });
+  // v0.5.4 修四审：粘性加闸（原实现只要旧模型还在 fallback 列表就沿用 30 分钟——
+  // 先问简单题再问复杂题也会被钉在旧模型上，逐问题路由被会话粘性吞掉）。
+  // 闸门三条件（与四审建议一致）：
+  //   1. 旧模型仍是本请求的合格候选（在 fallbackOrder 中）
+  //   2. 任务类型/难度未变（同 task 且同 tier——复杂度升档必须允许重新路由）
+  //   3. 新旧最优分差小（best.score − sticky.score ≤ 阈值，默认 0.05——旧模型明显劣化时让位）
+  if (current && current.expiresAt > Date.now() && decision.fallbackOrder.includes(current.model)) {
+    const sameShape = current.task === decision.analysis.task && current.tier === decision.analysis.tier;
+    const stickyScore = decision.candidates?.find((c) => c.model === current.model)?.score;
+    const bestScore = decision.candidates?.[0]?.score;
+    const stickyGap = Number.isFinite(stickyScore) && Number.isFinite(bestScore)
+      ? bestScore - stickyScore
+      : null;
+    const maxStickyGap = Number(config.routing?.sessionStickinessMaxGap ?? 0.05);
+    if (sameShape && (stickyGap == null || stickyGap <= maxStickyGap + 1e-9)) {
+      return current.model; // 同型请求且旧模型仍接近最优：保持粘性（连续对话体验/上游前缀缓存）
+    }
+  }
+  sessions.set(id, { model: decision.selectedModel, expiresAt: Date.now() + config.routing.sessionStickinessTtlMs, task: decision.analysis.task, tier: decision.analysis.tier });
   return decision.selectedModel;
 }
 
@@ -881,8 +899,16 @@ async function proxyCompletion(req, res) {
       if (!isStream && upstream.body) {
         responseText = await upstream.text();
         usage = extractUsage(upstream.headers.get('content-type'), responseText);
-        // 成功落账不在此处：交给 close 守卫按交付状态判定（v0.5.3 修三审 P1——
-        // v0.5.2 在 text() 读毕即记成功，客户端已断开时写回失败无法改记失败）
+        // v0.5.4 fix four-review P1: recheck clientGone after body read. During the read the close guard
+        // already settled via guardActive=false branch (outcomeSettled=true, reserve closed) — continuing here would
+        // write to a dead socket and add tokens nobody received. Early return prevents ghost success.
+        if (clientGone) {
+          clearTimeout(timer);
+          logger.warn('client_abandoned_during_body_read', { requestId: req.requestId, model });
+          decisionLog.write({ sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, { ok: false, model, error: 'client_disconnected_during_body_read', usage, latencyMs: latency });
+          return;
+        }
+        // Success accounting stays with the close guard (v0.5.3 fix): delivered-then-finished semantics.
       }
       // 实际成本：有 usage 时按真实 token 结算（对账口径），否则保留预估值
       const actualCostYuan = usage ? computeActualCostFromUsage(usage, selectedConfig) : null;
@@ -926,7 +952,18 @@ async function proxyCompletion(req, res) {
       }
       const sseTail = Buffer.concat(tailChunks).toString('utf8');
       if (isStream && !usage) usage = extractUsage('text/event-stream', sseTail);
-      // 流式正常完成：流尾统一落成功账（v0.5.2 修复——原实现流尾只写日志不落账，success/健康/预算全缺）
+      // v0.5.4 修四审 P1：流式成功不再在上游迭代完成时立即落账（原实现 markOutcome(true) 在
+      // res.end() 前——只证明上游完整，不证明客户端收完尾部数据）。改为 res.end() 回调后落账。
+      // 时序陷阱（首轮实现踩中）：undici 客户端收完 body 会立即关连接，close 事件可抢在
+      // end 回调之前到达——若此刻守卫未激活（guardActive=false），成功流被误记 client_disconnected。
+      // 因此发起 end() 前先激活守卫并标记 delivered：close 与 end 回调谁先到都只落一次账
+      // （outcomeSettled 闸互斥；writableFinished 区分「收完才关」与「没收完就断」）。
+      delivery.usage = usage;
+      delivery.log = { entry: logEntry, outcome: logOutcome };
+      delivery.delivered = true;
+      delivery.guardActive = true;
+      const streamDone = new Promise((resolve) => res.end(() => resolve()));
+      await streamDone;
       markOutcome(true);
       settleWithUsage(usage);
       decisionLog.write(logEntry, decision, { ...logOutcome, usage, actualCostYuan: usage && usage.prompt != null && usage.completion != null ? computeActualCostFromUsage(usage, selectedConfig) : logOutcome.actualCostYuan });
@@ -935,7 +972,7 @@ async function proxyCompletion(req, res) {
         const actual = computeActualCostFromUsage(usage, selectedConfig);
         if (actual != null) { counters.tokens ??= {}; counters.tokens.prompt = (counters.tokens.prompt || 0) + usage.prompt; counters.tokens.completion = (counters.tokens.completion || 0) + usage.completion; }
       }
-      clearTimeout(timer); return res.end();
+      clearTimeout(timer); return;
     } catch (error) {
       lastError = error;
       delivery.guardActive = false; // 本 attempt 已死，close 守卫不再按交付状态落账（防旧 attempt 污染下一 attempt）

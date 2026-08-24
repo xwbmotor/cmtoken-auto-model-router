@@ -66,6 +66,19 @@ export function renderPrometheusMetrics(snapshot) {
   metric(lines, 'router_budget_estimated_spend_yuan', 'gauge', '当日估算花费（元，estimateOnly）', [
     `router_budget_estimated_spend_yuan ${Number(budget.estimatedSpendYuan || 0)}`,
   ]);
+  // v0.5.4 修四审：文档宣称的两指标此前虚名（metrics.mjs 从未输出）——「预算指标全零」无法区分
+  // 「没花钱」与「没记账」。落地真实观测：已结算消费（实际+估算结清）与在途预占数。
+  metric(lines, 'router_budget_settled_yuan', 'gauge', '当日已结算消费（元）= 按实际 usage 结算 + 无 usage 估算结清（budget.enabled=false 时也持续记账）', [
+    `router_budget_settled_yuan ${Number(budget.settledSpendYuan || 0)}`,
+  ]);
+  metric(lines, 'router_budget_pending_reserves', 'gauge', '在途预占数（已 reserve 未 settle 的请求数）', [
+    `router_budget_pending_reserves ${Number(budget.pendingReserves || 0)}`,
+  ]);
+  if (budget.settledSpendBeans != null) {
+    metric(lines, 'router_budget_settled_beans', 'gauge', '当日已结算消耗算力豆（对账口径）', [
+      `router_budget_settled_beans ${Number(budget.settledSpendBeans || 0)}`,
+    ]);
+  }
   if (budget.estimatedSpendBeans != null) {
     metric(lines, 'router_budget_estimated_spend_beans', 'gauge', '当日估算消耗算力豆（estimateOnly）', [
       `router_budget_estimated_spend_beans ${Number(budget.estimatedSpendBeans || 0)}`,

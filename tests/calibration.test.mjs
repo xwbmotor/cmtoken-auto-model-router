@@ -9,7 +9,7 @@ test('calibration 未启用时返回 null', () => {
 });
 
 test('已 verified 的模型不再重复判定', () => {
-  assert.equal(shouldPromoteVerified({ calibrationStatus: 'verified' }, { successes: 1000, failures: 0 }, { enabled: true, minSamples: 100 }), null);
+  assert.equal(shouldPromoteVerified({ calibrationStatus: 'verified', reliabilityStatus: 'verified' }, { successes: 1000, failures: 0 }, { enabled: true, minSamples: 100 }), null);
 });
 
 test('样本不足时不翻 verified', () => {
