@@ -19,6 +19,10 @@ import net from 'node:net';
 import http from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createHmac } from 'node:crypto';
+// v0.7.4 十审 P1：与 server sessionFingerprintOf 同算法——sidfp:HMAC(secret,'session-fp:'+sid)[:16hex]
+function fpOf(secret, sid) {
+  return `sidfp:${createHmac('sha256', Buffer.from(secret, 'utf8')).update(`session-fp:${sid}`).digest('hex').slice(0, 16)}`;
+}
 
 const baseConfig = JSON.parse(await readFile(new URL('../config/router.json', import.meta.url), 'utf8'));
 
@@ -118,23 +122,26 @@ test('e2e 灰度不变量：固定 secret 下会话稳定分组 + 阈值边界 +
     const decFile = files.find((f) => f.startsWith('decisions') && f.endsWith('.jsonl'));
     assert.ok(decFile, '决策日志应存在');
     const rows = (await readFile(join(workDir, decFile), 'utf8')).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    // v0.7.4 十审 P1：决策日志落 sessionFingerprint（sidfp:<16hex>），原始 sid 不落盘——
+    // 分组断言按预计算指纹进行（与 server sessionFingerprintOf 同算法）。
+    const fpIn = fpOf(SECRET, inGroup.sid), fpOut = fpOf(SECRET, outGroup.sid);
     const bySession = {};
     for (const r of rows) {
-      const sid = r.request?.sessionId;
+      const fp = r.request?.sessionFingerprint;
       const st = r.decision?.semanticReview?.status;
-      if (sid && st) (bySession[sid] ??= new Set()).add(st);
+      if (fp && st) (bySession[fp] ??= new Set()).add(st);
     }
     // I1：组内一致性
-    assert.deepEqual([...bySession[inGroup.sid]], ['applied'], `放量组 session 全部 applied，实际 ${JSON.stringify([...bySession[inGroup.sid]])}`);
-    assert.deepEqual([...bySession[outGroup.sid]], ['rollout_hold'], `hold 组 session 全部 rollout_hold，实际 ${JSON.stringify([...bySession[outGroup.sid]])}`);
+    assert.deepEqual([...bySession[fpIn]], ['applied'], `放量组 session 全部 applied，实际 ${JSON.stringify([...bySession[fpIn]])}`);
+    assert.deepEqual([...bySession[fpOut]], ['rollout_hold'], `hold 组 session 全部 rollout_hold，实际 ${JSON.stringify([...bySession[fpOut]])}`);
 
     // I3：同一 session 换任意（甚至恶意构造的）requestId 不改变分组
     await fire(port, { sessionId: outGroup.sid, requestId: 'attacker-tries-to-enter-000' });
     await fire(port, { sessionId: inGroup.sid, requestId: 'attacker-tries-to-avoid-999' });
     await sleep(800);
     const rows2 = (await readFile(join(workDir, decFile), 'utf8')).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
-    const stOut = rows2.filter((r) => r.request?.sessionId === outGroup.sid).map((r) => r.decision?.semanticReview?.status);
-    const stIn = rows2.filter((r) => r.request?.sessionId === inGroup.sid).map((r) => r.decision?.semanticReview?.status);
+    const stOut = rows2.filter((r) => r.request?.sessionFingerprint === fpOut).map((r) => r.decision?.semanticReview?.status);
+    const stIn = rows2.filter((r) => r.request?.sessionFingerprint === fpIn).map((r) => r.decision?.semanticReview?.status);
     assert.ok(stOut.every((s) => s === 'rollout_hold'), `伪造 requestId 不得改变 hold 组分组，实际 ${JSON.stringify(stOut)}`);
     assert.ok(stIn.every((s) => s === 'applied'), `伪造 requestId 不得改变放量组分组，实际 ${JSON.stringify(stIn)}`);
 
@@ -146,16 +153,19 @@ test('e2e 灰度不变量：固定 secret 下会话稳定分组 + 阈值边界 +
     assert.ok(evts.length >= 4, `hold+applied 都应有后台观察事件，实际 ${evts.length}`);
     for (const e of evts) assert.ok(e.requestId && e.cascade !== undefined, `事件须带 requestId 与 cascade 字段：${JSON.stringify(e).slice(0, 120)}`);
 
-    // I5（九审 P2 脱敏不变量）：semanticRollout.bucketKey 必须是 HMAC 短指纹——
-    // sid: 前缀后只能跟 12 hex，原始 session ID 不得经该字段冗余落盘。
-    // （request.sessionId 是决策日志既有审计字段，不在本断言范围——九审针对的是 bucketKey。）
+    // I5（九审 P2 + 十审 P1 脱敏不变量）：
+    //   a) semanticRollout.bucketKey = HMAC 短指纹（sid/fp/rid + 16hex——v0.7.4 起 48bit→64bit）
+    //   b) request.sessionFingerprint = sidfp:<16hex>（替代原 request.sessionId 原值落盘）
+    //   c) 原始 session ID（probe-session-N）不得出现在决策日志或复核事件流的任何位置
     const allRows = rows.concat(rows2);
     for (const r of allRows) {
       const bk = r.decision?.semanticReview?.bucketKey;
-      if (bk) assert.match(bk, /^(sid|fp|rid):[0-9a-f]{12}$/, `bucketKey 应为 HMAC 短指纹（${bk}），原始标识不得落盘`);
+      if (bk) assert.match(bk, /^(sid|fp|rid):[0-9a-f]{16}$/, `bucketKey 应为 HMAC 指纹 16hex（${bk}），原始标识不得落盘`);
+      const fp = r.request?.sessionFingerprint;
+      if (fp) assert.match(fp, /^sidfp:[0-9a-f]{16}$/, `sessionFingerprint 应为 sidfp:<16hex>（${fp}）`);
+      assert.equal(r.request?.sessionId, undefined, 'request.sessionId 字段不得存在（v0.7.4 起一律 sessionFingerprint）');
     }
-    // 复核事件流（semantic-reviews）不含 request 段——原始 session ID 不得出现在事件流
-    const srRaw = await readFile(join(workDir, srFile), 'utf8');
-    assert.ok(!srRaw.includes(inGroup.sid) && !srRaw.includes(outGroup.sid), '原始 session ID 不得出现在复核事件流');
+    const rawAll = (await readFile(join(workDir, decFile), 'utf8')) + (await readFile(join(workDir, srFile), 'utf8'));
+    assert.ok(!rawAll.includes(inGroup.sid) && !rawAll.includes(outGroup.sid), '原始 session ID 不得出现在决策/复核日志（隐私：session 可能含账号/手机号）');
   } finally { child.kill(); upstream.close(); }
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// v0.7.0 六审 P2 / v0.7.3 九审 P2：发布档测试入口 + 可追溯发布报告。
+// v0.7.0 六审 P2 / v0.7.3 九审 P2 / v0.7.4 十审 P1：发布档测试入口 + 可追溯发布报告。
 // npm test（纯 Node）允许 replay 因缺 Python skip；正式发布不允许「161 全验证」的虚称——
 // AMR_TEST_STRICT_SKIP=1 下 skip 视为失败（t.skip 前抛错），任何 skip 都会非零退出。
 // 要求：本机或 CI 提供 CLASSIFIER_PYTHON（能 import sklearn/joblib）后跑此档。
@@ -7,13 +7,25 @@
 // v0.7.3：报告不再人工拼装——本脚本跑完测试后自动落 reports/release-v{ver}-{date}.json，
 // 含 commit SHA / dirty 状态 / config SHA256 / 测试命令与退出码（九审 P2：git.head
 // = "pending-commit" 无法证明测试对应哪个源码版本）。
+//
+// v0.7.4 十审 P1（发布证据链自引用修复）：
+//   ①报告是 tag 的**证明**，不能提交进被它证明的同一个 commit（commit 会因加报告而变 SHA）。
+//     正确流程：代码+compose commit → 打 tag → 在干净 worktree（tag checkout）跑本脚本 →
+//     报告留 workspace 外（reports/ 已加 .gitignore-via-commit-protocol；本脚本同时把
+//     报告路径打印出来供作为 Release Artifact 附上）。
+//   ②默认要求 clean HEAD + exact tag（HEAD 即 tag 指向的 commit），否则**非零退出**——
+//     脏 worktree 的报告不再能冒充正式发布证据。开发期可用 --allow-dirty 显式降级，
+//     报告标记 validForRelease=false。
+//   ③报告写盘失败=发布失败（exit 2），不再吞掉。
 import { spawn, execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { cpus } from 'node:os';
 import { join } from 'node:path';
 
 const cwd = process.cwd();
 const collect = (fn, fallback = null) => { try { return fn(); } catch { return fallback; } };
+const allowDirty = process.argv.includes('--allow-dirty');
 
 const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8'));
 const git = {
@@ -23,10 +35,28 @@ const git = {
     const s = execSync('git status --porcelain', { cwd, encoding: 'utf8' }).trim();
     return s.length > 0 ? s.split('\n') : [];
   }, []),
-  tag: collect(() => execSync('git describe --tags --exact-match HEAD 2>/dev/null', { cwd, encoding: 'utf8' }).trim()),
+  // 注意：不能用 `2>/dev/null` shell 重定向——Windows cmd.exe 下 /dev/null 非法路径，
+  // 命令整体报错被 collect 吞掉 → tag 恒 null（v0.7.4 十审实测踩坑）。execSync 失败
+  // （HEAD 无 exact tag 时 git describe 退出非零）本来就由 collect 捕获，无需重定向。
+  tag: collect(() => execSync('git describe --tags --exact-match HEAD', { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()),
 };
 const configPath = existsSync(join(cwd, 'config/router.json')) ? join(cwd, 'config/router.json') : null;
 const configSha256 = configPath ? createHash('sha256').update(readFileSync(configPath)).digest('hex') : null;
+
+// 发布证据链门禁（v0.7.4）：正式模式三条件——clean、HEAD 有 exact tag、tag 与 package.json 版本一致。
+const tagExpected = `v${pkg.version}`;
+const gate = {
+  clean: git.dirty.length === 0,
+  onTag: Boolean(git.tag),
+  tagMatchesVersion: git.tag === tagExpected,
+};
+const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion;
+if (!validForRelease && !allowDirty) {
+  console.error('[test:release] 发布证据链门禁未过：' + JSON.stringify({ ...gate, tag: git.tag, tagExpected, dirtyCount: git.dirty.length }));
+  console.error('  正式发布流程：代码+compose 同 commit → git tag v{ver} → 干净 worktree 跑 npm run test:release。');
+  console.error('  开发调试可加 --allow-dirty（报告标记 validForRelease=false，不作为发布证据）。');
+  process.exit(3);
+}
 
 const env = { ...process.env, AMR_TEST_STRICT_SKIP: '1' };
 const cmd = 'node --test';
@@ -48,32 +78,40 @@ child.on('exit', (code, signal) => {
   const report = {
     stamp: new Date().toISOString(),
     version: pkg.version,
+    validForRelease,
+    gate,
+    allowDirty,
     command: cmd, exitCode: code ?? 1, signal: signal ?? null, durationMs,
     summary,
     env: {
       node: process.version, platform: process.platform, arch: process.arch,
       hostname: collect(() => execSync('hostname', { encoding: 'utf8' }).trim()),
-      cpus: collect(() => require('node:os').cpus().length),
+      cpus: collect(() => cpus().length),
     },
     git,
     config: { path: 'config/router.json', sha256: configSha256 },
     strict: 'AMR_TEST_STRICT_SKIP=1（任何 skip 视为失败）',
     logTail: out.split(/\r?\n/).slice(-40).join('\n'),
   };
+  let reportPath = null;
   try {
     mkdirSync(join(cwd, 'reports'), { recursive: true });
     const stamp = report.stamp.replace(/[:.]/g, '-');
-    const file = join(cwd, 'reports', `release-v${pkg.version}-${stamp.slice(0, 10)}-${stamp.slice(11, 19)}.json`);
-    writeFileSync(file, JSON.stringify(report, null, 2));
-    console.log(`\n[test:release] 报告已落盘 ${file}`);
+    reportPath = join(cwd, 'reports', `release-v${pkg.version}-${stamp.slice(0, 10)}-${stamp.slice(11, 19)}.json`);
+    writeFileSync(reportPath, JSON.stringify(report, null, 2));
+    console.log(`\n[test:release] 报告已落盘 ${reportPath}`);
   } catch (e) {
-    console.error(`\n[test:release] 报告落盘失败：${e.message}`);
+    console.error(`\n[test:release] 报告落盘失败（视为发布失败）：${e.message}`);
+    process.exit(2);
   }
-  if (git.dirty.length > 0) {
-    console.error(`[test:release] 警告：worktree 不干净（${git.dirty.length} 处未提交）——报告对应 ${git.commit}，发布 tag 前请先 commit。`);
-  }
-  if (code === 0) {
-    console.log('\n[test:release] 全量通过（含 replay，无 skip）。发布档要求满足。');
+  if (!gate.clean) console.error(`[test:release] worktree 不干净（${git.dirty.length} 处）${allowDirty ? '——--allow-dirty 降级，报告不可作发布证据' : ''}`);
+  if (!gate.onTag) console.error('[test:release] HEAD 无 exact tag——报告对应的 commit 不是发布 tag。');
+  else if (!gate.tagMatchesVersion) console.error(`[test:release] tag ${git.tag} 与 package.json ${tagExpected} 不一致。`);
+  if (code === 0 && validForRelease) {
+    console.log(`\n[test:release] 全量通过（含 replay，无 skip）且发布证据链完整（tag=${git.tag}）。`);
+    console.log('[test:release] 注意：报告不提交回 tag——作为 Release Artifact 归档（reports/ 目录已被协议排除）。');
+  } else if (code === 0) {
+    console.log('\n[test:release] 测试通过，但本报告不构成发布证据（validForRelease=false）。');
   } else {
     console.error(`\n[test:release] 失败（exit ${code}）。发布档不允许任何 skip/失败——若因缺 Python，设 CLASSIFIER_PYTHON 指向带 sklearn/joblib 的解释器。`);
   }

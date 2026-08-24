@@ -8,7 +8,7 @@
 # - strict：取消注释 ROUTER_ACCESS_KEY + MAAS_API_KEY，客户端持 ROUTER_ACCESS_KEY。
 services:
   auto-model-router:
-    image: cmt-auto-model-router:0.7.3
+    image: cmt-auto-model-router:0.7.4
     container_name: auto-model-router
     restart: unless-stopped
     hostname: auto-model-router
@@ -27,7 +27,7 @@ services:
       # 统一口径防「shadow 期忘了配、切 active 时才发现」的运维断层；shadow 下缺省仅限本地开发）。
       # secret 跨重启稳定=实验组不因容器滚动重排污染对照。生成：
       #   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-      # 或 openssl rand -base64 32（≥32 字节；v0.7.3 起短 secret 在 active 模式拒启动）。
+      # 或 openssl rand -base64 32（≥32 字节为长度下限，长度≠熵——只用随机生成命令产出；v0.7.3 起短 secret 在 active 模式拒启动）。
       # 写入宿主机 .env 后经此变量注入容器。
       SEMANTIC_BUCKET_SECRET: ${SEMANTIC_BUCKET_SECRET:?SEMANTIC_BUCKET_SECRET is required}
       SEMANTIC_CLASSIFIER_URL: http://classifier:8788/classify   # 分类器服务名（容器网络内），勿用 127.0.0.1
@@ -53,7 +53,7 @@ services:
       retries: 3
 
   classifier:
-    image: cmt-amr-classifier:0.7.3
+    image: cmt-amr-classifier:0.7.4
     container_name: amr-classifier
     restart: unless-stopped
     hostname: classifier

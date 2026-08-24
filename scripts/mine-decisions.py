@@ -100,11 +100,14 @@ def main():
         print(f"{model:<20}{task:<10}{tier:<8}{b['n']:>5}{ok_rate:>7.1%}{p50:>8}ms{fmt_yuan(b['cost']):>10}")
 
     # —— 2. 隐式负信号：同会话短间隔重试 ——
+    # v0.7.4 十审 P1：决策日志不再落原始 sessionId，改 sessionFingerprint（sidfp:<16hex> HMAC）。
+    # 旧日志（v0.7.3-）兼容读取：新字段优先，旧字段回退。
     print()
-    print('-- 2) 隐式负信号候选（同 sessionId 短间隔重试）--')
+    print('-- 2) 隐式负信号候选（同会话短间隔重试，v0.7.4+ 按 sessionFingerprint 归并）--')
     by_session = defaultdict(list)
     for r in records:
-        sid = (r.get('request') or {}).get('sessionId')
+        req = r.get('request') or {}
+        sid = req.get('sessionFingerprint') or req.get('sessionId')
         if not sid:
             continue
         by_session[sid].append(r)

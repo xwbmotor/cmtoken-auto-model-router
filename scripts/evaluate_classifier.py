@@ -11,6 +11,11 @@
 import json, re, sys, time
 from pathlib import Path
 
+# Node 通过 stdout 读取 JSON。Windows 默认控制台编码可能是 GBK，heldout 数据中包含
+# 韩文等 GBK 不可表示字符时会在 print(json.dumps(...)) 阶段失败。
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = ROOT / 'data/training/model'
 

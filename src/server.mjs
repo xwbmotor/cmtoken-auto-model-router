@@ -134,11 +134,11 @@ const SIMULATION_SAMPLES = [
 let classifierPythonCache = null;
 async function resolveClassifierPython() {
   if (classifierPythonCache) return classifierPythonCache;
-  // v0.5.3 修三审：探活从 `--version` 升级为 import 级（sklearn/joblib）。
-  // 原实现 --version 通过即选中——PATH 上存在「能启动但没装 sklearn」的 python 时，
-  // dump/回放直接 ImportError。分类器评测依赖的是 sklearn 栈，不是 python 本身。
+  // 探活覆盖真实模型兼容性：仅 import sklearn/joblib 会误选旧 sklearn；1.9.0 生成的
+  // estimator 在 1.6.1 下虽然能反序列化，但 predict_proba 会因字段不兼容失败。
+  const smoke = "import sys, sklearn, joblib; sys.path.insert(0, 'scripts'); assert sklearn.__version__ == '1.9.0'; m=joblib.load('data/training/model/task.joblib'); m.predict(['smoke'])";
   const probe = (cmd) => new Promise((resolve) => {
-    const p = spawn(cmd, ['-c', 'import sklearn, joblib'], { stdio: 'ignore', windowsHide: true });
+    const p = spawn(cmd, ['-c', smoke], { cwd: projectRoot, stdio: 'ignore', windowsHide: true });
     p.on('error', () => resolve(false));
     p.on('close', (code) => resolve(code === 0));
   });
@@ -525,6 +525,16 @@ function keyFingerprint(authorizationHeader) {
   return createHash('sha256').update(raw).digest('hex').slice(0, 8);
 }
 
+// v0.7.4 十审 P1：会话指纹——决策/复核日志一律落 HMAC 指纹（sidfp:<16hex>），原始
+// x-session-id 不落盘（客户端可控字段，可能含手机号/账号/工单号——与 key 同等敏感）。
+// 与分桶 secret 同源（SEMANTIC_BUCKET_SECRET；缺省时进程级随机），审计仍可对账「同一会话
+// 稳定同指纹」，但无法反查原值。分桶/粘性等**内存路径继续用原值**（语义不变），仅落盘脱敏。
+function sessionFingerprintOf(sessionId) {
+  const raw = String(sessionId || '').trim();
+  if (!raw) return null;
+  return `sidfp:${createHmac('sha256', semanticBucketSecret).update(`session-fp:${raw}`).digest('hex').slice(0, 16)}`;
+}
+
 function upstreamRequestBody(body, model, reasoningLevel) {
   const payload = { ...body, model };
   const modelConfig = config.models.find((item) => item.id === model);
@@ -748,8 +758,9 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 // v0.7.2 八审 P1：active 模式必须显式配置 secret（随机 secret 每次重启重洗实验组，跨重启
 // 污染对照）。shadow 允许缺省。校验在启动与热切换两处执行（semanticRouter.mode=active）。
 const semanticBucketSecret = process.env.SEMANTIC_BUCKET_SECRET ? Buffer.from(process.env.SEMANTIC_BUCKET_SECRET, 'utf8') : randomBytes(32);
-// v0.7.3 九审 P2：强度下限——active 要求 ≥32 字节（256 bit）熵源。「x」这类占位值能过非空校验
-// 但防不住预计算。urlsafe-base64(32B)=43 字符、hex(32B)=64 字符、base64(32B)=44 字符，32 字节
+// v0.7.3 九审 P2 / v0.7.4 十审口径修正：这是**长度下限**（≥32 字节）而非熵证明——32 个
+// 重复字符也能过校验。防预计算依赖「用随机生成命令产出」的运维纪律，代码只拦明显弱值。
+// urlsafe-base64(32B)=43 字符、hex(32B)=64 字符、base64(32B)=44 字符，32 字节
 // 下限覆盖三种主流生成方式；过短即拒绝启动（fail fast 优于带弱 secret 上线）。
 function assertSemanticBucketSecretForMode(mode) {
   if (mode !== 'active') return;
@@ -758,7 +769,7 @@ function assertSemanticBucketSecretForMode(mode) {
     throw new Error('semanticRouter.mode=active 需要 SEMANTIC_BUCKET_SECRET 环境变量（跨重启稳定分桶）：请在宿主机 .env 生成并经 compose 注入，生成命令 python3 -c "import secrets; print(secrets.token_urlsafe(32))"');
   }
   if (Buffer.byteLength(secret, 'utf8') < 32) {
-    throw new Error(`SEMANTIC_BUCKET_SECRET 强度不足（当前 ${Buffer.byteLength(secret, 'utf8')} 字节 < 32 字节下限）：请重新生成，python3 -c "import secrets; print(secrets.token_urlsafe(32))"`);
+    throw new Error(`SEMANTIC_BUCKET_SECRET 长度不足（当前 ${Buffer.byteLength(secret, 'utf8')} 字节 < 32 字节长度下限；长度≠熵，务必用随机命令生成）：请重新生成，python3 -c "import secrets; print(secrets.token_urlsafe(32))"`);
   }
 }
 function semanticBucketOf({ sessionId = null, keyFingerprint = null, requestId = null } = {}) {
@@ -770,7 +781,8 @@ function semanticBucketOf({ sessionId = null, keyFingerprint = null, requestId =
   const bucket = Number(parseInt(createHmac('sha256', semanticBucketSecret).update(`semantic-rollout:${key}`).digest('hex').slice(0, 8), 16) % 100);
   // v0.7.3 九审 P2：bucketKey 落盘前转 HMAC 短指纹——sid:/fp: 前缀后的原值（session ID 可能
   // 含账号/手机号）不进日志。指纹与分桶同 secret：审计可对账「同一会话稳定同组」，但无法反查原值。
-  const hmac = createHmac('sha256', semanticBucketSecret).update(`bucket-key-fp:${key}`).digest('hex').slice(0, 12);
+  // v0.7.4 十审：12→16 hex（48bit 在百万级 session 下碰撞概率不可忽略；16hex=64bit）。
+  const hmac = createHmac('sha256', semanticBucketSecret).update(`bucket-key-fp:${key}`).digest('hex').slice(0, 16);
   const loggedKey = `${key.split(':')[0]}:${hmac}`;
   return { bucket, key, source, loggedKey };
 }
@@ -912,7 +924,7 @@ async function proxyCompletion(req, res) {
   const writeOutcomeLog = (outcome) => {
     if (requestLogWritten) return;
     requestLogWritten = true;
-    decisionLog.write({ sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, outcome);
+    decisionLog.write({ sessionFingerprint: sessionFingerprintOf(req.headers['x-session-id']), requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, outcome);
   };
   const onClientClose = () => {
     clientGone = true;
@@ -1062,7 +1074,7 @@ async function proxyCompletion(req, res) {
       const actualCostYuan = usage ? computeActualCostFromUsage(usage, selectedConfig) : null;
       if (actualCostYuan != null) { counters.tokens ??= {}; counters.tokens.prompt = (counters.tokens.prompt || 0) + usage.prompt; counters.tokens.completion = (counters.tokens.completion || 0) + usage.completion; }
       // 日志先组装不落盘（流式的 usage 在流尾才知道）——转发完成后统一 write
-      const logEntry = { sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) };
+      const logEntry = { sessionFingerprint: sessionFingerprintOf(req.headers['x-session-id']), requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) };
       const logOutcome = { ok: true, model, latencyMs: latency, fallbackAttempt: i, estimatedCostYuan, actualCostYuan, usage };
       record({ at: new Date().toISOString(), requested: decision.requestedModel, selected: model, suggested: decision.suggestedModel, task: decision.analysis.task, complexity: decision.analysis.complexity, routeMethod: decision.analysis.routeMethod, reasoningLevel: decision.reasoningLevel, reasoningApplied: Boolean(selectedModelConfig?.reasoningControl?.verified) && decision.reasoningLevel !== 'off', keyFingerprint: keyFingerprint(req.headers.authorization), estimatedCostYuan, actualCostYuan, latencyMs: latency, fallbackAttempt: i, ok: true });
       const headers = {
@@ -1503,7 +1515,7 @@ function subCategoryOf(task, subTask) {
     const script = join(projectRoot, 'scripts', 'evaluate_classifier.py');
     const pythonCmd = await resolveClassifierPython(); // v0.5.2：探活优先级 CLASSIFIER_PYTHON > .venv(探活) > python
     if (!pythonCmd) return errorJson(res, 500, '找不到可用的 Python（检查 CLASSIFIER_PYTHON 环境变量或安装 python）', 'classifier_eval_error');
-    const child = spawn(pythonCmd, [script, ...(url.searchParams.get('dump') === '1' ? ['--dump'] : [])], { cwd: projectRoot, windowsHide: true });
+    const child = spawn(pythonCmd, [script, ...(url.searchParams.get('dump') === '1' ? ['--dump'] : [])], { cwd: projectRoot, windowsHide: true, env: { ...process.env, PYTHONUTF8: '1' } });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => child.kill(), 120000);
@@ -1525,7 +1537,7 @@ function subCategoryOf(task, subTask) {
     const script = join(projectRoot, 'scripts', 'evaluate_classifier.py');
     const pythonCmd = await resolveClassifierPython(); // v0.5.2：同 evaluate 探活优先级
     if (!pythonCmd) return errorJson(res, 500, '找不到可用的 Python（检查 CLASSIFIER_PYTHON 环境变量或安装 python）', 'classifier_replay_error');
-    const child = spawn(pythonCmd, [script, '--dump'], { cwd: projectRoot, windowsHide: true });
+    const child = spawn(pythonCmd, [script, '--dump'], { cwd: projectRoot, windowsHide: true, env: { ...process.env, PYTHONUTF8: '1' } });
     let stdout = ''; let stderr = '';
     const timer = setTimeout(() => child.kill(), 120000);
     child.stdout.on('data', (d) => { stdout += d; });

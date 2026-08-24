@@ -13,9 +13,11 @@ function runDump() {
     const venv = join(projectRoot, '.venv', 'Scripts', 'python.exe');
     // Python 解析顺序（v0.5.2，Codex 二审：.venv 记录的绝对路径可能失效——existsSync ≠ 可执行）：
     //   CLASSIFIER_PYTHON 显式指定 > .venv（探活通过才用）> PATH 上的 python
-    // v0.5.3：探活从 --version 升级 import 级（sklearn/joblib）——防选中「能启动但无 sklearn」的解释器
+    // 探活必须覆盖真实模型兼容性：仅 import 会误选 sklearn 1.6.1，而模型由 1.9.0 生成，
+    // 反序列化后 predict_proba 会因 estimator 字段不兼容失败。
+    const smoke = "import sys, sklearn, joblib; sys.path.insert(0, 'scripts'); assert sklearn.__version__ == '1.9.0'; m=joblib.load('data/training/model/task.joblib'); m.predict(['smoke'])";
     const tryRun = (cmd) => new Promise((res) => {
-      const probe = spawn(cmd, ['-c', 'import sklearn, joblib'], { stdio: 'ignore' });
+      const probe = spawn(cmd, ['-c', smoke], { cwd: projectRoot, stdio: 'ignore' });
       probe.on('error', () => res(false));
       probe.on('close', (code) => res(code === 0));
     });
@@ -29,7 +31,7 @@ function runDump() {
       candidates.push('python');
       const cmd = await candidates.reduce(async (acc, c) => await acc || (await tryRun(c) ? c : null), null);
       if (!cmd) { reject(new Error('SKIP_NO_PYTHON')); return; } // v0.6.1 五审 P2：无 Python 环境 → skip 而非 fail
-      const child = spawn(cmd, [join(projectRoot, 'scripts', 'evaluate_classifier.py'), '--dump'], { cwd: projectRoot });
+      const child = spawn(cmd, [join(projectRoot, 'scripts', 'evaluate_classifier.py'), '--dump'], { cwd: projectRoot, env: { ...process.env, PYTHONUTF8: '1' } });
       let out = ''; let err = '';
       child.stdout.on('data', (d) => { out += d; });
       child.stderr.on('data', (d) => { err += d; });

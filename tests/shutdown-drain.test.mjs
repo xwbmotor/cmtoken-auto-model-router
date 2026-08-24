@@ -239,5 +239,5 @@ test('active secret 过短（<32 字节）：启动即拒绝（九审 P2 强度�
   child.stderr.on('data', c => err += c);
   const [code] = await once(child, 'exit');
   assert.notEqual(code, 0, 'active + 短 secret 应非零退出');
-  assert.ok(/强度不足/.test(err), `错误信息应说明强度不足，实际：${err.slice(0, 200)}`);
+  assert.ok(/长度不足/.test(err), `错误信息应说明长度不足（v0.7.4 口径：长度下限≠熵证明），实际：${err.slice(0, 200)}`);
 }, { timeout: 30000 });

@@ -47,6 +47,8 @@
 - **复核事件持久化（v0.7.0；v0.7.1 关停排空）**：shadow/灰度下的每次语义复核按 `requestId` 落 `data/decisions/semantic-reviews-*.jsonl`（独立事件流，含 L1/L2/L3 各层 task·tier·confidence、cascade 层级、**small/large/total 三段耗时**、分歧结论、分类开销）。优雅关停按「在途后台复核（≤8s）→ 决策日志 → 语义事件 → 预算账本」顺序排空——滚动重启不丢正在复核的事件。
 - **语义独立灰度 v0.7.2 八审加固**：在 v0.7.1 HMAC + 服务端 secret 基础上，①`SEMANTIC_BUCKET_SECRET` 写入生产 compose（active 模式启动强校验，shadow 可缺省）——secret 跨重启稳定，实验组不被容器滚动打乱对照；②`semanticRollout` 三态（applied/rejected/hold）都带 `bucketKey`+`source`，审计分桶身份；③新增指标 `router_semantic_bucket_key_source_total{source=session|fingerprint|internal}`（internal 异常升高=在线探测实验组）；④SIGTERM 排空行为级 e2e 已入测试套（tests/shutdown-drain.test.mjs）；⑤`classifierLatencyMs` 统一 `totalLatencyMs` 口径。
 - **九审收口（v0.7.3）**：①`/admin/api/reload` 与启动/热切同校验 secret（先 load 临时 config→校验→替换，reload 不再是绕过口）②`bucketKey` 落盘为 HMAC 短指纹（`sid:<12hex>`）——原始 session ID/key 指纹不进日志③active 要求 secret ≥32 字节（弱值拒启动）④发布报告由 `test:release` 自动生成（commit SHA/dirty/config SHA256/退出码，`reports/`）⑤8s 关停上限的行为级断言（注入卡死任务，退出耗时∈[7.5s,10s]）⑥发版纪律：tag 必须打在 compose image bump 之后。
+- **十审收口（v0.7.4）**：①`test:release` 发布证据链门禁——clean HEAD+exact tag 才 validForRelease，报告不提交回 tag（自引用修复）②决策/复核日志 `request.sessionFingerprint`（`sidfp:<16hex>` HMAC）替代原 `sessionId` 落盘——原始 x-session-id 不进任何日志③指纹 16 hex（64bit）④reload 三场景回归测试⑤secret 校验口径：32 字节=长度下限≠熵。
+
 
 
 - **语义独立灰度（v0.7.0；v0.7.1 加固）**：`semanticRouter.activeTrafficPercent`（0-100，默认 5）——active 模式下按 **HMAC(服务端 secret)** 分桶（七审：无盐哈希可被客户端预计算操纵）。桶键优先级 `x-session-id`（同会话重试不换组）> `keyFingerprint`（同租户稳定）> 服务端内部实验 ID（不复用客户端 `x-request-id`）。桶外记 `rollout_hold` 照常后台观察。secret 默认进程级随机，可选 `SEMANTIC_BUCKET_SECRET` 环境变量跨重启稳定。与模型路由整体灰度 `routing.activeTrafficPercent` 是两个独立实验变量。

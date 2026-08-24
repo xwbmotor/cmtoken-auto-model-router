@@ -141,6 +141,8 @@ systemctl daemon-reload && systemctl enable --now auto-router
 - **v0.7.2 八审运维补丁（生产切 active 前必读）**：①`SEMANTIC_BUCKET_SECRET` 写入宿主机 .env——`python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 或 `openssl rand -base64 32`。docker-compose.prod.yml 已注入该变量并用 `${VAR:?VAR is required}` 强校验；active 模式启动或热切到 active 也会校验，缺失即拒启动。shadow 模式可缺省（进程级随机不影响观察）。②管理页「语义灰度比例」tooltip 已同步说明 HMAC + 桶键优先级 + secret 跨重启稳定。③灰度分桶元数据三态（applied/rejected/hold）都带 bucketKey+source，审计更完整。④分桶键来源指标 `router_semantic_bucket_key_source_total{source}`——internal 异常升高即在线探测告警。⑤SIGTERM 排空行为级 e2e 已入测试套（tests/shutdown-drain.test.mjs），Windows 经 IPC 钩子触发同条 shutdownManager.shutdown 路径（POSIX 仍真信号）。⑥`classifierLatencyMs` 已统一 `totalLatencyMs` 口径。
 
 - **v0.7.3 九审收口（升级操作不变，口径修正）**：①生产 compose 的 `SEMANTIC_BUCKET_SECRET` 恒必填（shadow 也配——统一口径防「shadow 期没配、切 active 才发现」）；本地开发 shadow 可缺省。②secret 强度下限 32 字节：active 模式配置过短值直接拒启动（报错含重新生成命令）。③`/admin/api/reload` 同样校验——磁盘配置改 active 后 reload 不能绕过 secret 检查。④决策/复核日志的 `bucketKey` 现为 HMAC 短指纹（`sid:9f3ab…`），原始 session ID 不落盘（隐私）。⑤分桶来源指标 internal=匿名请求占比，探测检测不由此指标承担。
+
+- **v0.7.4 十审（隐私与发布证据链）**：①决策/复核日志的会话标识为 `sessionFingerprint`（`sidfp:<16hex>` HMAC 指纹）——原始 `x-session-id` 不落盘（该字段客户端可控，可能含手机号/账号）；跨日志对账用同 secret 的指纹一致性行。②发布报告 `reports/release-*.json` 带 `validForRelease` 门禁（clean HEAD+exact tag）；报告不提交回被证明的 tag——发版流程：commit → tag → 干净 worktree 跑 `npm run test:release` → 报告归档。③`SEMANTIC_BUCKET_SECRET` 32 字节为**长度下限**，不证明熵——一律用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成。
 - 模型退网：管理端关该模型启用开关 → fallbackOrder 自动重排，无需重启
 - 新模型上线四步：管理端录入（质量分/成本/时延/部署）→ eval gate 50 条实测 → replay 预估 → 小流量灰度
 
