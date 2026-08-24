@@ -117,8 +117,11 @@ const SIMULATION_SAMPLES = [
 let classifierPythonCache = null;
 async function resolveClassifierPython() {
   if (classifierPythonCache) return classifierPythonCache;
+  // v0.5.3 修三审：探活从 `--version` 升级为 import 级（sklearn/joblib）。
+  // 原实现 --version 通过即选中——PATH 上存在「能启动但没装 sklearn」的 python 时，
+  // dump/回放直接 ImportError。分类器评测依赖的是 sklearn 栈，不是 python 本身。
   const probe = (cmd) => new Promise((resolve) => {
-    const p = spawn(cmd, ['--version'], { stdio: 'ignore', windowsHide: true });
+    const p = spawn(cmd, ['-c', 'import sklearn, joblib'], { stdio: 'ignore', windowsHide: true });
     p.on('error', () => resolve(false));
     p.on('close', (code) => resolve(code === 0));
   });
@@ -741,6 +744,37 @@ async function proxyCompletion(req, res) {
   let settledAttempt = false; // 预算落账闸（防 fallback 重试路径双结算）
   let outcomeSettled = true;  // 成功/失败落账闸（true=无在途 attempt，调用 no-op）
   let actxCtx = null;         // { model, started, ttftMs, isStream } 当前 attempt 快照
+  // —— 客户端断开哨兵 + 非流式交付守卫（v0.5.3，Codex 三审 P1）——
+  // 哨兵在 attempts 循环前注册：客户端在任何阶段断开（含服务端还在等上游响应头时）都能捕获；
+  // 非流式 close 时按「writableFinished && delivered」判成功/失败。流式 close 交给流转发循环的
+  // 异常路径（断流时 res.write 抛错或上游迭代器抛错进 catch），此守卫不重复落账（outcomeSettled 闸兜底）。
+  let clientGone = false;
+  const delivery = { delivered: false, usage: null, log: null, guardActive: false };
+  const onClientClose = () => {
+    clientGone = true;
+    if (!delivery.guardActive) {
+      // attempt 前段（等上游响应头/读上游 body）客户端断开：无在途响应可交付，记客户端写失败
+      // （v0.5.3：原实现只置标志不落账——成功失败都不记、reserve 等结算泄漏到进程重启）
+      if (!outcomeSettled) {
+        markOutcome(false, new Error('client_disconnected'));
+        settleAttempt(null, false);
+        logger.warn('client_abandoned_upstream_wait', { requestId: req.requestId });
+      }
+      return;
+    }
+    if (res.writableFinished && delivery.delivered) {
+      markOutcome(true);
+      settleWithUsageGlobal(delivery.usage);
+      if (delivery.log) decisionLog.write(delivery.log.entry, decision, delivery.log.outcome);
+    } else {
+      markOutcome(false, new Error('client_disconnected'));
+      settleAttempt(null, false);
+      logger.warn('client_write_failed', { requestId: req.requestId, delivered: delivery.delivered, writableFinished: res.writableFinished });
+    }
+  };
+  res.once('close', onClientClose);
+  // settleWithUsage 需引用当前 attempt 的 selectedConfig——提升为请求级（每次 attempt 刷新）
+  let settleWithUsageGlobal = () => {};
   const settleAttempt = (actualYuan, fromUsage) => {
     if (settledAttempt) return;
     settledAttempt = true;
@@ -777,7 +811,10 @@ async function proxyCompletion(req, res) {
       if (err) logger.warn(c.isStream ? 'stream_aborted' : 'client_write_failed', { requestId: req.requestId, model: c.model, error: String(err.message || err) });
     }
   };
-  const controller = new AbortController();
+  // v0.5.3 修三审 P1：controller 改为每 attempt 独立创建。原实现在循环外创建单例——
+  // 第一次超时 abort 后 signal 永久失效，后续 fallback 复用已 aborted 的 signal 立即失败，
+  // 「每次尝试独立计时」只重置了 timer 没重建 controller，超时必然污染整个 fallback 链。
+  let controller = null;
   // 超时语义（v0.4.26 修复流式长回答被掐）：
   //   非流式 = 整请求总超时；流式 = 闲置超时（收到任何上游数据即续命）。
   //   旧实现对流式也用一次性总超时——dsf 长回答（31 tok/s，10k 字≈110s+）撞 120s 线被 abort，
@@ -793,6 +830,7 @@ async function proxyCompletion(req, res) {
     const model = attempts[i];
     if (!claimCircuitAttempt(model)) continue;
     const started = Date.now();
+    controller = new AbortController(); // 新 attempt 新 signal（三审 P1：超时 abort 不再泄漏到 fallback）
     armTimer(); // 每次尝试独立计时（旧实现 timer 在循环外只设一次，attempt 2 继承剩余预算）
     try {
       // 飞轮：流式请求带上 stream_options.include_usage，上游会在最后一个 chunk 附带 usage
@@ -805,6 +843,17 @@ async function proxyCompletion(req, res) {
         lastError = new Error(`上游 ${model} 调用失败（HTTP ${upstream.status}）`);
         lastError.retryable = [408, 429, 500, 502, 503, 504].includes(upstream.status);
         throw lastError;
+      }
+      // 客户端已在等待上游期间断开（v0.5.3）：响应无处交付，记失败结账直接返回——
+      // 不 reserve、不 fallback（无人接收结果，重试只是烧钱）、不写死 socket
+      if (clientGone) {
+        actxCtx = { model, started, ttftMs: Date.now() - started, isStream: body.stream === true, auto };
+        outcomeSettled = false;
+        markOutcome(false, new Error('client_disconnected'));
+        logger.warn('client_abandoned_upstream_wait', { requestId: req.requestId, model, latencyMs: Date.now() - started });
+        decisionLog.write({ sessionId: req.headers['x-session-id'] || null, requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, { ok: false, model, error: 'client_disconnected', latencyMs: Date.now() - started });
+        clearTimeout(timer);
+        return res.destroy();
       }
       // 飞轮：转发前先判定是否流式——流式不缓冲整个响应（内存安全），usage 从 SSE 尾块解析
       const isStream = body.stream === true;
@@ -819,21 +868,21 @@ async function proxyCompletion(req, res) {
       settledAttempt = false; outcomeSettled = false; // 新 attempt：重置两道落账闸
       actxCtx = { model, started, ttftMs: firstByteLatencyMs, isStream: body.stream === true, auto };
       // 有 usage 按实际 token 冲正；无 usage 保留估算并标记 estimated（v0.5.2：settleWithUsage 统一入口）
-      const settleWithUsage = (u) => {
+      settleWithUsageGlobal = (u) => {
         if (u && u.prompt != null && u.completion != null) {
           const actual = computeActualCostFromUsage(u, selectedConfig);
           if (actual != null) { settleAttempt(actual, true); return; }
         }
         settleAttempt(null, false);
       };
+      const settleWithUsage = settleWithUsageGlobal;
       // 飞轮：非流式在此整体缓冲解析 usage（拿到实际 token 数）；流式在转发循环中从尾块提取
       let responseText = null;
       if (!isStream && upstream.body) {
         responseText = await upstream.text();
         usage = extractUsage(upstream.headers.get('content-type'), responseText);
-        // 非流式：响应体完整读毕才算成功（v0.5.2 修复——原实现 text() 前记成功，读断即成功+失败双记）
-        markOutcome(true);
-        settleWithUsage(usage);
+        // 成功落账不在此处：交给 close 守卫按交付状态判定（v0.5.3 修三审 P1——
+        // v0.5.2 在 text() 读毕即记成功，客户端已断开时写回失败无法改记失败）
       }
       // 实际成本：有 usage 时按真实 token 结算（对账口径），否则保留预估值
       const actualCostYuan = usage ? computeActualCostFromUsage(usage, selectedConfig) : null;
@@ -855,12 +904,15 @@ async function proxyCompletion(req, res) {
         'x-router-route-method': decision.analysis.routeMethod || 'rules'
       };
       res.writeHead(200, headers);
-      if (!upstream.body) { markOutcome(true); settleWithUsage(null); clearTimeout(timer); return res.end(); }
+      if (!upstream.body) { clearTimeout(timer); delivery.delivered = true; delivery.guardActive = true; return void res.end(); } // 无 body 上游（304 类）：close 守卫结清
       if (responseText !== null) {
-        // 非流式：body 已被 text() 消费，这里一次性写回客户端；usage/actualCostYuan 已解析完毕，落日志
-        if (!res.write(responseText)) await new Promise((resolve) => res.once('drain', resolve));
-        decisionLog.write(logEntry, decision, logOutcome);
-        clearTimeout(timer); return res.end();
+        // 非流式：一次性写回。成功落账由 close 守卫按「writableFinished && delivered」判定——
+        // v0.5.3 修三审 P1：v0.5.2 在 text() 读毕即记成功，客户端已断开时记了假成功。
+        delivery.usage = usage;
+        delivery.log = { entry: logEntry, outcome: logOutcome };
+        delivery.delivered = true;
+        delivery.guardActive = true;
+        clearTimeout(timer); return void res.end(responseText);
       }
       // 流式：逐块转发（背压安全），并从 SSE 尾块提取 usage（飞轮：实际 token 消耗）
       // 超时续命：每收到一个 chunk 重置闲置计时器——只要上游还在产 token 就不掐（v0.4.26）
@@ -886,6 +938,8 @@ async function proxyCompletion(req, res) {
       clearTimeout(timer); return res.end();
     } catch (error) {
       lastError = error;
+      delivery.guardActive = false; // 本 attempt 已死，close 守卫不再按交付状态落账（防旧 attempt 污染下一 attempt）
+      if (clientGone && !res.headersSent) { settleAttempt(null, false); outcomeSettled = true; clearTimeout(timer); return; } // 客户端已断：不再 fallback，直接结束（错误已无法送达）
       if (res.headersSent) {
         // mid-flight 中断（流式断流/非流式写回失败）：单次失败落账 + 预算保留估算
         // （v0.5.2：markOutcome/settleAttempt 声明在 try 外，此处可见——原实现引用 try 内 const 抛 ReferenceError）

@@ -4,6 +4,12 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import net from 'node:net';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 
 // 飞轮回归：usage 捕获（流式跨 chunk 切割 + 非流式）+ 显式反馈端点
 function freePort() {
@@ -37,8 +43,19 @@ test('飞轮：usage 捕获（流式 usage chunk 被切割成两半也能解析�
   const upstreamPort = upstream.address().port;
 
   const routerPort = await freePort();
+  // v0.5.3 修三审：端到端隔离——子 server 用独立 CONFIG_PATH，decisionLog/feedbackLog/budget 目录
+  // 全部指到临时目录。原实现子 server 与真实 8787 共写 ./data/decisions——全量并行跑测试时
+  // 其他用例也在写同一目录，「最新 jsonl」读到别人的行导致断言随机失败（Codex 环境复现 140/143）。
+  const dataDir = await mkdtemp(join(tmpdir(), 'amr-flywheel-'));
+  const config = JSON.parse(await readFile(join(projectRoot, 'config', 'router.json'), 'utf8'));
+  config.upstreamBaseUrl = `http://127.0.0.1:${upstreamPort}/v1`;
+  config.decisionLog = { ...(config.decisionLog || {}), enabled: true, dirPath: join(dataDir, 'decisions') };
+  config.feedbackLog = { ...(config.feedbackLog || {}), enabled: true, dirPath: join(dataDir, 'feedback') };
+  config.budget = { ...(config.budget || {}), ledgerPath: join(dataDir, 'budget-ledger.json') };
+  const configPath = join(dataDir, 'router.json');
+  await writeFile(configPath, JSON.stringify(config), 'utf8');
   const child = spawn(process.execPath, ['src/server.mjs'], {
-    env: { ...process.env, PORT: String(routerPort), HOST: '127.0.0.1', ROUTER_ACCESS_KEY: 'rk', MAAS_BASE_URL: `http://127.0.0.1:${upstreamPort}/v1`, MAAS_API_KEY: 'maas', ADMIN_TOKEN: 'adm' },
+    env: { ...process.env, PORT: String(routerPort), HOST: '127.0.0.1', ROUTER_ACCESS_KEY: 'rk', MAAS_BASE_URL: `http://127.0.0.1:${upstreamPort}/v1`, MAAS_API_KEY: 'maas', ADMIN_TOKEN: 'adm', CONFIG_PATH: configPath },
     cwd: process.cwd(), stdio: 'ignore'
   });
   await sleep(1500);
@@ -56,11 +73,12 @@ test('飞轮：usage 捕获（流式 usage chunk 被切割成两半也能解析�
     const j2 = await r2.json();
     assert.equal(j2.usage.prompt_tokens, 80);
 
-    // 3. 决策日志：两条都有 usage（流式跨块切割场景也要捕获）
+    // 3. 决策日志：两条都有 usage（流式跨块切割场景也要捕获）——读测试专属目录（隔离后不再受并行用例干扰）
     await sleep(800);
     const { readFileSync, readdirSync } = await import('node:fs');
-    const latest = readdirSync('data/decisions').filter(f => f.endsWith('.jsonl')).sort().pop();
-    const rows = readFileSync(`data/decisions/${latest}`, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+    const decisionsDir = join(dataDir, 'decisions');
+    const latest = readdirSync(decisionsDir).filter(f => f.endsWith('.jsonl')).sort().pop();
+    const rows = readFileSync(join(decisionsDir, latest), 'utf8').trim().split('\n').map(l => JSON.parse(l));
     const last2 = rows.slice(-2);
     const streamRow = last2.find(r => r.request?.redactedBody?.stream === true);
     const plainRow = last2.find(r => r.request?.redactedBody?.stream === false || !r.request?.redactedBody?.stream);
@@ -78,12 +96,13 @@ test('飞轮：usage 捕获（流式 usage chunk 被切割成两半也能解析�
     assert.equal(fb2.status, 400);
     const fb3 = await fetch(`http://127.0.0.1:${routerPort}/admin/api/feedback`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'r3', rating: 'good' }) });
     assert.equal(fb3.status, 401);
-    // feedback 落盘验证
+    // feedback 落盘验证（隔离目录）
     await sleep(400);
     const { readFileSync: rf2, readdirSync: rd2 } = await import('node:fs');
-    const fbFiles = rd2('data/feedback').filter(f => f.endsWith('.jsonl'));
+    const feedbackDir = join(dataDir, 'feedback');
+    const fbFiles = rd2(feedbackDir).filter(f => f.endsWith('.jsonl'));
     assert.ok(fbFiles.length >= 1, 'feedback 文件应存在');
-    const fbRows = rf2(`data/feedback/${fbFiles.sort().pop()}`, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+    const fbRows = rf2(join(feedbackDir, fbFiles.sort().pop()), 'utf8').trim().split('\n').map(l => JSON.parse(l));
     assert.equal(fbRows[fbRows.length - 1].rating, 'good');
 
     // 5. 无鉴权不可读 metrics

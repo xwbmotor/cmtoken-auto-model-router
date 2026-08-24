@@ -47,7 +47,17 @@ function startMockUpstream(port) {
       }
     });
   });
-  return new Promise((resolve) => srv.listen(port, '127.0.0.1', () => resolve(srv)));
+  // v0.5.3 修测试竞态：listen(0) 内核分配端口。原 freePort 探针（bind→close→复用号码）在
+  // node:test 并行执行下端口号码会被其他用例抢注，10 轮狩猎出现 1 次 mock 上游错连→路由 502。
+  return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => resolve(srv)));
+}
+
+// router 子进程端口：先占住防并行抢注，spawn 前一刻才释放（窗口 <1ms；freePort 探针的
+// 「号码已知但未绑定」窗口 = 整个 setup 时长，其他测试可在此窗口内绑定同号）
+async function holdPort() {
+  const holder = net.createServer(); holder.unref();
+  await new Promise((r, e) => { holder.once('error', e); holder.listen(0, '127.0.0.1', r); });
+  return { port: holder.address().port, release: () => new Promise((r) => holder.close(r)) };
 }
 
 async function metricsFor(port, token = 'met') {
@@ -57,13 +67,15 @@ async function metricsFor(port, token = 'met') {
 const metricVal = (text, re) => { const m = text.match(re); return m ? Number(m[1]) : 0; };
 
 test('e2e 记账生命周期：流式成功落 completed、非流式成功落 success、断流落 aborted（各恰一次）', async () => {
-  const upstreamPort = await freePort();
-  const port = await freePort();
-  const upstream = await startMockUpstream(upstreamPort);
+  const upstream = await startMockUpstream(0);          // listen(0)：内核分配，零碰撞
+  const upstreamPort = upstream.address().port;
+  const held = await holdPort();                        // router 端口先占住，spawn 前释放
+  const port = held.port;
   const child = spawn(process.execPath, ['src/server.mjs'], {
     env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', ROUTER_KEY_MODE: 'passthrough', UPSTREAM_BASE_URL: `http://127.0.0.1:${upstreamPort}`, ADMIN_TOKEN: 'adm', METRICS_TOKEN: 'met' },
     cwd: process.cwd(), stdio: 'ignore', detached: false
   });
+  await held.release();                                 // <1ms 后 child 即绑定
   try {
     assert.ok(await waitForHealth(port), 'server 启动超时');
     const post = (payload) => fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {

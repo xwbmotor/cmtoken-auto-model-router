@@ -49,14 +49,32 @@ test('实际 == 预占：exactSettles + settled 同步入账（v0.5.1 提前 ret
   await t.pendingWrite.catch(() => {}); await rm(dir, { recursive: true, force: true });
 });
 
-test('无 usage（fromUsage=false）：保留估算口径结清，不动 actual', async () => {
+test('无 usage（fromUsage=false）：估算结清且预占冲减（v0.5.3 修三审 P0：原实现不冲减，费用双记）', async () => {
   const { t, dir } = await fresh(cfg());
   const id = await t.reserve(3);
   await t.settle(id, null, false);
   const s = t.snapshot();
   assert.equal(s.estimatedSettles, 1);
   assert.equal(s.settledEstimatedSpendYuan, 3, '估算结清入 settledEstimated');
+  assert.equal(s.estimatedSpendYuan, 0, '结算后预占必须冲减归零——v0.5.2 该值仍为 3（双重占用）');
   assert.equal(s.settledActualSpendYuan ?? 0, 0);
+  assert.equal(t.pressure(), 0.03, '压力应含已结算估算：3/100');
+  await t.pendingWrite.catch(() => {}); await rm(dir, { recursive: true, force: true });
+});
+
+test('三审 P0：pressure 必须计入已结算消费（预算耗尽触发降级）', async () => {
+  const { t, dir } = await fresh(cfg());
+  // 预占 90 → 压力 0.9；按实际 90 结算后压力必须保持 0.9（v0.5.2 原实现回落 0，降级永不触发）
+  const id = await t.reserve(90);
+  assert.equal(t.pressure(), 0.9);
+  await t.settle(id, 90, true);
+  assert.equal(t.snapshot().estimatedSpendYuan, 0, '结算后无在途预占');
+  assert.equal(t.pressure(), 0.9, 'v0.5.3 核心：结算后压力不得回落——预算保护失效即此 bug');
+  // 混合口径：已结算实际 90 + 在途预占 10 = 1.0 封顶
+  const id2 = await t.reserve(10);
+  assert.equal(t.pressure(), 1);
+  await t.settle(id2, null, false);
+  assert.equal(t.pressure(), 1, '估算结清同样计入');
   await t.pendingWrite.catch(() => {}); await rm(dir, { recursive: true, force: true });
 });
 

@@ -13,8 +13,9 @@ function runDump() {
     const venv = join(projectRoot, '.venv', 'Scripts', 'python.exe');
     // Python 解析顺序（v0.5.2，Codex 二审：.venv 记录的绝对路径可能失效——existsSync ≠ 可执行）：
     //   CLASSIFIER_PYTHON 显式指定 > .venv（探活通过才用）> PATH 上的 python
+    // v0.5.3：探活从 --version 升级 import 级（sklearn/joblib）——防选中「能启动但无 sklearn」的解释器
     const tryRun = (cmd) => new Promise((res) => {
-      const probe = spawn(cmd, ['--version'], { stdio: 'ignore' });
+      const probe = spawn(cmd, ['-c', 'import sklearn, joblib'], { stdio: 'ignore' });
       probe.on('error', () => res(false));
       probe.on('close', (code) => res(code === 0));
     });

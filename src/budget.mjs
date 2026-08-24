@@ -59,8 +59,8 @@ export class BudgetTracker {
     return id;
   }
 
-  // 结算（v0.5.2 重写）：用实际额原子替换预占额。台账三项分解（Codex 建议）：
-  //   estimatedSpendYuan：未结算预占（随结算递减，崩丢=少记不重记，保守安全）
+  // 结算（v0.5.2 重写；v0.5.3 修三审 P0）：用实际额原子替换预占额。台账三项分解：
+  //   estimatedSpendYuan：未结算预占（所有结算路径都冲减，v0.5.2 无 usage 分支漏冲=双重占用已修）
   //   settledActualSpendYuan：已按实际 usage 结算的累计（只增）
   //   settledEstimatedSpendYuan：无 usage 而保留估算结清的累计（只增）
   // 冲正只做一次差额：estimated -= reserved（回滚预占），settled += actual。
@@ -69,6 +69,10 @@ export class BudgetTracker {
     const reserved = this.reserves.get(id);
     if (reserved === undefined) return;
     this.reserves.delete(id);
+    // 无定价预占（estimateYuan=null）：无金额可结，也不入估算台账（v0.5.3：原实现 null 相加产生 NaN）
+    if (reserved === null) { this.scheduleWrite(); return; }
+    // 回滚预占：所有结算路径共用（v0.5.3 修复——原无 usage 分支不回滚，费用同时在途+已结清双记）
+    this.state.estimatedSpendYuan = Number(Math.max(0, this.state.estimatedSpendYuan - reserved).toFixed(6));
     if (!fromUsage || actualYuan == null || !Number.isFinite(Number(actualYuan))) {
       this.state.estimatedSettles = (this.state.estimatedSettles || 0) + 1;
       this.state.settledEstimatedSpendYuan = Number(((this.state.settledEstimatedSpendYuan || 0) + reserved).toFixed(6));
@@ -80,7 +84,6 @@ export class BudgetTracker {
     this.state.exactSettles = Math.abs(delta) < 1e-7 ? (this.state.exactSettles || 0) + 1 : this.state.exactSettles || 0;
     this.state.settles = (this.state.settles || 0) + 1;
     this.state.settledActualSpendYuan = Number(((this.state.settledActualSpendYuan || 0) + actual).toFixed(6));
-    this.state.estimatedSpendYuan = Number(Math.max(0, this.state.estimatedSpendYuan - reserved).toFixed(6));
     this.scheduleWrite();
   }
 
@@ -119,7 +122,11 @@ export class BudgetTracker {
     this.rollover();
     const limit = Number(this.config.budget?.dailyBudgetYuan || 0);
     if (!this.config.budget?.enabled || limit <= 0) return 0;
-    return Math.max(0, Math.min(1, this.state.estimatedSpendYuan / limit));
+    // v0.5.3 修三审 P0：压力=当日总消费（已结算实际 + 已结算估算 + 在途预占）。
+    // 原实现只看在途预占 estimatedSpendYuan——请求结算后预占归零，压力回落 0，
+    // 预算耗尽也永不触发降级（budgetCostMultiplier 形同虚设）。
+    const spend = (this.state.settledActualSpendYuan || 0) + (this.state.settledEstimatedSpendYuan || 0) + (this.state.estimatedSpendYuan || 0);
+    return Math.max(0, Math.min(1, spend / limit));
   }
 
   snapshot() {
