@@ -1,0 +1,25 @@
+{
+  "stamp": "2026-08-24T14:08:52.223Z",
+  "version": "0.7.2",
+  "configVersion": "0.7.2",
+  "env": {
+    "node": "v24.13.0",
+    "platform": "win32",
+    "arch": "x64",
+    "hostname": "sgs-xiaowenbin",
+    "cpus": 16,
+    "totalMemMB": 28357
+  },
+  "git": {
+    "branch": "master",
+    "head": "pending-commit"
+  },
+  "summary": {
+    "tests": "166",
+    "passed": "166",
+    "failed": "0",
+    "skipped": "0",
+    "durationMs": 22304.1814
+  },
+  "notes": "v0.7.2 八审运维补丁：compose 注入 SEMANTIC_BUCKET_SECRET+active 强校验、applied/rejected 补 bucketKey、bucketKeySource 计数器、shutdown-drain 行为级 e2e、classifierLatencyMs=totalLatencyMs 统一口径、release 报告落盘。"
+}

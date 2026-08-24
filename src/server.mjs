@@ -26,6 +26,8 @@ const port = Number(process.env.PORT || 8787);
 const serverKeepAliveMs = Number(process.env.HTTP_KEEPALIVE_MS || 300000);    // 5 分钟
 const serverHeadersTimeoutMs = Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 310000); // 比 keepAlive 略高
 let config = await loadConfig();
+// v0.7.2 八审 P1：active 模式启动强校验（无持久 secret 时 fail fast，防止重启重洗实验组）
+assertSemanticBucketSecretForMode(config.semanticRouter?.mode);
 const budgetTracker = await BudgetTracker.create(projectRoot, config);
 const decisionLog = await DecisionLog.create(projectRoot, config);
 // v0.7.0 六审 P1：语义复核事件流（独立实例——DecisionLog 实例状态含 currentFile/writeChain，
@@ -94,7 +96,7 @@ function buildRoutingReport() {
   return { sampleCount: rows.length, arms, highlights, perSample: rows };
 }
 
-const counters = { startedAt: new Date().toISOString(), total: 0, auto: 0, explicit: 0, success: 0, errors: 0, fallback: 0, selected: {}, selectedBy: {}, suggested: {}, task: {}, outcome: { auto: { success: 0, error: 0 }, explicit: { success: 0, error: 0 } }, semantic: { eligible: 0, attempted: 0, succeeded: 0, disagreed: 0, errors: 0, applied: 0, escalated: 0 } };
+const counters = { startedAt: new Date().toISOString(), total: 0, auto: 0, explicit: 0, success: 0, errors: 0, fallback: 0, selected: {}, selectedBy: {}, suggested: {}, task: {}, outcome: { auto: { success: 0, error: 0 }, explicit: { success: 0, error: 0 } }, semantic: { eligible: 0, attempted: 0, succeeded: 0, disagreed: 0, errors: 0, applied: 0, escalated: 0, rejectedLowConfidence: 0, rolloutHold: 0, byCascadeLevel: {}, bucketKeySource: { session: 0, fingerprint: 0, internal: 0 } } };
 // 真实业务规模输入构造器：模拟样本不再是「一句话玩具提问」，而是带系统提示词+多轮上下文的真实调用形态。
 // 用户侧输入 token 是模拟成本失真的主因（真实调用输入常为几十~上千 token，而一句话提问只有几个）。
 const SYS_TPL = (role) => `你是广东移动内部${role}助手。请基于以下知识库内容回答，不要编造，引用请标注来源段落编号。知识库：{
@@ -679,7 +681,7 @@ function routingOverhead(assessment) {
   counters.routingOverhead.costYuan = Number((counters.routingOverhead.costYuan + (costYuan || 0)).toFixed(6));
   counters.routingOverhead.promptTokens += assessment.overheadUsage.prompt || 0;
   counters.routingOverhead.completionTokens += assessment.overheadUsage.completion || 0;
-  return { overheadUsage: assessment.overheadUsage, overheadCostYuan: costYuan, classifierLatencyMs: assessment.latencyMs || null };
+  return { overheadUsage: assessment.overheadUsage, overheadCostYuan: costYuan, classifierLatencyMs: assessment.cascade?.totalLatencyMs ?? assessment.latencyMs ?? null };
 }
 
 function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, clientAuthHeader = null, allowedModelIds = null, requestId = null } = {}) {
@@ -743,11 +745,21 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 // ③ 返回 { bucket, key } 一并落事件，事后可审计每次分桶用了哪个键。
 // secret 来源：SEMANTIC_BUCKET_SECRET（跨重启稳定，部署方可选）> 进程级随机（默认）。
 // 两者都不可被客户端预计算——分桶输入（session/fingerprint/内部ID）+服务端秘密，七审 P1-1。
+// v0.7.2 八审 P1：active 模式必须显式配置 secret（随机 secret 每次重启重洗实验组，跨重启
+// 污染对照）。shadow 允许缺省。校验在启动与热切换两处执行（semanticRouter.mode=active）。
 const semanticBucketSecret = process.env.SEMANTIC_BUCKET_SECRET ? Buffer.from(process.env.SEMANTIC_BUCKET_SECRET, 'utf8') : randomBytes(32);
+function assertSemanticBucketSecretForMode(mode) {
+  if (mode === 'active' && !process.env.SEMANTIC_BUCKET_SECRET) {
+    throw new Error('semanticRouter.mode=active 需要 SEMANTIC_BUCKET_SECRET 环境变量（跨重启稳定分桶）：请在宿主机 .env 生成并经 compose 注入，生成命令 python3 -c "import secrets; print(secrets.token_urlsafe(32))"');
+  }
+}
 function semanticBucketOf({ sessionId = null, keyFingerprint = null, requestId = null } = {}) {
-  const key = sessionId || (keyFingerprint && String(keyFingerprint).length === 8 ? `fp:${keyFingerprint}` : null) || `rid:${requestId || randomUUID()}`;
+  // v0.7.2 八审 P2：来源标注——audit 字段带 source（session/fingerprint/internal），
+  // 指标计数器按来源分布。在线探测探测者会推高 internal 占比（正常流量绝大多数 session/fingerprint）。
+  const source = sessionId ? 'session' : (keyFingerprint && String(keyFingerprint).length === 8 ? 'fingerprint' : 'internal');
+  const key = sessionId ? `sid:${sessionId}` : (keyFingerprint && String(keyFingerprint).length === 8 ? `fp:${keyFingerprint}` : `rid:${requestId || randomUUID()}`);
   const bucket = Number(parseInt(createHmac('sha256', semanticBucketSecret).update(`semantic-rollout:${key}`).digest('hex').slice(0, 8), 16) % 100);
-  return { bucket, key };
+  return { bucket, key, source };
 }
 
 async function resolveAutoDecision(body, { preview = false, clientAuthHeader = null, requestId = null, bucketKey = null } = {}) {
@@ -776,12 +788,18 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
   // 100%，实验混杂无法归因。按 requestId 稳定哈希分桶（同请求重试/复放落同桶），未放量请求照旧
   // 走规则层决策 + 后台 shadow 观察（不丢对照组样本）。
   const semanticPercent = Math.max(0, Math.min(100, Number(config.semanticRouter.activeTrafficPercent ?? 100)));
-  const { bucket: semanticBucket, key: semanticBucketKey } = semanticBucketOf(bucketKey || {});
+  const { bucket: semanticBucket, key: semanticBucketKey, source: semanticBucketSource } = semanticBucketOf(bucketKey || {});
   const semanticRolloutApplied = config.semanticRouter.mode === 'active' && semanticBucket < semanticPercent;
+  // v0.7.2 八审 P2：rollout 元数据统一对象——hold/applied/rejected 三状态同源，
+  // 实验组不再缺 bucketKey（此前只有对照组可审计分桶身份来源）。
+  const semanticRollout = { bucket: semanticBucket, bucketKey: semanticBucketKey, bucketKeySource: semanticBucketSource, percent: semanticPercent };
+  // v0.7.2 八审 P2：分桶键来源统一计数（hold/applied/rejected 三态同源，探测观测不分路径）
+  counters.semantic.bucketKeySource ??= {};
+  counters.semantic.bucketKeySource[semanticBucketSource] = (counters.semantic.bucketKeySource[semanticBucketSource] || 0) + 1;
   if (config.semanticRouter.mode === 'active' && !semanticRolloutApplied && !preview) {
     counters.semantic.rolloutHold = (counters.semantic.rolloutHold || 0) + 1;
     trackSemanticTask(classifyAndCompare(body, baseAnalysis, baseDecision, { clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null, requestId }));
-    return { ...baseDecision, semanticReview: { status: 'rollout_hold', bucket: semanticBucket, bucketKey: semanticBucketKey, percent: semanticPercent } };
+    return { ...baseDecision, semanticReview: { status: 'rollout_hold', ...semanticRollout } };
   }
   try {
     const result = await classifyAndCompare(body, baseAnalysis, baseDecision, { track: !preview, clientAuthHeader, allowedModelIds: runtime.allowedModelIds || null, requestId });
@@ -793,10 +811,10 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
       const adoptionThreshold = Number(config.semanticRouter.finalAdoptionThreshold ?? config.semanticRouter.minConfidence ?? 0);
       if (result.assessment.confidence < adoptionThreshold) {
         counters.semantic.rejectedLowConfidence = (counters.semantic.rejectedLowConfidence || 0) + 1;
-        return { ...baseDecision, semanticReview: { status: 'rejected_low_confidence', bucket: semanticBucket, percent: semanticPercent, ...result.review } };
+        return { ...baseDecision, semanticReview: { status: 'rejected_low_confidence', ...semanticRollout, ...result.review } };
       }
       counters.semantic.applied += 1;
-      return { ...result.proposed, semanticReview: { status: 'applied', bucket: semanticBucket, percent: semanticPercent, ...result.review } };
+      return { ...result.proposed, semanticReview: { status: 'applied', ...semanticRollout, ...result.review } };
     }
     return { ...baseDecision, analysis: mergeSemanticAssessment(baseAnalysis, result.assessment, false), semanticReview: { status: 'shadow_complete', ...result.review } };
   } catch (error) {
@@ -1291,7 +1309,12 @@ const server = http.createServer(async (req, res) => {
     } catch (error) { return errorJson(res, 400, error.message, 'invalid_request_error'); }
   }
   if (req.method === 'PUT' && url.pathname === '/admin/api/config') {
-    try { config = await saveConfig(await readJson(req)); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); return json(res, 200, config); }
+    try {
+      const next = await readJson(req);
+      // v0.7.2 八审 P1：热切 active 前置校验——缺 secret 拒绝落盘（返回 4xx 让运营改 .env 后重启）
+      assertSemanticBucketSecretForMode(next?.semanticRouter?.mode);
+      config = await saveConfig(next); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); return json(res, 200, config);
+    }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/preview') {
@@ -1611,6 +1634,12 @@ const shutdownManager = createShutdownManager({
 installCrashHandlers(logger);
 process.on('SIGINT', () => shutdownManager.shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdownManager.shutdown('SIGTERM'));
+// 测试钩子（仅 AMR_TEST_SHUTDOWN_IPC=1 且存在 IPC 通道时激活）：Windows 上 child.kill('SIGTERM')
+// 是 TerminateProcess，不会送达上面的 handler，SIGTERM 排空行为无法在 Windows 本机验证。
+// 经 IPC 发 {type:'amr-shutdown'} 走同一条 shutdownManager.shutdown 路径，POSIX CI 仍用真信号。
+if (process.env.AMR_TEST_SHUTDOWN_IPC === '1' && typeof process.send === 'function') {
+  process.on('message', (m) => { if (m && m.type === 'amr-shutdown') shutdownManager.shutdown(m.reason || 'test-ipc'); });
+}
 
 server.listen(port, host, () => {
   server.keepAliveTimeout = serverKeepAliveMs;

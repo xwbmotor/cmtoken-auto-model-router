@@ -213,6 +213,7 @@
           <li>• ③ 加权评分：硬性过滤 + 打分排序</li>
           <li>• 三层输出统一落进决策日志</li>
           <li>• v0.7.0/0.7.1：复核事件按 requestId 持久化（semantic-reviews 流，关停排空）；语义独立灰度按会话 HMAC 分桶（默认 5%，rollout_hold 对照组）</li>
+          <li>• v0.7.2 八审运维补丁：compose 注入 SEMANTIC_BUCKET_SECRET（active 启动强校验），分桶键来源指标 session/fingerprint/internal（在线探测告警），SIGTERM 排空行为级 e2e（tests/shutdown-drain.test.mjs），classifierLatencyMs=totalLatencyMs，semanticRollout 三态统一 bucketKey</li>
         </ul>
       </div>
 

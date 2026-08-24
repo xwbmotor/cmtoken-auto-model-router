@@ -23,6 +23,11 @@ services:
       ROUTER_KEY_MODE: passthrough    # passthrough=客户端 MaaS key 透传 | strict=ROUTER_ACCESS_KEY
       ADMIN_TOKEN: ${ADMIN_TOKEN}          # 管理页登录 token（非本机绑定时必填）
       MAAS_BASE_URL: ${MAAS_BASE_URL}      # 上游 MaaS 平台地址
+      # v0.7.2 八审 P1：语义灰度分桶 HMAC secret——active 模式必填（使用方式见注释），
+      # 跨重启污染对照）。shadow 模式可缺省（进程级随机，不影响观察）。生成：
+      #   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+      # 或 openssl rand -base64 32。写入宿主机 .env 后经此变量注入容器。
+      SEMANTIC_BUCKET_SECRET: ${SEMANTIC_BUCKET_SECRET:?SEMANTIC_BUCKET_SECRET is required}
       SEMANTIC_CLASSIFIER_URL: http://classifier:8788/classify   # 分类器服务名（容器网络内），勿用 127.0.0.1
       TZ: ${TZ:-Asia/Shanghai}
       LOG_LEVEL: ${LOG_LEVEL:-info}

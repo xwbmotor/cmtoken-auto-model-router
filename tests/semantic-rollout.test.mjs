@@ -68,7 +68,7 @@ const LOW_CONF_PROMPT = '这个东西到底是什么意思呢，帮我讲讲呗�
 
 // 固定 secret 下预计算某 session 的桶值（与服务端同算法——测试拥有 secret 才可预知）
 function bucketOf(secret, key) {
-  return Number(parseInt(createHmac('sha256', Buffer.from(secret, 'utf8')).update(`semantic-rollout:${key}`).digest('hex').slice(0, 8), 16) % 100);
+  return Number(parseInt(createHmac('sha256', Buffer.from(secret, 'utf8')).update(`semantic-rollout:sid:${key}`).digest('hex').slice(0, 8), 16) % 100);
 }
 // 探测一个落在 [lo, hi) 桶区的 sessionId：确定性搜索（不是随机试）
 function findSession(secret, lo, hi) {
