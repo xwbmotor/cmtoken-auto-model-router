@@ -31,9 +31,12 @@ const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8'));
 const git = {
   commit: collect(() => execSync('git rev-parse HEAD', { cwd, encoding: 'utf8' }).trim()),
   branch: collect(() => execSync('git rev-parse --abbrev-ref HEAD', { cwd, encoding: 'utf8' }).trim()),
+  // 十一审 P2：排除 reports/release-*.json——报告是本脚本上一轮的产物，若计入 dirty
+  // 会把「跑过一次 release」变成永远过不了 clean gate 的死锁（.gitignore 只管未来，
+  // 门禁还需自身排除，防 gitignore 误删时自锁）。
   dirty: collect(() => {
     const s = execSync('git status --porcelain', { cwd, encoding: 'utf8' }).trim();
-    return s.length > 0 ? s.split('\n') : [];
+    return s.length > 0 ? s.split('\n').map((l) => l.trim()).filter((l) => !/^reports\/release-.*\.json$/.test(l.replace(/^(\?\?| M|M | A|A | D|D |MM|AM)\s+/, ''))) : [];
   }, []),
   // 注意：不能用 `2>/dev/null` shell 重定向——Windows cmd.exe 下 /dev/null 非法路径，
   // 命令整体报错被 collect 吞掉 → tag 恒 null（v0.7.4 十审实测踩坑）。execSync 失败
@@ -89,6 +92,12 @@ child.on('exit', (code, signal) => {
       cpus: collect(() => cpus().length),
     },
     git,
+    // 十一审建议：记录本地镜像 image ID——tag 是可变的，image ID（sha256 摘要）才与 build 产物
+    // 密码学绑定。云端部署后 docker inspect 对照，验证「运行镜像确实对应本报告」。
+    images: {
+      routerImageId: collect(() => execSync(`docker images --no-trunc --format "{{.ID}}" cmt-auto-model-router:${pkg.version}`, { encoding: 'utf8' }).trim() || null),
+      routerLabelsRevision: collect(() => execSync(`docker inspect --format "{{ index .Config.Labels \\"org.opencontainers.image.revision\\" }}" cmt-auto-model-router:${pkg.version}`, { encoding: 'utf8' }).trim() || null),
+    },
     config: { path: 'config/router.json', sha256: configSha256 },
     strict: 'AMR_TEST_STRICT_SKIP=1（任何 skip 视为失败）',
     logTail: out.split(/\r?\n/).slice(-40).join('\n'),

@@ -109,7 +109,10 @@ test('cascade：大模型挂 + 小模型有产出 → 降级返回小模型（sm
   const lowConf = { task: 'default', tier: 'balanced', complexity: 0.5, confidence: 0.45, reason: '拿不准' };
   const fakeFetch = async (url) => {
     if (String(url).includes('/classify')) return { ok: true, status: 200, json: async () => lowConf };
-    await new Promise((r) => setTimeout(r, 300)); // v0.7.1 七审 P1-3：模拟 L3 白等 300ms 才挂
+    // v0.7.1 七审 P1-3：模拟 L3 白等才挂。十一审 P2：延迟 300→350ms——Windows 计时取整+并发
+    // 负载下 setTimeout(300) 实测可记为 299ms，恰好击穿「≥300」断言（专项 10 轮全过但全量套件
+    // 偶发 168/169）。350ms 模拟延迟 + ≥300ms 断言留 50ms 容差，仍完整验证「L3 等待被计入」。
+    await new Promise((r) => setTimeout(r, 350));
     throw new Error('上游 503');
   };
   const result = await classifySemantically({ messages: [{ role: 'user', content: '这个怎么样' }] }, cascadeConfig(), { fetchImpl: fakeFetch, apiKey: 'k' });

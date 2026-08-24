@@ -18,3 +18,6 @@ config/history/
 
 # 内部一次性任务稿（面向开源分发不适用，本地留档不入库）
 docs/给openclaw的部署交代.md
+
+# 发布报告作 Release Artifact 归档，不提交回被证明的 tag（十一审 P2：防止污染下一轮 clean gate）
+reports/release-*.json
