@@ -1,0 +1,49 @@
+{
+  "stamp": "2026-08-24T15:34:15.024Z",
+  "version": "0.7.3",
+  "command": "node --test",
+  "exitCode": 0,
+  "signal": null,
+  "durationMs": 23819,
+  "summary": {
+    "tests": 167,
+    "pass": 167,
+    "fail": 0,
+    "skipped": 0,
+    "cancelled": 0
+  },
+  "env": {
+    "node": "v24.13.0",
+    "platform": "win32",
+    "arch": "x64",
+    "hostname": "sgs-xiaowenbin",
+    "cpus": null
+  },
+  "git": {
+    "commit": "9e2fe4351004333bbf81edb162d25fdc38fda1d7",
+    "branch": "master",
+    "dirty": [
+      "M README.md",
+      " M config/router.json",
+      " M docker-compose.prod.yml",
+      " M \"docs/MaaS\\345\\271\\263\\345\\217\\260\\351\\233\\206\\346\\210\\220\\351\\203\\250\\347\\275\\262\\350\\277\\220\\350\\220\\245\\346\\211\\213\\345\\206\\214.md\"",
+      " M docs/router-architecture.html",
+      " M \"docs/\\344\\275\\277\\347\\224\\250\\350\\257\\264\\346\\230\\216.md\"",
+      " M \"docs/\\346\\231\\272\\350\\203\\275\\344\\275\\223\\344\\272\\244\\346\\216\\245\\350\\257\\264\\346\\230\\216.md\"",
+      " M package.json",
+      " M public/index.html",
+      " M scripts/run-release-tests.mjs",
+      " M src/metrics.mjs",
+      " M src/server.mjs",
+      " M tests/semantic-rollout.test.mjs",
+      " M tests/shutdown-drain.test.mjs"
+    ],
+    "tag": null
+  },
+  "config": {
+    "path": "config/router.json",
+    "sha256": "f7c90e94d9a95562b5c146ffcb1cd0d3bcbed881b0f5f2549d90dc5221c3ded9"
+  },
+  "strict": "AMR_TEST_STRICT_SKIP=1（任何 skip 视为失败）",
+  "logTail": "✔ 置信度证据模型：四审反例落入复核线（confidence < 0.7） (5.9316ms)\n✔ 置信度证据模型：正常强命中保持高置信（不浪费复核预算） (1.696ms)\n✔ 置信度证据模型：trivial 直接事实保持 0.98 (0.7133ms)\n✔ 三阈值：smallAcceptThreshold 独立控制升级线 (5.0035ms)\n✔ 三阈值：resolveSmallAcceptThreshold 兼容回退 minConfidence (0.3155ms)\n✔ cascade 升级时 prompt 携带小模型判断 (1.1087ms)\n✔ cascade：大模型挂 + 小模型有产出 → 降级返回小模型（small-degraded） (304.7429ms)\n✔ cascade：两级都挂才抛（小模型挂 + 大模型挂） (1.9289ms)\n✔ e2e strict：L3 分类调用打到 MaaS 的是服务端 Key，不是客户端 Router Key (1685.682ms)\n✔ e2e passthrough：L3 分类透传客户端 MaaS Key（四审行为不回归） (1496.3238ms)\n✔ e2e 灰度不变量：固定 secret 下会话稳定分组 + 阈值边界 + 伪造 requestId 无效 (2711.3114ms)\n✔ real server: 健康检查 + 大请求体上限 + /metrics 鉴权 + /health/ready (1269.2924ms)\n✔ real server: rate limit 超限返回 429 (1130.4241ms)\n✔ SIGTERM 排空：主请求返回后的在途 shadow 复核不丢，进程干净退出 (2330.6853ms)\n✔ SIGTERM 8s 上限：卡死后台任务按上限放弃，退出耗时落在 [7.5s, 10s] (9035.0778ms)\n✔ active 无 SEMANTIC_BUCKET_SECRET：启动即拒绝 (319.0344ms)\n✔ active secret 过短（<32 字节）：启动即拒绝（九审 P2 强度下限） (333.0819ms)\n✔ e2e 记账生命周期：流式成功落 completed、非流式成功落 success、断流落 aborted（各恰一次） (1756.5875ms)\n✔ 打分层大类保持兼容（5 族 + agent，quality 回退链不受影响） (8.3579ms)\n✔ CODE 小类（9）：调试/审查/SQL/前端/DevOps/Shell/文件/仓库 (1.8258ms)\n✔ AGENTS 小类：tools 请求默认 workflow-execution，搜索类工具→web-search (0.5702ms)\n✔ DATA 小类（6）：抽取/转换/分类/摘要/翻译 (0.6966ms)\n✔ WRITING & CHAT 小类：内容写作/角色扮演/客服/金融/安全 (0.7522ms)\n✔ 小类不影响难度与置信度（打分层零扰动） (0.5257ms)\n✔ 思考型模型：max_tokens 低于安全下限时被拒并回退到普通模型 (6.8215ms)\n✔ 思考型模型：max_tokens 达到下限（或未指定）时不被预算拒绝 (1.718ms)\n✔ max_completion_tokens（OpenAI 新参数名）同样受下限保护 (0.5074ms)\n✔ 点路径参数注入：chat_template_kwargs.enable_thinking 按档位切换且保留兄弟键 (9.8379ms)\n✔ 路由分层与思考控制正交：低复杂度默认档 reasoningLevel=off → 上游会注入 enable_thinking=false (0.6305ms)\n✔ e2e 超时 fallback：attempt 1 超时不得污染 attempt 2（独立 controller） (2128.9314ms)\n✔ e2e 非流式客户端断开：写回前断开记失败不记成功（交付完成语义） (1885.762ms)\nℹ tests 167\nℹ suites 0\nℹ pass 167\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 23609.9829\n"
+}

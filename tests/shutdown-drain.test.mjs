@@ -1,15 +1,19 @@
-// v0.7.2 八审 P2：优雅关停排空的**行为级** e2e（对真实子进程发 SIGTERM）。
-// 八审：关停顺序代码正确但缺行为级测试——「代码看起来对、容器滚动重启时才暴露」。
-// 本文件两个用例：
+// v0.7.2 八审 P2 / v0.7.3 九审 P1 修订：优雅关停排空的**行为级** e2e。
+// 用例：
 //   ① SIGTERM 排空：mock L2 慢分类(1.2s) 的 shadow 请求先返回，立即 SIGTERM，
 //      子进程正常退出后 semantic-reviews-*.jsonl 事件仍在（在途复核没丢）。
-//   ② 8s 超时放弃：mock L2 慢 15s（>排空上限 8s），SIGTERM 后进程按上限放弃退出，
-//      退出码正常（不挂死）——放弃是设计内，事件可丢。
-// 附带：③ active 无 SEMANTIC_BUCKET_SECRET 拒启动（八审 P1 校验的行为级验证）。
+//   ② 8s 上限（九审 P1 重写）：经 AMR_TEST_STUCK_SEMANTIC_TASK 注入一个 >8s 且不受
+//      分类器超时影响的「卡死」后台任务，断言退出耗时落在 [7.5s, 10s]——证明
+//      Promise.race 的 8s 上限真实生效（旧版 mock 慢 15s 会被分类器 3.5s 超时
+//      提前终止，elapsed<30000 无法区分「上限生效」与「超时早退」）。
+//   ③ active 无 SEMANTIC_BUCKET_SECRET 拒启动（八审 P1 校验的行为级验证）。
+//   ④ active secret <32 字节拒启动（九审 P2 强度下限的行为级验证）。
+// mock MaaS 就绪协议（九审 P1-2 修订）：mock 监听 0（随机端口）→ 打印 "READY <port>"
+// 到 stdout → 测试读到才启动 router。根除「spawn 返回但端口未监听」竞态导致的随机 502。
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, fork } from 'node:child_process';
-import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync, cpSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,8 +37,8 @@ function buildTestConfig(overrides) {
   return cfg;
 }
 
-// 与 tests/semantic-key-selection.test.mjs 同款 mock MaaS：按 body 特征识别分类调用
-function mockMaaSDelay(delayMs, port = PORT + 100) {
+// mock MaaS：随机端口 + READY 握手（九审 P1-2）。按 body 特征识别分类调用。
+function mockMaasSource(delayMs) {
   return `import http from 'node:http';
 const delay = ${delayMs};
 const server = http.createServer((req, res) => {
@@ -63,7 +67,25 @@ const server = http.createServer((req, res) => {
     }));
   });
 });
-server.listen(${port}, '127.0.0.1');`;
+server.listen(0, '127.0.0.1', () => console.log('READY ' + server.address().port));`;
+}
+
+// 启动 mock 并等待 READY <port>（超时 10s 报错——mock 起不来测试不应对 502 迷惑）
+async function startMockMaas(delayMs) {
+  const mockFile = join(tmpDir, `mock-maas-${delayMs}-${Math.random().toString(36).slice(2, 8)}.mjs`);
+  writeFileSync(mockFile, mockMaasSource(delayMs), 'utf8');
+  const child = spawn(process.execPath, [mockFile], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const port = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('mock MaaS 10s 内未 READY')), 10000);
+    let buf = '';
+    child.stdout.on('data', (c) => {
+      buf += c;
+      const m = buf.match(/READY (\d+)/);
+      if (m) { clearTimeout(timer); resolve(Number(m[1])); }
+    });
+    child.on('exit', (code) => { clearTimeout(timer); reject(new Error(`mock MaaS 提前退出 code=${code}`)); });
+  });
+  return { child, port };
 }
 
 // Windows 上 kill('SIGTERM')=TerminateProcess 不走 handler，改经 IPC 钩子触发同一条
@@ -77,7 +99,7 @@ async function startRouter(env, port, expectFail) {
   const child = fork(join(root, 'src/server.mjs'), [], {
     // ROUTER_KEY_MODE=passthrough（客户端 key 即 mock 上游 key）+ UPSTREAM_BASE_URL 指向 mock
     // （env 优先级最高，压过 config.upstreamBaseUrl 继承自真实 router.json 的生产地址）
-    env: { ...process.env, ROUTER_KEY_MODE: 'passthrough', UPSTREAM_BASE_URL: `http://127.0.0.1:${port + 100}`, AMR_TEST_SHUTDOWN_IPC: '1', ...env, PORT: String(port), CONFIG_PATH: env.CONFIG_PATH },
+    env: { ...process.env, ROUTER_KEY_MODE: 'passthrough', AMR_TEST_SHUTDOWN_IPC: '1', ...env, PORT: String(port), CONFIG_PATH: env.CONFIG_PATH },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc']
   });
   if (!expectFail) {
@@ -105,20 +127,18 @@ after(async () => {
 });
 
 test('SIGTERM 排空：主请求返回后的在途 shadow 复核不丢，进程干净退出', async () => {
-  // 1. mock MaaS：分类调用延迟 1200ms
-  const mockFile = join(tmpDir, 'mock-maas.mjs');
-  writeFileSync(mockFile, mockMaaSDelay(1200), 'utf8');
-  const mock = spawn(process.execPath, [mockFile], { stdio: 'ignore' });
+  // 1. mock MaaS：分类调用延迟 1200ms（就绪握手后才开始）
+  const { child: mock, port: mockPort } = await startMockMaas(1200);
   try {
     // 2. router 子进程：shadow 模式 + 指向 mock
     const dataDir = join(tmpDir, 'd1');
     const configFile = join(tmpDir, 'c1.json');
     writeFileSync(configFile, JSON.stringify(buildTestConfig({
-      port: PORT, upstream: `http://127.0.0.1:${PORT + 100}`, dataDir,
+      port: PORT, upstream: `http://127.0.0.1:${mockPort}`, dataDir,
       semanticRouter: { enabled: true, mode: 'shadow', provider: 'cascade' }
     })));
 
-    const child = await startRouter({ CONFIG_PATH: configFile }, PORT);
+    const child = await startRouter({ CONFIG_PATH: configFile, UPSTREAM_BASE_URL: `http://127.0.0.1:${mockPort}` }, PORT);
     try {
       // 3. 触发 shadow 复核的低置信长文本（L1<0.7 且 ≥12 字）
       const r = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
@@ -143,22 +163,24 @@ test('SIGTERM 排空：主请求返回后的在途 shadow 复核不丢，进程�
     }
   } finally {
     mock.kill();
+    if (mock.exitCode === null) await once(mock, 'exit').catch(() => {});
   }
 }, { timeout: 60000 });
 
-test('SIGTERM 8s 上限：超时后台任务按设计放弃，进程不挂死', async () => {
-  const mockFile = join(tmpDir, 'mock-maas-slow.mjs');
-  writeFileSync(mockFile, mockMaaSDelay(15000, PORT + 102), 'utf8');
-  const mock = spawn(process.execPath, [mockFile], { stdio: 'ignore' });
+test('SIGTERM 8s 上限：卡死后台任务按上限放弃，退出耗时落在 [7.5s, 10s]', async () => {
+  // mock 只服务主请求（分类调用不会发出——卡死任务由测试钩子注入，不依赖 mock 时序）
+  const { child: mock, port: mockPort } = await startMockMaas(50);
   try {
     const dataDir = join(tmpDir, 'd2');
     const configFile = join(tmpDir, 'c2.json');
     writeFileSync(configFile, JSON.stringify(buildTestConfig({
-      port: PORT + 2, upstream: `http://127.0.0.1:${PORT + 102}`, dataDir,
+      port: PORT + 2, upstream: `http://127.0.0.1:${mockPort}`, dataDir,
       semanticRouter: { enabled: true, mode: 'shadow', provider: 'cascade' }
     })));
 
-    const child = await startRouter({ CONFIG_PATH: configFile }, PORT + 2);
+    // AMR_TEST_STUCK_SEMANTIC_TASK=1：server 启动即注册一个永不 resolve 的语义后台任务
+    // （与 shadow 复核同一 trackSemanticTask 注册表）——Promise.race 的 8s 上限是唯一出路。
+    const child = await startRouter({ CONFIG_PATH: configFile, UPSTREAM_BASE_URL: `http://127.0.0.1:${mockPort}`, AMR_TEST_STUCK_SEMANTIC_TASK: '1' }, PORT + 2);
     try {
       const r = await fetch(`http://127.0.0.1:${PORT + 2}/v1/chat/completions`, {
         method: 'POST',
@@ -171,12 +193,16 @@ test('SIGTERM 8s 上限：超时后台任务按设计放弃，进程不挂死', 
       const [code] = await once(child, 'exit');
       const elapsed = Date.now() - t0;
       assert.equal(code, 0, `应正常退出（exit=${code}）`);
-      assert.ok(elapsed < 30000, `8s 上限放弃后应尽快退出，实际 ${elapsed}ms`);
+      // 九审 P1-3：断言 8s 上限真实生效——[7.5s, 10s] 窗口内退出。
+      // 下界：上限存在且没被提前放弃（卡死任务永不 resolve，唯一出路=8s race 超时）；
+      // 上界：排空后续写链 flush 是毫秒级，10s 内必须离场（防退化成无上限挂死）。
+      assert.ok(elapsed >= 7500 && elapsed <= 10000, `8s 排空上限应生效：退出耗时 ${elapsed}ms 应落在 [7500, 10000]ms`);
     } finally {
       if (child.exitCode === null) child.kill('SIGKILL');
     }
   } finally {
     mock.kill();
+    if (mock.exitCode === null) await once(mock, 'exit').catch(() => {});
   }
 }, { timeout: 90000 });
 
@@ -196,4 +222,22 @@ test('active 无 SEMANTIC_BUCKET_SECRET：启动即拒绝', async () => {
   const [code] = await once(child, 'exit');
   assert.notEqual(code, 0, 'active 无 secret 应非零退出');
   assert.ok(/SEMANTIC_BUCKET_SECRET/.test(err), `错误信息应点名 SEMANTIC_BUCKET_SECRET，实际：${err.slice(0, 200)}`);
+}, { timeout: 30000 });
+
+test('active secret 过短（<32 字节）：启动即拒绝（九审 P2 强度下限）', async () => {
+  const configFile = join(tmpDir, 'c4.json');
+  const dataDir = join(tmpDir, 'd4');
+  writeFileSync(configFile, JSON.stringify(buildTestConfig({
+    port: PORT + 5, upstream: 'http://127.0.0.1:1', dataDir,
+    semanticRouter: { enabled: true, mode: 'active', provider: 'cascade', activeTrafficPercent: 5 }
+  })));
+  const child = spawn(process.execPath, [join(root, 'src/server.mjs')], {
+    env: { ...process.env, SEMANTIC_BUCKET_SECRET: 'short-secret', CONFIG_PATH: configFile, PORT: String(PORT + 5) },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let err = '';
+  child.stderr.on('data', c => err += c);
+  const [code] = await once(child, 'exit');
+  assert.notEqual(code, 0, 'active + 短 secret 应非零退出');
+  assert.ok(/强度不足/.test(err), `错误信息应说明强度不足，实际：${err.slice(0, 200)}`);
 }, { timeout: 30000 });

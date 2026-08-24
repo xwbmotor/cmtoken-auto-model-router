@@ -214,7 +214,8 @@
           <li>• 三层输出统一落进决策日志</li>
           <li>• v0.7.0/0.7.1：复核事件按 requestId 持久化（semantic-reviews 流，关停排空）；语义独立灰度按会话 HMAC 分桶（默认 5%，rollout_hold 对照组）</li>
           <li>• v0.7.2 八审运维补丁：compose 注入 SEMANTIC_BUCKET_SECRET（active 启动强校验），分桶键来源指标 session/fingerprint/internal（在线探测告警），SIGTERM 排空行为级 e2e（tests/shutdown-drain.test.mjs），classifierLatencyMs=totalLatencyMs，semanticRollout 三态统一 bucketKey</li>
-        </ul>
+
+          <li>• v0.7.3 九审收口：reload 补 secret 校验（三口一致）、bucketKey 落盘 HMAC 短指纹（原始 session 不进日志）、secret ≥32 字节强度下限、test:release 自动报告（commit/config SHA 可追溯）、8s 排空上限行为级断言</li>        </ul>
       </div>
 
       <div class="card">

@@ -748,18 +748,31 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 // v0.7.2 八审 P1：active 模式必须显式配置 secret（随机 secret 每次重启重洗实验组，跨重启
 // 污染对照）。shadow 允许缺省。校验在启动与热切换两处执行（semanticRouter.mode=active）。
 const semanticBucketSecret = process.env.SEMANTIC_BUCKET_SECRET ? Buffer.from(process.env.SEMANTIC_BUCKET_SECRET, 'utf8') : randomBytes(32);
+// v0.7.3 九审 P2：强度下限——active 要求 ≥32 字节（256 bit）熵源。「x」这类占位值能过非空校验
+// 但防不住预计算。urlsafe-base64(32B)=43 字符、hex(32B)=64 字符、base64(32B)=44 字符，32 字节
+// 下限覆盖三种主流生成方式；过短即拒绝启动（fail fast 优于带弱 secret 上线）。
 function assertSemanticBucketSecretForMode(mode) {
-  if (mode === 'active' && !process.env.SEMANTIC_BUCKET_SECRET) {
+  if (mode !== 'active') return;
+  const secret = process.env.SEMANTIC_BUCKET_SECRET;
+  if (!secret) {
     throw new Error('semanticRouter.mode=active 需要 SEMANTIC_BUCKET_SECRET 环境变量（跨重启稳定分桶）：请在宿主机 .env 生成并经 compose 注入，生成命令 python3 -c "import secrets; print(secrets.token_urlsafe(32))"');
+  }
+  if (Buffer.byteLength(secret, 'utf8') < 32) {
+    throw new Error(`SEMANTIC_BUCKET_SECRET 强度不足（当前 ${Buffer.byteLength(secret, 'utf8')} 字节 < 32 字节下限）：请重新生成，python3 -c "import secrets; print(secrets.token_urlsafe(32))"`);
   }
 }
 function semanticBucketOf({ sessionId = null, keyFingerprint = null, requestId = null } = {}) {
   // v0.7.2 八审 P2：来源标注——audit 字段带 source（session/fingerprint/internal），
-  // 指标计数器按来源分布。在线探测探测者会推高 internal 占比（正常流量绝大多数 session/fingerprint）。
+  // 指标计数器按来源分布。匿名占比高=大量请求无 session 无 key 指纹（v0.7.3 九审勘误：
+  // 本指标不区分「探测」与「自然匿名流量」——探测检测需另建 per-key session 基数统计）。
   const source = sessionId ? 'session' : (keyFingerprint && String(keyFingerprint).length === 8 ? 'fingerprint' : 'internal');
   const key = sessionId ? `sid:${sessionId}` : (keyFingerprint && String(keyFingerprint).length === 8 ? `fp:${keyFingerprint}` : `rid:${requestId || randomUUID()}`);
   const bucket = Number(parseInt(createHmac('sha256', semanticBucketSecret).update(`semantic-rollout:${key}`).digest('hex').slice(0, 8), 16) % 100);
-  return { bucket, key, source };
+  // v0.7.3 九审 P2：bucketKey 落盘前转 HMAC 短指纹——sid:/fp: 前缀后的原值（session ID 可能
+  // 含账号/手机号）不进日志。指纹与分桶同 secret：审计可对账「同一会话稳定同组」，但无法反查原值。
+  const hmac = createHmac('sha256', semanticBucketSecret).update(`bucket-key-fp:${key}`).digest('hex').slice(0, 12);
+  const loggedKey = `${key.split(':')[0]}:${hmac}`;
+  return { bucket, key, source, loggedKey };
 }
 
 async function resolveAutoDecision(body, { preview = false, clientAuthHeader = null, requestId = null, bucketKey = null } = {}) {
@@ -788,10 +801,11 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
   // 100%，实验混杂无法归因。按 requestId 稳定哈希分桶（同请求重试/复放落同桶），未放量请求照旧
   // 走规则层决策 + 后台 shadow 观察（不丢对照组样本）。
   const semanticPercent = Math.max(0, Math.min(100, Number(config.semanticRouter.activeTrafficPercent ?? 100)));
-  const { bucket: semanticBucket, key: semanticBucketKey, source: semanticBucketSource } = semanticBucketOf(bucketKey || {});
+  const { bucket: semanticBucket, loggedKey: semanticBucketKey, source: semanticBucketSource } = semanticBucketOf(bucketKey || {});
   const semanticRolloutApplied = config.semanticRouter.mode === 'active' && semanticBucket < semanticPercent;
   // v0.7.2 八审 P2：rollout 元数据统一对象——hold/applied/rejected 三状态同源，
   // 实验组不再缺 bucketKey（此前只有对照组可审计分桶身份来源）。
+  // v0.7.3 九审 P2：bucketKey=HMAC 短指纹（loggedKey），sid:/fp: 后原值不落盘。
   const semanticRollout = { bucket: semanticBucket, bucketKey: semanticBucketKey, bucketKeySource: semanticBucketSource, percent: semanticPercent };
   // v0.7.2 八审 P2：分桶键来源统一计数（hold/applied/rejected 三态同源，探测观测不分路径）
   counters.semantic.bucketKeySource ??= {};
@@ -1588,7 +1602,13 @@ function subCategoryOf(task, subTask) {
     } catch (error) { return errorJson(res, 400, error.message, 'invalid_body'); }
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/reload') {
-    try { config = await loadConfig(); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); return json(res, 200, { ok: true, version: config.version }); }
+    // v0.7.3 九审 P1：reload 与启动/热切同一校验——先 load 到临时变量，active 无 secret
+    // 拒绝（磁盘配置被外部改成 active 后 reload 不再是绕过口），校验通过才替换全局 config。
+    try {
+      const next = await loadConfig();
+      assertSemanticBucketSecretForMode(next.semanticRouter?.mode);
+      config = next; budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); return json(res, 200, { ok: true, version: config.version });
+    }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
   }
   if (url.pathname === '/manual') {
@@ -1639,6 +1659,12 @@ process.on('SIGTERM', () => shutdownManager.shutdown('SIGTERM'));
 // 经 IPC 发 {type:'amr-shutdown'} 走同一条 shutdownManager.shutdown 路径，POSIX CI 仍用真信号。
 if (process.env.AMR_TEST_SHUTDOWN_IPC === '1' && typeof process.send === 'function') {
   process.on('message', (m) => { if (m && m.type === 'amr-shutdown') shutdownManager.shutdown(m.reason || 'test-ipc'); });
+}
+// 测试钩子（AMR_TEST_STUCK_SEMANTIC_TASK=1）：注册一个永不 resolve 的语义后台任务，
+// 供关停排空的 8s 上限行为级测试使用（九审 P1-3：mock 慢分类会被分类器自身超时
+// 提前终止，无法证明 Promise.race 的 8s 上限真实生效）。
+if (process.env.AMR_TEST_STUCK_SEMANTIC_TASK === '1') {
+  trackSemanticTask(new Promise(() => {}));
 }
 
 server.listen(port, host, () => {

@@ -92,7 +92,7 @@ async function fire(port, { sessionId = null, requestId = null } = {}) {
 }
 
 test('e2e 灰度不变量：固定 secret 下会话稳定分组 + 阈值边界 + 伪造 requestId 无效', async () => {
-  const SECRET = 'test-bucket-secret-v071';
+  const SECRET = 'test-bucket-secret-v073-0123456789abcdef0123';  // ≥32 字节（v0.7.3 九审强度下限——短 secret 在 active 模式拒启动）
   const { upstream } = mockUpstream();
   await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
   const workDir = await mkdtemp(join(tmpdir(), 'amr-rollout2-'));
@@ -145,5 +145,17 @@ test('e2e 灰度不变量：固定 secret 下会话稳定分组 + 阈值边界 +
     const evts = (await readFile(join(workDir, srFile), 'utf8')).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
     assert.ok(evts.length >= 4, `hold+applied 都应有后台观察事件，实际 ${evts.length}`);
     for (const e of evts) assert.ok(e.requestId && e.cascade !== undefined, `事件须带 requestId 与 cascade 字段：${JSON.stringify(e).slice(0, 120)}`);
+
+    // I5（九审 P2 脱敏不变量）：semanticRollout.bucketKey 必须是 HMAC 短指纹——
+    // sid: 前缀后只能跟 12 hex，原始 session ID 不得经该字段冗余落盘。
+    // （request.sessionId 是决策日志既有审计字段，不在本断言范围——九审针对的是 bucketKey。）
+    const allRows = rows.concat(rows2);
+    for (const r of allRows) {
+      const bk = r.decision?.semanticReview?.bucketKey;
+      if (bk) assert.match(bk, /^(sid|fp|rid):[0-9a-f]{12}$/, `bucketKey 应为 HMAC 短指纹（${bk}），原始标识不得落盘`);
+    }
+    // 复核事件流（semantic-reviews）不含 request 段——原始 session ID 不得出现在事件流
+    const srRaw = await readFile(join(workDir, srFile), 'utf8');
+    assert.ok(!srRaw.includes(inGroup.sid) && !srRaw.includes(outGroup.sid), '原始 session ID 不得出现在复核事件流');
   } finally { child.kill(); upstream.close(); }
 });

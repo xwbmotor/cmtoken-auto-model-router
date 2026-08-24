@@ -8,7 +8,7 @@
 # - strict：取消注释 ROUTER_ACCESS_KEY + MAAS_API_KEY，客户端持 ROUTER_ACCESS_KEY。
 services:
   auto-model-router:
-    image: cmt-auto-model-router:0.7.2
+    image: cmt-auto-model-router:0.7.3
     container_name: auto-model-router
     restart: unless-stopped
     hostname: auto-model-router
@@ -23,10 +23,12 @@ services:
       ROUTER_KEY_MODE: passthrough    # passthrough=客户端 MaaS key 透传 | strict=ROUTER_ACCESS_KEY
       ADMIN_TOKEN: ${ADMIN_TOKEN}          # 管理页登录 token（非本机绑定时必填）
       MAAS_BASE_URL: ${MAAS_BASE_URL}      # 上游 MaaS 平台地址
-      # v0.7.2 八审 P1：语义灰度分桶 HMAC secret——active 模式必填（使用方式见注释），
-      # 跨重启污染对照）。shadow 模式可缺省（进程级随机，不影响观察）。生成：
+      # v0.7.2 八审 P1：语义灰度分桶 HMAC secret——本生产 compose 恒必填（shadow 也配：
+      # 统一口径防「shadow 期忘了配、切 active 时才发现」的运维断层；shadow 下缺省仅限本地开发）。
+      # secret 跨重启稳定=实验组不因容器滚动重排污染对照。生成：
       #   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-      # 或 openssl rand -base64 32。写入宿主机 .env 后经此变量注入容器。
+      # 或 openssl rand -base64 32（≥32 字节；v0.7.3 起短 secret 在 active 模式拒启动）。
+      # 写入宿主机 .env 后经此变量注入容器。
       SEMANTIC_BUCKET_SECRET: ${SEMANTIC_BUCKET_SECRET:?SEMANTIC_BUCKET_SECRET is required}
       SEMANTIC_CLASSIFIER_URL: http://classifier:8788/classify   # 分类器服务名（容器网络内），勿用 127.0.0.1
       TZ: ${TZ:-Asia/Shanghai}
@@ -51,7 +53,7 @@ services:
       retries: 3
 
   classifier:
-    image: cmt-amr-classifier:0.7.2
+    image: cmt-amr-classifier:0.7.3
     container_name: amr-classifier
     restart: unless-stopped
     hostname: classifier

@@ -64,13 +64,15 @@ export function renderPrometheusMetrics(snapshot) {
   const semanticRows = ['eligible', 'attempted', 'succeeded', 'disagreed', 'errors', 'applied', 'escalated', 'rejectedLowConfidence', 'rolloutHold']
     .map((stage) => `router_semantic_total{stage="${stage}"} ${semantic[stage] || 0}`);
   metric(lines, 'router_semantic_total', 'counter', '语义复核各阶段计数（escalated=L2升级L3，rejectedLowConfidence=低于采纳线被拒，rolloutHold=独立灰度未放量走规则层）', semanticRows);
-  // v0.7.2 八审 P2：分桶键来源分布——正常流量绝大多数 session/fingerprint；internal 占比
-  // 异常升高=有人频繁换 session 在线探测实验组（HMAC 防离线预计算，此指标防在线探测盲区）
+  // v0.7.2 八审 P2 / v0.7.3 九审勘误：分桶键来源分布。语义=「匿名请求占比」——internal
+  // 表示既无 x-session-id 也无有效 key 指纹（走内部随机 ID）。本指标**不能**证明「探测
+  // 实验组」：探测者可每发换一个 x-session-id（source 仍=session）。探测检测需另建
+  // per-key session 基数/换 session 频率统计（v0.8 候选）。现用途：监控匿名流量占比异常。
   const bks = (counters.semantic && counters.semantic.bucketKeySource) || {};
   const bksRows = Object.keys(bks).length
     ? Object.entries(bks).map(([src, n]) => `router_semantic_bucket_key_source_total{source="${esc(src)}"} ${n}`)
     : ['router_semantic_bucket_key_source_total{source="session"} 0', 'router_semantic_bucket_key_source_total{source="fingerprint"} 0', 'router_semantic_bucket_key_source_total{source="internal"} 0'];
-  metric(lines, 'router_semantic_bucket_key_source_total', 'counter', '语义灰度分桶键来源分布（session/fingerprint/internal，internal 异常升高=在线探测）', bksRows);
+  metric(lines, 'router_semantic_bucket_key_source_total', 'counter', '语义灰度分桶键来源分布（internal=无 session 无 key 指纹的匿名请求占比；探测检测不由此指标承担）', bksRows);
 
   // v0.6.1 五审 P2：cascade 分层量（small=小模型直采 / large=升级大模型 / small-degraded=降级）
   const cascadeRows = Object.entries(semantic.byCascadeLevel || {}).map(([level, n]) => `router_semantic_cascade_total{level="${esc(level)}"} ${n}`);
