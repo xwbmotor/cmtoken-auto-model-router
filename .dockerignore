@@ -6,6 +6,8 @@ state
 benchmark-results
 tests
 scripts
+!scripts/serve_classifier.py
+!scripts/classifier_common.py
 config/history
 .env
 .env.*
