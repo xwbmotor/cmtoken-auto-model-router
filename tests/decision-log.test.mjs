@@ -20,8 +20,7 @@ test('entry() 白名单保留 explicitTask，写盘后读回可重建点名信�
   };
   const entry = log.entry({ requestId: 'req-1', keyFingerprint: 'fp1' }, decision, { ok: true, model: 'qwen36-35b', latencyMs: 100 });
   assert.equal(entry.decision.explicitTask, 'coding', 'entry() 应保留 explicitTask');
-  log.write({ requestId: 'req-1', keyFingerprint: 'fp1' }, decision, { ok: true, model: 'qwen36-35b', latencyMs: 100 });
-  await new Promise((r) => setTimeout(r, 50)); // 写盘异步
+  await log.write({ requestId: 'req-1', keyFingerprint: 'fp1' }, decision, { ok: true, model: 'qwen36-35b', latencyMs: 100 }); // v0.5.2：await writeChain，消并行竞态
   const files = await readdir(dir);
   const f = files.find((x) => x.endsWith('.jsonl'));
   assert.ok(f, '应有 jsonl 落盘');
