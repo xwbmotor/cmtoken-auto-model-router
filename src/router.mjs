@@ -92,6 +92,13 @@ function resolveTaskPatterns(taskRules) {
 const TRIVIAL_FACT_PATTERN = /^(请问)?(今天|现在|当前)?(是)?(星期几|周几|几号|日期是什么|几点了)[？?。\s]*$/i;
 const MULTI_OBJECTIVE_PATTERN = /成本|费用|质量|效果|时延|延迟|效率|性能|可用性|稳定性|框架|开源|兼容|协议|部署|安全|并发|扩展性/gi;
 
+// —— v0.6.0 规则层置信度证据模型（四审：关键词命中恒 0.86 不科学）——
+// 置信度反映证据强度而非命中即高。三个下调因素让边缘案例（否定句/元讨论/多任务冲突）
+// 落到 confidenceThreshold(默认0.7) 以下进入语义复核，正常强命中保持 0.86 不复核。
+const NEGATION_PATTERN = /不要|不用|无需|禁止|避免|并非|而不是|暂不|先不|别写|别用|别管|别生成|别给/i;
+const META_QUESTION_PATTERN = /什么是|通俗.{0,6}(语言|方式|词语|地)?(解释|讲解|介绍|说明)|科普/i;
+const META_SUMMARIZE_PATTERN = /(总结|概括|翻译|改写|解释|讲解|评审意见)(一下|下)?[^。？！]{0,10}(这段|上述|下面|以上|该段|这份)/i;
+
 function flattenContent(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -162,7 +169,27 @@ export function analyzeRequest(body, config) {
     const toolNames = (body.tools || []).map((t) => String(t?.function?.name || t?.name || '')).join(' ').toLowerCase();
     subTask = /search|web|检索|surf/.test(toolNames) ? 'web-search' : /devops|deploy|ops/.test(toolNames) ? 'devops' : 'workflow-execution';
   }
-  return { task: finalTask, subTask, tier, complexity, confidence: trivial ? 0.98 : task === 'default' ? 0.55 : 0.86, textLength: text.length, estimatedInputTokens: estimateInputTokens(text), requirements, signals };
+  // —— v0.6.0 置信度证据模型：命中是证据但不是充分证据 ——
+  // 基线：trivial 直接事实 0.98（模式锚定首尾，无歧义）；任务命中 0.86 基线；default 未命中 0.55。
+  // 下调：①否定包裹——「不要写代码」不是 coding 请求（语义与关键词相反）；②元讨论/引用性提及
+  // ——「什么是递归」是概念问答、「总结这段代码」的主任务是 summarize 而非命中词所属任务；
+  // ③多任务冲突——两个任务正则都命中时单一标签的解释力下降。clamp [0.3, 0.9]。
+  const matchedCount = (() => {
+    if (task === 'default') return 0;
+    let count = 0;
+    for (const regex of Object.values(patterns)) if (regex.test(text)) count += 1;
+    return count;
+  })();
+  const confidence = (() => {
+    if (trivial) return { value: 0.98, factors: [] };
+    let base = task === 'default' ? 0.55 : 0.86;
+    const factors = [];
+    if (NEGATION_PATTERN.test(trimmed) && task !== 'default') { base -= 0.35; factors.push('negation'); }
+    if (task !== 'default' && (META_QUESTION_PATTERN.test(trimmed) || META_SUMMARIZE_PATTERN.test(trimmed))) { base -= 0.25; factors.push('meta-discussion'); }
+    if (task !== 'default' && matchedCount >= 2) { base -= 0.2 * (matchedCount - 1); factors.push('multi-task-conflict'); }
+    return { value: Number(Math.min(0.9, Math.max(0.3, base)).toFixed(3)), factors };
+  })();
+  return { task: finalTask, subTask, tier, complexity, confidence: confidence.value, confidenceFactors: confidence.factors, textLength: text.length, estimatedInputTokens: estimateInputTokens(text), requirements, signals };
 }
 
 export function mergeSemanticAssessment(base, semantic, applied = true) {

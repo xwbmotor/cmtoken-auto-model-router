@@ -56,7 +56,10 @@ async function classifyViaOpenAIChat(body, config, options) {
   const base = (options.baseUrl || config.upstreamBaseUrl).replace(/\/$/, '');
   if (!options.apiKey) throw new Error('语义分类器缺少上游 API Key');
   const text = requestText(body).slice(-Number(policy.maxInputCharacters || 6000));
-  const prompt = `你是模型路由分类器，只判断任务，不回答用户问题。\n\n任务类型只能是：default、coding、reasoning、creative、extraction。\n难度只能是：simple、balanced、complex。\ncomplexity 是 0 到 1；confidence 是你对分类的置信度。\n复杂架构、多目标权衡、长链条推理应提高难度；寒暄、直接事实、简单格式转换应降低难度。\n复杂任务低估的风险高于简单任务高估，证据不足时适度向上取整。\n\n严格只输出 JSON：{"task":"...","tier":"...","complexity":0.0,"confidence":0.0,"reason":"不超过80字"}\n\n用户请求：\n${text}`;
+  // v0.6.0：携带前级判断（cascade 升级时）。大模型复核不是盲判——小模型结论作为参照意见
+  // 注入 prompt，明确「仅参考，可同意可推翻」；证明有效性的最终标准是决策日志对比。
+  const prior = options.priorAssessment ? `\n\n小模型初判（仅参考，可同意可推翻）：{"task":"${options.priorAssessment.task}","tier":"${options.priorAssessment.tier}","confidence":${options.priorAssessment.confidence},"reason":"${(options.priorAssessment.reason || '').slice(0, 80)}"}` : '';
+  const prompt = `你是模型路由分类器，只判断任务，不回答用户问题。\n\n任务类型只能是：default、coding、reasoning、creative、extraction。任务类型 task 含义：default=通用问答；coding=要求产出/修改/调试代码；reasoning=多步推理、方案权衡、根因分析；creative=创作文案故事；extraction=结构化提取转换。\n难度只能是：simple、balanced、complex。complexity 是 0 到 1；confidence 是你对分类的置信度。\n复杂架构、多目标权衡、长链条推理应提高难度；寒暄、直接事实、简单格式转换应降低难度。\n复杂任务低估的风险高于简单任务高估，证据不足时适度向上取整。\n注意：用户说「不要代码」时不是 coding；「什么是 X」概念解释、对已有材料的总结/翻译是 default 或 extraction，不是材料所属领域任务的请求。\n${prior}\n\n严格只输出 JSON：{"task":"...","tier":"...","complexity":0.0,"confidence":0.0,"reason":"不超过80字"}\n\n用户请求：\n${text}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('语义分类器超时')), Number(chat.timeoutMs || policy.timeoutMs || 3500));
   const started = Date.now();
@@ -110,12 +113,21 @@ async function classifyViaHttpJson(body, config, options) {
 }
 
 // —— provider: cascade（小模型 → 大模型级联） ——
-// 升级条件：小模型调用失败（网络/超时/schema 不合法）或 小模型自身 confidence < 升级阈值。
-// 升级阈值用 config.semanticRouter.minConfidence（与管理页「复核采纳门槛」同字段），
-// 默认 0.5：小模型置信度一半以上才直接采纳，否则升级大模型兜底。
+// v0.6.0 三阈值语义拆分（四审：原 minConfidence 同时承担「升级线」与「采纳线」两语义）：
+//   - smallAcceptThreshold（cascade 内）：小模型 confidence ≥ 此值直接采纳，否则升级大模型。
+//     默认 0.7；兼容回退：未配置时读 minConfidence（0.5 旧默认语义=升级线），都无则 0.7。
+//   - finalAdoptionThreshold（server 层，见 resolveAutoDecision）：语义复核最终结果的采纳线，
+//     低于它退回规则层决策。默认读 minConfidence ?? 0（= 旧行为：一律采纳）。
+//   minConfidence 保留为兼容别名，不再承担新语义；新配置只用上面两个明确命名的字段。
+export function resolveSmallAcceptThreshold(policy = {}) {
+  if (policy.smallAcceptThreshold !== undefined) return Number(policy.smallAcceptThreshold);
+  if (policy.minConfidence !== undefined && Number(policy.minConfidence) > 0) return Number(policy.minConfidence);
+  return 0.7;
+}
+
 export async function classifyViaCascade(body, config, options) {
   const policy = config.semanticRouter || {};
-  const escalateThreshold = Number(policy.minConfidence ?? 0.5);
+  const acceptThreshold = resolveSmallAcceptThreshold(policy);
   // 第一级：自训练小模型。失败或低置信都记录，但低置信时小模型的判断要带给大模型做参照
   let small = null;
   let smallError = null;
@@ -124,18 +136,29 @@ export async function classifyViaCascade(body, config, options) {
   } catch (error) {
     smallError = error;
   }
-  if (small && Number(small.confidence) >= escalateThreshold) return small;
-  // 第二级：升级 MaaS 大模型（小模型挂了兜底 / 小模型拿不准复核）
+  if (small && Number(small.confidence) >= acceptThreshold) {
+    return { ...small, cascade: { level: 'small', acceptThreshold } };
+  }
+  // 第二级：升级 MaaS 大模型（小模型挂了兜底 / 小模型拿不准复核）。
+  // v0.6.0：prompt 携带小模型判断（四审：原实现 smallAttempt 仅事后补日志元数据，
+  // 大模型看不到小模型结论，复核等于盲判）；大模型挂时若小模型有产出则降级返回小模型
+  // （degraded-small，由 server 按 finalAdoptionThreshold 决定采纳或退回规则层），双挂才抛。
   let escalated;
   try {
-    escalated = await classifyViaOpenAIChat(body, config, options);
+    escalated = await classifyViaOpenAIChat(body, config, { ...options, priorAssessment: small || null });
   } catch (largeError) {
-    // 两个都挂才整体失败：抛合并错误（信息量取两级），由上层退回规则层决策
+    if (small) {
+      return {
+        ...small,
+        provider: 'http-json',
+        cascade: { level: 'small-degraded', acceptThreshold, largeError: String(largeError.message).slice(0, 200) }
+      };
+    }
     const merged = new Error(`级联复核两级均失败：小模型 ${smallError ? smallError.message : '低置信未采纳'}；大模型 ${largeError.message}`);
     merged.cause = largeError;
     throw merged;
   }
-  const meta = { escalatedFrom: 'http-json' };
+  const meta = { escalatedFrom: 'http-json', cascade: { level: 'large', acceptThreshold } };
   if (small) meta.smallAttempt = { task: small.task, tier: small.tier, confidence: small.confidence };
   if (smallError) meta.smallError = String(smallError.message).slice(0, 200);
   return { ...escalated, ...meta };

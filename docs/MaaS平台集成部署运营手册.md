@@ -136,7 +136,7 @@ systemctl daemon-reload && systemctl enable --now auto-router
 
 ### 运营红线与切换判据
 
-- 语义复核 shadow→active 判据（已固化）：真实流量 ≥500 条、分歧率 ≤5%、错误率 ≤1%、观察 ≥7 天；切 active 后从 minConfidence=0.5 灰度一周再降
+- 语义复核 shadow→active 判据（已固化）：真实流量 ≥500 条、分歧率 ≤5%、错误率 ≤1%、观察 ≥7 天；切 active 后从 finalAdoptionThreshold=0.5 灰度一周再降
 - 模型退网：管理端关该模型启用开关 → fallbackOrder 自动重排，无需重启
 - 新模型上线四步：管理端录入（质量分/成本/时延/部署）→ eval gate 50 条实测 → replay 预估 → 小流量灰度
 
@@ -189,7 +189,7 @@ systemctl daemon-reload && systemctl enable --now auto-router
 | **P0** | 平台侧分流配置 | 注册 auto 模型或网关规则——唯一硬依赖，需与 MaaS 平台方对齐 |
 | **P0** | .env 三变量 | MAAS_BASE_URL / ROUTER_KEY_MODE=passthrough / ADMIN_TOKEN，1 分钟 |
 | P1 | 语义分类器 | compose up 自带；不跑也可用（自动回退规则层） |
-| P1 | shadow 流量累积后切 active | ≥500 条/分歧 ≤5%/错误 ≤1%/观察 ≥7 天，从 minConfidence=0.5 起步 |
+| P1 | shadow 流量累积后切 active | ≥500 条/分歧 ≤5%/错误 ≤1%/观察 ≥7 天，从 finalAdoptionThreshold=0.5 起步 |
 | P2 | Prometheus 接 /metrics | 设 METRICS_TOKEN；对接内网监控时做 |
 | P2 | 反代 TLS | docs/反代集成.md 有现成 Nginx 配置 |
 | P3 | eval gate 与模型演进同步 | Qwen3.8-27B 上线、M2.5 退网时按 SOP 更新 |

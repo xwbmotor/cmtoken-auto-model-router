@@ -629,10 +629,15 @@ async function probeUpstream() {
   }
 }
 
-function semanticOptions() {
+function semanticOptions(clientAuthHeader = null) {
+  // v0.6.0：passthrough 模式下大模型分类器允许透传本次客户端 key（四审：原实现只读服务端
+  // key，passthrough 无服务端 key 时 cascade 升级必报「缺少上游 API Key」）。客户端 key 优先。
+  const serverKey = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
+  const clientKey = clientAuthHeader ? String(clientAuthHeader).replace(/^Bearer\s+/i, '') : null;
+  const apiKey = clientKey || serverKey;
   return {
     baseUrl: process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl,
-    apiKey: process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY
+    apiKey
   };
 }
 
@@ -641,9 +646,9 @@ function recordSemanticReview(review) {
   if (semanticReviews.length > 100) semanticReviews.length = 100;
 }
 
-function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true } = {}) {
+function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, clientAuthHeader = null } = {}) {
   if (track) counters.semantic.attempted += 1;
-  return classifySemantically(body, config, semanticOptions()).then((assessment) => {
+  return classifySemantically(body, config, semanticOptions(clientAuthHeader)).then((assessment) => {
     if (track) counters.semantic.succeeded += 1;
     if (track && assessment?.escalatedFrom) counters.semantic.escalated = (counters.semantic.escalated || 0) + 1;
     const semanticAnalysis = mergeSemanticAssessment(baseAnalysis, assessment, true);
@@ -680,15 +685,18 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
   if (!shouldUseSemanticRouter(baseAnalysis, body, config)) return baseDecision;
   if (!preview) counters.semantic.eligible += 1;
   if (config.semanticRouter.mode === 'shadow' && !preview) {
-    classifyAndCompare(body, baseAnalysis, baseDecision).catch(() => {});
+    classifyAndCompare(body, baseAnalysis, baseDecision, { clientAuthHeader }).catch(() => {});
     return { ...baseDecision, semanticReview: { status: 'shadow_pending' } };
   }
   try {
-    const result = await classifyAndCompare(body, baseAnalysis, baseDecision, { track: !preview });
+    const result = await classifyAndCompare(body, baseAnalysis, baseDecision, { track: !preview, clientAuthHeader });
     if (config.semanticRouter.mode === 'active') {
-      // 置信度门槛：小模型自己也不确定时（confidence < minConfidence），退回规则层决策，只记观察
-      const minConfidence = Number(config.semanticRouter.minConfidence ?? 0);
-      if (result.assessment.confidence < minConfidence) {
+      // v0.6.0：采纳线独立成 finalAdoptionThreshold（四审：原 minConfidence 双语义——
+      // cascade 里当升级线、这里当采纳线）。语义复核最终结果（无论来自小模型直接采纳、
+      // 大模型复核、还是大模型挂了的降级小模型）confidence 低于此线 → 退回规则层决策，只记观察。
+      // 兼容：未配置 finalAdoptionThreshold 时读 minConfidence（旧配置语义不变）。
+      const adoptionThreshold = Number(config.semanticRouter.finalAdoptionThreshold ?? config.semanticRouter.minConfidence ?? 0);
+      if (result.assessment.confidence < adoptionThreshold) {
         counters.semantic.rejectedLowConfidence = (counters.semantic.rejectedLowConfidence || 0) + 1;
         return { ...baseDecision, semanticReview: { status: 'rejected_low_confidence', ...result.review } };
       }

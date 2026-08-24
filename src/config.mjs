@@ -107,7 +107,16 @@ export function validateConfig(config) {
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) throw new Error('semanticRouter.confidenceThreshold 必须在 0 到 1 之间');
     if (config.semanticRouter.minConfidence !== undefined) {
       const minConf = Number(config.semanticRouter.minConfidence);
-      if (!Number.isFinite(minConf) || minConf < 0 || minConf > 1) throw new Error('semanticRouter.minConfidence 必须在 0 到 1 之间（小模型复核结果的采纳门槛，低于此值退回规则层）');
+      if (!Number.isFinite(minConf) || minConf < 0 || minConf > 1) throw new Error('semanticRouter.minConfidence 必须在 0 到 1 之间（兼容字段：未配置新字段时的回退值，v0.6.0 起建议用 smallAcceptThreshold / finalAdoptionThreshold）');
+    }
+    // v0.6.0 三阈值拆分（四审：minConfidence 双语义）
+    if (config.semanticRouter.smallAcceptThreshold !== undefined) {
+      const v = Number(config.semanticRouter.smallAcceptThreshold);
+      if (!Number.isFinite(v) || v < 0 || v > 1) throw new Error('semanticRouter.smallAcceptThreshold 必须在 0 到 1 之间（cascade 第一级：小模型置信度 ≥ 此值直接采纳，否则升级大模型）');
+    }
+    if (config.semanticRouter.finalAdoptionThreshold !== undefined) {
+      const v = Number(config.semanticRouter.finalAdoptionThreshold);
+      if (!Number.isFinite(v) || v < 0 || v > 1) throw new Error('semanticRouter.finalAdoptionThreshold 必须在 0 到 1 之间（语义复核最终采纳线，低于此值退回规则层决策）');
     }
   }
   if (config.decisionLog) {
