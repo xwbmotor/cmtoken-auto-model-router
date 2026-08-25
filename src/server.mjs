@@ -21,6 +21,7 @@ import { shouldPromoteVerified } from './calibration.mjs';
 import { MarketSignal } from './market-signal.mjs';
 import { registerMarketSignal } from './market-signal-runtime.mjs';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
 
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 8787);
@@ -257,9 +258,50 @@ const BODY_LIMITS = {
 };
 const DEFAULT_BODY_LIMIT = 64 * 1024;  // 健康检查、reload、metrics、decisions 等 GET/POST 小体
 
+// v0.8.1：客户端压缩请求体（Content-Encoding: gzip/deflate/br）兼容——WorkBuddy 等客户端对请求体
+// 默认压缩发送，Node 原生 http server 不会自动解压，JSON.parse 收到压缩字节直接 400「请求体不是合法 JSON」。
+// 按声明逆序逐层解压（RFC 9110：编码按施加顺序声明，解码逆序；支持 "gzip, br" 复合），
+// 解压后大小同样受路径上限约束（防压缩炸弹：50MB 上限对压缩 payload 解压后可任意大）。
+// 未知编码（如 zstd）按 HTTP 语义返回 415，报错信息给出可行动指引。
+const DECOMPRESSORS = {
+  gzip: createGunzip,
+  'x-gzip': createGunzip,
+  deflate: createInflate,
+  br: createBrotliDecompress
+};
+class RequestBodyError extends Error {
+  constructor(message, status = 400) { super(message); this.status = status; }
+}
+function parseContentEncodings(header) {
+  return String(header || '')
+    .toLowerCase()
+    .split(',')
+    .map((token) => token.trim().replace(/;q=[0-9.]+$/, '').trim())
+    .filter((token) => token && token !== 'identity' && token !== 'chunked');
+}
+function decompressOnce(buffer, encoding, limitLabel, limit) {
+  return new Promise((resolve, reject) => {
+    const stream = DECOMPRESSORS[encoding]();
+    const chunks = [];
+    let size = 0;
+    let overLimit = false;
+    stream.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) { overLimit = true; stream.destroy(); return; }
+      chunks.push(chunk);
+    });
+    stream.on('error', (error) => reject(new RequestBodyError(`请求体解压失败（${encoding}）：${error.message}`)));
+    stream.on('close', () => {
+      if (overLimit) reject(new RequestBodyError(`解压后请求体超过 ${limitLabel}KB 上限`));
+      else resolve(Buffer.concat(chunks));
+    });
+    stream.end(buffer);
+  });
+}
+
 async function readJson(req) {
   const text = await readRawBody(req);
-  try { return JSON.parse(text); } catch { throw new Error('请求体不是合法 JSON'); }
+  try { return JSON.parse(text); } catch { throw new RequestBodyError('请求体不是合法 JSON'); }
 }
 async function readRawBody(req) {
   const limit = BODY_LIMITS[req.url ? new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname : ''] ?? DEFAULT_BODY_LIMIT;
@@ -271,8 +313,16 @@ async function readRawBody(req) {
     if (size > limit) { overLimit = true; continue; } // 不 destroy 连接（会 RST 掉客户端 fetch）：继续读完再返回 400
     chunks.push(chunk);
   }
-  if (overLimit) throw new Error(`请求体超过 ${Math.round(limit / 1024)}KB 上限`);
-  return Buffer.concat(chunks);
+  if (overLimit) throw new RequestBodyError(`请求体超过 ${Math.round(limit / 1024)}KB 上限`);
+  let body = Buffer.concat(chunks);
+  const encodings = parseContentEncodings(req.headers['content-encoding']);
+  for (const encoding of [...encodings].reverse()) {
+    if (!DECOMPRESSORS[encoding]) {
+      throw new RequestBodyError(`不支持的 Content-Encoding: ${encoding}（支持 identity/gzip/deflate/br，请在客户端关闭请求体压缩或改用受支持编码）`, 415);
+    }
+    body = await decompressOnce(body, encoding, Math.round(limit / 1024), limit);
+  }
+  return body;
 }
 
 function safeEqual(a, b) {
@@ -938,7 +988,7 @@ async function proxyCompletion(req, res) {
     }
   }
   let body;
-  try { body = await readJson(req); } catch (error) { return errorJson(res, 400, error.message, 'invalid_request_error'); }
+  try { body = await readJson(req); } catch (error) { return errorJson(res, error.status || 400, error.message, error.status ? 'unsupported_content_encoding' : 'invalid_request_error'); }
   if (!Array.isArray(body.messages)) return errorJson(res, 400, 'messages 必须是数组', 'invalid_request_error');
   counters.total += 1;
   const auto = !body.model || body.model === 'auto';
