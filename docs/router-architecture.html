@@ -219,6 +219,7 @@
 
           <li>• v0.7.4 十审收口：发布报告证据链门禁（clean+exact tag，不提交回 tag）、request.sessionFingerprint（sidfp:16hex HMAC）替代原值落盘、指纹 48→64bit、reload 三场景回归测试</li>                <li>• v0.8.0 Judge 异步质量评审：抽样 1~5% 成功请求离线打分（四维+分类核对，独立事件流 judge-reviews），四重护栏（双预算/超时/熔断），不进在线路由</li>
                 <li>• v0.8.3 十二审收口：评分输入纯正文提取、预算预占-结算+状态持久化、分类契约对齐路由枚举、judge 流独立开关（judge开+决策日志关被拒）、redactPatterns 脱敏、UTC 日翻转、release 镜像证据门禁</li>
+                <li>• v0.8.4 解析层错误类型修正：400「请求体不是合法 JSON」的 error.type 不再错标 unsupported_content_encoding（v0.8.1 三元标签 bug），RequestBodyError 带 code 字段按真实类型区分</li>
 </div>
 
       <div class="card">

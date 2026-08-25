@@ -50,6 +50,7 @@
 - **十审收口（v0.7.4）**：①`test:release` 发布证据链门禁——clean HEAD+exact tag 才 validForRelease，报告不提交回 tag（自引用修复）②决策/复核日志 `request.sessionFingerprint`（`sidfp:<16hex>` HMAC）替代原 `sessionId` 落盘——原始 x-session-id 不进任何日志③指纹 16 hex（64bit）④reload 三场景回归测试⑤secret 校验口径：32 字节=长度下限≠熵。
 - **v0.8.0 Judge 异步质量评审**：抽样 1~5% 已完成请求异步打分（四维评分+分类核对，不进在线路由）；四重护栏（每日调用/token 预算、单次超时、连续失败熔断）；独立事件流 judge-reviews-*.jsonl；管理页 Judge 卡片；默认关闭，shadow 起步。
 - **v0.8.3 十二审收口**：评分输入改纯正文提取（信封/SSE 字节不再进评分）；预算改预占-结算制（并发不穿透，状态持久化重启不清零）；分类核对契约与路由枚举对齐；judge 流启停独立于决策日志（judge 开+决策日志关被拒）；redactPatterns 脱敏；UTC 日翻转；release 镜像证据门禁。
+- **v0.8.4 解析层错误类型修正**：400「请求体不是合法 JSON」的 `error.type` 曾被 v0.8.1 的三元标签 bug 错标为 `unsupported_content_encoding`（RequestBodyError.status 默认 400 恒真）；现按真实类型区分——`invalid_request_error`=JSON 损坏/走私请求，`unsupported_content_encoding` 仅用于 415 编码不支持。触发场景：WorkBuddy 走 Hysteria 代理时 HTTP 代理把 absolute-form 重复请求走私拼进连接，路由器将走私请求解析为请求体而 400。
 
 
 

@@ -158,7 +158,7 @@ systemctl daemon-reload && systemctl enable --now auto-router
 | 管理端连不上 | ADMIN_TOKEN | 轮换后旧值立即失效（时序安全比较），填新值 |
 | 分类器挂了 | classifier 容器 | shadow 无影响；active 自动回退规则层（级联方式先升大模型再判，两级都挂才回退），服务不中断 |
 | 429 频出 | 限流计数 | 正常保护；单租户长期顶格 → 调 config.rateLimit |
-| 客户端报 400「请求体不是合法 JSON」 | 客户端是否压缩请求体（Content-Encoding） | v0.8.1 起 gzip/deflate/br（含复合）自动解压——先升级；仍报错则为损坏数据（「解压失败」）或解压后超 50MB（「解压后请求体超过上限」）。zstd 等其余编码报 415，客户端关压缩或改用支持编码 |
+| 客户端报 400「请求体不是合法 JSON」 | 客户端是否压缩请求体（Content-Encoding） | v0.8.1 起 gzip/deflate/br（含复合）自动解压——先升级；仍报错则为损坏数据（「解压失败」）或解压后超 50MB（「解压后请求体超过上限」）。zstd 等其余编码报 415，客户端关压缩或改用支持编码。v0.8.4 起 error.type 按真实错误区分（`invalid_request_error`=JSON 损坏，`unsupported_content_encoding` 仅 415）——排查时先看 type 再看 message |
 
 ### 扩容与回滚
 

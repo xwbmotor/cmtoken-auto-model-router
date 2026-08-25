@@ -100,7 +100,17 @@ test('压缩请求体：gzip/deflate/br 与复合编码均通过解析层（进�
     // 8) 未知编码 zstd：415 + 指引信息
     const unsupported = await post(port, Buffer.from(payload), { 'content-encoding': 'zstd' });
     assert.equal(unsupported.status, 415);
-    assert.match((await unsupported.json()).error.message, /不支持的 Content-Encoding/);
+    const unsupportedBody = await unsupported.json();
+    assert.match(unsupportedBody.error.message, /不支持的 Content-Encoding/);
+    assert.equal(unsupportedBody.error.type, 'unsupported_content_encoding');
+
+    // 9) 非法 JSON 明文体：type 必须是 invalid_request_error——v0.8.1 的三元标签 bug 回归
+    //    （RequestBodyError.status 默认 400 恒真，曾把所有解析层错误错标成 unsupported_content_encoding）
+    const garbage = await post(port, 'this is not json at all');
+    assert.equal(garbage.status, 400);
+    const garbageBody = await garbage.json();
+    assert.match(garbageBody.error.message, /不是合法 JSON/);
+    assert.equal(garbageBody.error.type, 'invalid_request_error');
   } finally {
     child.kill('SIGKILL');
     await sleep(500);

@@ -307,7 +307,7 @@ const DECOMPRESSORS = {
   br: createBrotliDecompress
 };
 class RequestBodyError extends Error {
-  constructor(message, status = 400) { super(message); this.status = status; }
+  constructor(message, status = 400, code = 'invalid_request_error') { super(message); this.status = status; this.code = code; }
 }
 function parseContentEncodings(header) {
   return String(header || '')
@@ -355,7 +355,7 @@ async function readRawBody(req) {
   const encodings = parseContentEncodings(req.headers['content-encoding']);
   for (const encoding of [...encodings].reverse()) {
     if (!DECOMPRESSORS[encoding]) {
-      throw new RequestBodyError(`不支持的 Content-Encoding: ${encoding}（支持 identity/gzip/deflate/br，请在客户端关闭请求体压缩或改用受支持编码）`, 415);
+      throw new RequestBodyError(`不支持的 Content-Encoding: ${encoding}（支持 identity/gzip/deflate/br，请在客户端关闭请求体压缩或改用受支持编码）`, 415, 'unsupported_content_encoding');
     }
     body = await decompressOnce(body, encoding, Math.round(limit / 1024), limit);
   }
@@ -1037,7 +1037,7 @@ async function proxyCompletion(req, res) {
     }
   }
   let body;
-  try { body = await readJson(req); } catch (error) { return errorJson(res, error.status || 400, error.message, error.status ? 'unsupported_content_encoding' : 'invalid_request_error'); }
+  try { body = await readJson(req); } catch (error) { return errorJson(res, error.status || 400, error.message, error.code || 'invalid_request_error'); }
   if (!Array.isArray(body.messages)) return errorJson(res, 400, 'messages 必须是数组', 'invalid_request_error');
   counters.total += 1;
   const auto = !body.model || body.model === 'auto';
