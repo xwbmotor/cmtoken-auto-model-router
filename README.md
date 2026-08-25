@@ -59,7 +59,7 @@
 - **路由成本分账（v0.7.0；v0.7.1 补恒等式）**：五元组 `answerActualCostYuan`（真实 usage）/ `answerEstimatedCostYuan`（无 usage 估算结清）/ `routingOverheadCostYuan`（分类调用）/ `legacyUnattributedCostYuan`（升级前存量）/ `totalCostYuan`，**四分项之和恒等于 `settledSpendYuan`**（可对账）；指标 `router_budget_answer_actual_cost_yuan` 等 5 个 gauge。净节省 =（固定模型基线 − answerActual − answerEstimated）− routingOverhead。
 - 误判方向分解：回放输出 underCalled（漏判难任务→质量风险）/ overCalled（多判→成本浪费）/ taskSwapped（同档互错），告诉运维错的方向而不是只给准确率。
 - 基线对照：影响模拟面板新增「随机基线（Pareto 前沿）/ 事后最优」对照——当前路由质量应落在两者之间；低于随机基线说明任务区分度不足。
-- 组件体检：一键在标准评测集（heldout 454 条，与训练切分同源）上评测分类小模型与规则层，输出准确率/宏F1/混淆矩阵/分歧率——换分类器前后各跑一次即可量化"准了多少"。
+- 组件体检：一键在标准评测集（heldout 454 条，与训练切分同源的合成分布——衡量同分布泛化，不等价真实流量判准率）上评测分类小模型与规则层，输出准确率/宏F1/混淆矩阵/分歧率——换分类器前后各跑一次即可量化"准了多少"。
 - 模型选择与推理强度建议分离；只有标记为已验证的模型才会收到推理参数
 - 真实输入/输出单价与 P95 注册、每日预算软保护
 - `CLOSED → OPEN → HALF_OPEN` 受控熔断恢复
