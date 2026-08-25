@@ -134,12 +134,12 @@
         "vision": false
       },
       "quality": {
-        "default": 0.92,
-        "simple": 0.97,
-        "coding": 0.88,
-        "reasoning": 0.919,
-        "creative": 0.881,
-        "extraction": 0.85
+        "default": 0.908,
+        "simple": 0.983,
+        "coding": 0.885,
+        "reasoning": 0.932,
+        "creative": 0.875,
+        "extraction": 0.945
       },
       "benchmarkScores": {
         "scores": {
@@ -302,7 +302,15 @@
         "totalConcurrency": 180
       },
       "costIndexProvider": 0.874,
-      "reliabilityStatus": "verified"
+      "reliabilityStatus": "verified",
+      "qualitySource": {
+        "default": "eval-gate-2026-08-20",
+        "simple": "eval-gate-2026-08-20",
+        "coding": "eval-gate-2026-08-20",
+        "reasoning": "eval-gate-2026-08-20",
+        "creative": "eval-gate-2026-08-20",
+        "extraction": "eval-gate-2026-08-20"
+      }
     },
     {
       "id": "qwen36-35b",
@@ -336,12 +344,12 @@
         "vision": false
       },
       "quality": {
-        "default": 0.833,
-        "simple": 0.883,
-        "coding": 0.852,
-        "reasoning": 0.923,
-        "creative": 0.875,
-        "extraction": 0.93
+        "default": 0.894,
+        "simple": 0.95,
+        "coding": 0.928,
+        "reasoning": 0.927,
+        "creative": 0.884,
+        "extraction": 0.94
       },
       "benchmarkScores": {
         "scores": {
@@ -501,7 +509,15 @@
         "totalConcurrency": 180
       },
       "costIndexProvider": 0.115,
-      "reliabilityStatus": "verified"
+      "reliabilityStatus": "verified",
+      "qualitySource": {
+        "default": "eval-gate-2026-08-20-amended(剔default-06 Token歧义题)",
+        "simple": "eval-gate-2026-08-20",
+        "coding": "eval-gate-2026-08-20",
+        "reasoning": "eval-gate-2026-08-20",
+        "creative": "eval-gate-2026-08-20",
+        "extraction": "eval-gate-2026-08-20"
+      }
     },
     {
       "id": "Qwen3.8-27B",
@@ -510,12 +526,12 @@
       "enabled": true,
       "calibrationStatus": "verified",
       "quality": {
-        "default": 0.92,
-        "simple": 0.97,
-        "coding": 0.955,
-        "reasoning": 0.944,
-        "creative": 0.845,
-        "extraction": 0.942
+        "default": 0.895,
+        "simple": 0.958,
+        "coding": 0.93,
+        "reasoning": 0.937,
+        "creative": 0.854,
+        "extraction": 0.95
       },
       "costIndex": 0.236,
       "latencyIndex": 0.286,
@@ -700,7 +716,15 @@
       },
       "minimumCompletionTokensForReliableAnswer": 16384,
       "costIndexProvider": 1,
-      "reliabilityStatus": "verified"
+      "reliabilityStatus": "verified",
+      "qualitySource": {
+        "default": "eval-gate-2026-08-20",
+        "simple": "eval-gate-2026-08-20",
+        "coding": "manual-amended(条件质量0.940×0.99可用性折让——历史空输出已修但未重测)",
+        "reasoning": "eval-gate-2026-08-20",
+        "creative": "eval-gate-2026-08-20",
+        "extraction": "eval-gate-2026-08-20"
+      }
     }
   ],
   "decisionLog": {
@@ -730,7 +754,7 @@
     "note": "costIndex 优先按真实结算价归一（加权单价=输入占比×输入价+输出占比×输出价，构成见 pricingMix，当前 10:1）；deployment 资源估算法保留为备选（source=deployment）。价格口径：2026-08-20 算力豆兑换方案表（每豆可换 token 数按 70 豆/元折算为元价；dsf 1.3万/5.1万/0.3万、qwen36 1.9万/7.6万/0.5万、qwen3.8 1.6万/6.5万/0.4万），表另有平台综合兑换参考值 29643/44459/38118 token/豆（平台内部流量假设，不参与计算）。注意：新表下 dsf 由最便宜变为三模型最贵。旧口径（2026-08-18 厂商目录价5折）已作废。算力豆口径见 budget.beansPerYuan。部署数据（2026-08 录入，表值均为单实例口径）：dsf=单机8卡 单实例吞吐412、hy3=双机16卡 单实例吞吐262.93、均为910B；Qwen3.8-27B（单机4卡）待上线后录入，M2.5 将下线不录。",
     "pricingAnchorYuan": 4.811
   },
-  "version": "0.9.6",
+  "version": "0.9.7",
   "judge": {
     "enabled": false,
     "model": "glm-5.3",

@@ -143,7 +143,7 @@ export function validateConfig(config) {
     const jm = config.judge.model;
     if (typeof jm !== 'string' || !jm) throw new Error('judge.model 必须是非空字符串（Judge 模型 ID，如 glm-5.3）');
     const sp = Number(config.judge.samplePercent);
-    if (config.judge.samplePercent === undefined || !Number.isFinite(sp) || sp < 0 || sp > 100) throw new Error('judge.samplePercent 必须在 0 到 100 之间（抽样比例，十审边界 1~5%）');
+    if (config.judge.samplePercent === undefined || !Number.isFinite(sp) || sp < 0 || sp > 100) throw new Error('judge.samplePercent 必须在 0 到 100 之间（日常建议 1~5%，采样期可调高）');
     if (config.judge.taskCheckEnabled !== undefined && typeof config.judge.taskCheckEnabled !== 'boolean') throw new Error('judge.taskCheckEnabled 必须是布尔值');
     if (config.judge.timeoutMs !== undefined && (!Number.isInteger(Number(config.judge.timeoutMs)) || Number(config.judge.timeoutMs) < 1000)) throw new Error('judge.timeoutMs 必须是 ≥1000 的整数（毫秒）');
     if (config.judge.dailyMaxCalls !== undefined && (!Number.isInteger(Number(config.judge.dailyMaxCalls)) || Number(config.judge.dailyMaxCalls) < 1)) throw new Error('judge.dailyMaxCalls 必须是正整数（每日调用上限，成本护栏）');

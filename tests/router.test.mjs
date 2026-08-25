@@ -121,20 +121,23 @@ test('yuanToBeans 按 beansPerYuan 换算算力豆', () => {
   assert.equal(yuanToBeans(1, {}), null); // 未配置汇率返回 null
 });
 
-// —— taskPreferences 容差分流（v0.4.14）——
+// —— taskPreferences 容差分流 ——
 test('taskPreferences 容差内分流到指定模型（qualified 池内）', () => {
-  // v0.5.2 语义：偏好目标必须在 qualified 池内（qualityQualified 且 qualityLoss ≤ relCap）。
-  // 真实配置下 extraction 的 qualified 池 = q36 + q38（dsf qLoss 0.092 > balanced 0.04 被闸出），
-  // 指定 dsf 应被拒绝分流——偏好不可绕过质量闸门（Codex 二审 P1 修复的回归测试）。
+  // 语义：偏好目标必须在 qualified 池内（qualityQualified 且 qualityLoss ≤ relCap）。
+  // 用合成配置锁定闸门机制（质量分校准会改变真实分差，测试不得绑定具体分值）：
+  // 人为把 dsf 的 extraction 压到 0.60——远超 simple 档 relCap 0.08，必被闸出 qualified 池。
   const cfg = structuredClone(config);
+  const dsf = cfg.models.find((m) => m.id === 'deepseekv4-flash');
+  dsf.quality.extraction = 0.60;
   cfg.routing.taskPreferences.extraction = { model: 'deepseekv4-flash', tolerance: 0.2 };
   const rejected = routeRequest({ model: 'auto', messages: [{ role: 'user', content: '从下面材料提取关键信息并输出结构化 JSON：文章标题、作者、发表日期' }] }, cfg);
   assert.equal(rejected.analysis.task, 'extraction');
   assert.equal(rejected.preference, null, '超质量闸门的偏好目标不得被分流');
   assert.notEqual(rejected.suggestedModel, 'deepseekv4-flash');
-  // 对照组：偏好目标在 qualified 池内且非第一（q38 分差 < 0.2）→ 正常分流
-  cfg.routing.taskPreferences.extraction = { model: 'Qwen3.8-27B', tolerance: 0.2 };
-  const applied = routeRequest({ model: 'auto', messages: [{ role: 'user', content: '从下面材料提取关键信息并输出结构化 JSON：文章标题、作者、发表日期' }] }, cfg);
+  // 对照组：偏好目标在 qualified 池内且非第一 → 正常分流
+  const cfg2 = structuredClone(config);
+  cfg2.routing.taskPreferences.extraction = { model: 'Qwen3.8-27B', tolerance: 0.2 };
+  const applied = routeRequest({ model: 'auto', messages: [{ role: 'user', content: '从下面材料提取关键信息并输出结构化 JSON：文章标题、作者、发表日期' }] }, cfg2);
   assert.equal(applied.analysis.task, 'extraction');
   assert.equal(applied.suggestedModel, 'Qwen3.8-27B');
   assert.ok(applied.preference, '池内偏好应生效');
