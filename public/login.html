@@ -31,7 +31,7 @@
     <input id="adminToken" type="password" placeholder="填写 ADMIN_TOKEN" required autofocus>
     <button id="loginBtn" type="submit">登 录</button>
     <p class="login-err" id="loginErr"></p>
-    <p class="login-note">会话有效期：空闲 2 小时 / 最长 12 小时，到期自动重新登录。<br>脚本调用可继续使用 <code>Authorization: Bearer &lt;ADMIN_TOKEN&gt;</code>，不受影响。</p>
+    <p class="login-note">会话有效期：空闲 2 小时 / 最长 12 小时，到期自动重新登录。<br>Token 不在浏览器留存。脚本调用可继续使用 <code>Authorization: Bearer &lt;ADMIN_TOKEN&gt;</code>，不受影响。</p>
   </form>
 </div>
 <script>

@@ -2,7 +2,7 @@ import http from 'node:http';
 
 import { readFile } from 'node:fs/promises';
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, statSync, chmodSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 // v0.9.2：Judge 上游通道秘密存储（端点+key 独立落盘，不进 config/git）
 import { JudgeSecretStore } from './judge-secret.mjs';
@@ -92,6 +92,8 @@ const judgeLog = await DecisionLog.create(projectRoot, { decisionLog: { ...(conf
 const judgeGuardStatePath = resolve(projectRoot, config.judge?.guardStatePath || './data/judge-guard-state.json');
 // v0.9.2：管理端可配 judge 上游（baseUrl+key）。优先级：judge-secret.json > 环境变量 > config.upstreamBaseUrl
 const judgeSecretStore = new JudgeSecretStore({ path: resolve(projectRoot, './data/judge-secret.json') });
+// 十四审 P1：启动即收紧密钥文件权限（Linux chmod 0600；Windows 无此语义自动跳过）
+try { const st = statSync(judgeSecretStore.path); if ((st.mode & 0o777) !== 0o600) chmodSync(judgeSecretStore.path, 0o600); } catch { /* 文件不存在（未配置）或 Windows：跳过 */ }
 
 // 十三审 P2：原子持久化——临时文件+rename（writeFileSync 直写进程中断会留截断 JSON，
 
@@ -2775,7 +2777,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/admin/api/login') {
     const verdict = adminAuthLimiter.check('admin-login:' + (req.socket.remoteAddress || 'unknown'));
     if (!verdict.allowed) return json(res, 429, { error: { message: '登录尝试过于频繁，请稍后再试', type: 'rate_limit_exceeded', code: 429 } }, { 'retry-after': String(Math.ceil(verdict.retryAfterMs / 1000)) });
-    try { const body = await readJson(req); if (!safeEqual(`Bearer ${body.token}`, `Bearer ${process.env.ADMIN_TOKEN}`) && !(process.env.ADMIN_TOKEN && safeEqual(body.token, process.env.ADMIN_TOKEN))) return errorJson(res, 401, 'Admin Token 无效', 'authentication_error'); const sid = randomBytes(32).toString('hex'); const now = Date.now(); adminSessions.set(sid, { lastSeen: now, absExpires: now + ADMIN_SESSION_ABS_MS }); return json(res, 200, { ok: true, expiresInMs: ADMIN_SESSION_IDLE_MS }, { 'set-cookie': `${ADMIN_SESSION_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(ADMIN_SESSION_ABS_MS / 1000)}` }); } catch { return errorJson(res, 400, '请求体必须是 JSON', 'invalid_request_error'); }
+    try { const body = await readJson(req); if (!safeEqual(`Bearer ${body.token}`, `Bearer ${process.env.ADMIN_TOKEN}`) && !(process.env.ADMIN_TOKEN && safeEqual(body.token, process.env.ADMIN_TOKEN))) return errorJson(res, 401, 'Admin Token 无效', 'authentication_error'); const sid = randomBytes(32).toString('hex'); const now = Date.now(); adminSessions.set(sid, { lastSeen: now, absExpires: now + ADMIN_SESSION_ABS_MS }); return json(res, 200, { ok: true, expiresInMs: ADMIN_SESSION_IDLE_MS }, { 'set-cookie': `${ADMIN_SESSION_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(ADMIN_SESSION_ABS_MS / 1000)}${(req.socket?.encrypted || req.headers['x-forwarded-proto'] === 'https') ? '; Secure' : ''}` }); } catch { return errorJson(res, 400, '请求体必须是 JSON', 'invalid_request_error'); }
   }
   if (req.method === 'POST' && url.pathname === '/admin/api/logout') {
     const sid = parseCookies(req)[ADMIN_SESSION_COOKIE]; if (sid) adminSessions.delete(sid);
@@ -2806,6 +2808,9 @@ const server = http.createServer(async (req, res) => {
       if (body.clear) { judgeSecretStore.clear(); return json(res, 200, judgeSecretStore.masked()); }
       if (!body.baseUrl || !body.apiKey) return errorJson(res, 400, '需要 baseUrl 与 apiKey（或 clear:true 清除）', 'invalid_judge_secret');
       if (!/^https?:\/\//.test(body.baseUrl)) return errorJson(res, 400, 'baseUrl 必须是 http(s) 端点', 'invalid_judge_secret');
+      // 十四审 P1：外部 Judge 端点强制 HTTPS；仅内网回环（127.0.0.1/localhost/[::1]）允许 HTTP
+      const jsHost = (() => { try { return new URL(body.baseUrl).hostname; } catch { return null; } })();
+      if (body.baseUrl.startsWith('http://') && !['127.0.0.1', 'localhost', '[::1]'].includes(jsHost)) return errorJson(res, 400, '外部 Judge 端点必须 HTTPS（内网回环才允许 http）', 'invalid_judge_secret');
       judgeSecretStore.save({ baseUrl: String(body.baseUrl), apiKey: String(body.apiKey) });
       return json(res, 200, judgeSecretStore.masked());
     } catch (error) { return errorJson(res, 400, error.message, 'invalid_judge_secret'); }

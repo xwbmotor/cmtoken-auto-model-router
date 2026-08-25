@@ -24,7 +24,7 @@ export class JudgeSecretStore {
     if (!baseUrl || !apiKey) throw new Error('judge secret 需要 baseUrl 与 apiKey');
     mkdirSync(dirname(this.path), { recursive: true });
     const tmp = `${this.path}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ baseUrl: baseUrl.replace(/\/$/, ''), apiKey }, null, 2));
+    writeFileSync(tmp, JSON.stringify({ baseUrl: baseUrl.replace(/\/$/, ''), apiKey }, null, 2), { mode: 0o600 }); // 十四审 P1：密钥文件仅运行用户可读写
     renameSync(tmp, this.path);
   }
   clear() {

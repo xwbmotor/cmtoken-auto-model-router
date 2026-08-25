@@ -61,6 +61,14 @@ test('e2e judge/secret：PUT→GET masked→config 无 key→非法 URL 拒→�
       // 5) 非法 baseUrl 拒绝
       r = await fetch(`http://127.0.0.1:${port}/admin/api/judge/secret`, { method: 'PUT', headers: H, body: JSON.stringify({ baseUrl: 'ftp://x', apiKey: 'k' }) });
       assert.equal(r.status, 400);
+      // 5b) 十四审 P1：外部 HTTP judge 端点拒绝（仅回环允许 http）
+      r = await fetch(`http://127.0.0.1:${port}/admin/api/judge/secret`, { method: 'PUT', headers: H, body: JSON.stringify({ baseUrl: 'http://judge.example.com/v1', apiKey: 'k' }) });
+      assert.equal(r.status, 400);
+      const body5b = await r.text();
+      assert.ok(body5b.includes('HTTPS'), '外部 http 端点应被拒并提示 HTTPS');
+      // 5c) 回环 http 允许（内网部署形态）
+      r = await fetch(`http://127.0.0.1:${port}/admin/api/judge/secret`, { method: 'PUT', headers: H, body: JSON.stringify({ baseUrl: 'http://127.0.0.1:9999/v1', apiKey: 'k' }) });
+      assert.equal(r.status, 200);
       // 6) 清除
       r = await fetch(`http://127.0.0.1:${port}/admin/api/judge/secret`, { method: 'PUT', headers: H, body: JSON.stringify({ clear: true }) });
       v = await r.json();
