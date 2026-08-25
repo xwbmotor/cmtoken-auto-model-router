@@ -15,6 +15,18 @@ export function costTierBand(config) {
 
 // 市场信号：决策日志聚合的活信号（份额/点名/失败率），样本不足自动休眠、幅度有界
 import { adjustFor as marketAdjustFor } from './market-signal-runtime.mjs';
+
+// 十四审 P1/P2：auto 模型对外名可配（单一真源 config.routing.autoModelId，默认 "auto"）。
+// 硬切改名（如「cmtoken-auto」）后：/v1/models 展示该名、请求判定按该名走 auto 路由；
+// 旧名 "auto" 退化为普通字符串——若与池内模型 ID 不重合则按「模型不存在」400。
+// 全链路判定必须经 isAutoRequest，不得散落 === 'auto' 字面量。
+export function autoModelId(config) {
+  return (config?.routing?.autoModelId && String(config.routing.autoModelId).trim()) || 'auto';
+}
+export function isAutoRequest(body, config) {
+  const id = autoModelId(config);
+  return !body?.model || body.model === id;
+}
 // 任务分类正则：内置为缺省值；config.taskRules.patterns 提供可覆盖子集（key=任务名，value=字符串数组按 | 合并）
 const DEFAULT_TASK_PATTERNS = {
   coding: /代码|编程|程序|函数|接口|报错|异常|debug|bug|review|评审|前端|vue|react|css|组件|docker|k8s|kubernetes|ci\/cd|nginx|yaml|部署配置|shell|bash|命令行|解析.{0,4}文件|csv|python|java|javascript|typescript|golang|rust|sql|regex|算法|并发安全|重构|单元测试/i,
@@ -488,7 +500,9 @@ export function routeRequest(body, config, runtime = {}) {
     reasoningLevel = reasoningLevel === 'high' ? 'standard' : 'off';
   }
   return {
-    requestedModel: body.model || 'auto', selectedModel, suggestedModel,
+    // 十四审：requestedModel 落客户端真实请求名（未指定=当前对外 auto 名），
+    // 不再写死 'auto'——决策日志/市场信号按此归并 auto vs explicit。
+    requestedModel: body.model || autoModelId(config), selectedModel, suggestedModel,
     shadow: !rolloutApplied, rollout: { activeTrafficPercent, trafficBucket: Number(trafficBucket.toFixed(2)), rolloutApplied }, analysis, candidates: candidates.sort((a, b) => b.score - a.score),
     preference: preferenceApplied ? { task: analysis.task, model: pref.model, note: preferenceNote } : null,
     reasoningLevel, rejected, fallbackOrder: ordered.map((x) => x.model), configVersion: config.version

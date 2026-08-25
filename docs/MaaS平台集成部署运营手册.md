@@ -3,6 +3,8 @@
 > 目标形态：业务方在 MaaS 上多了一个 `auto` 模型——**同 URL、同 apikey**，调 auto 背后自动路由到各实际模型，实现成本/效率/效果最优。调用方零改造（仍是标准 OpenAI 协议）。
 > 适用版本：v0.4.21 及以上（需 `ROUTER_KEY_MODE=passthrough`）
 
+> **模型入口（v0.9.0 起）**：统一入口名 `cmtoken-auto`（`model` 传该值或留空）；旧名 `auto` 已停用（400）。`GET /v1/models` 仅返回该入口，池内模型不对外暴露（`routing.exposeModelList=auto-only`）；需要点名的内部调试场景保持 `routing.allowExplicitModel` 不变。
+
 ## 一、架构与前提
 
 ```
@@ -90,7 +92,7 @@ systemctl daemon-reload && systemctl enable --now auto-router
 > curl https://<maas-gateway>/v1/chat/completions \
 >   -H "Authorization: Bearer <你的apikey>" \
 >   -H "Content-Type: application/json" \
->   -d '{"model":"auto","messages":[{"role":"user","content":"你好"}]}'
+>   -d '{"model":"cmtoken-auto","messages":[{"role":"user","content":"你好"}]}'
 > ```
 >
 > - 路由器读请求内容（文本特征、长度、多轮、工具/JSON 需求），自动选最合适的模型
@@ -158,7 +160,7 @@ systemctl daemon-reload && systemctl enable --now auto-router
 | 管理端连不上 | ADMIN_TOKEN | 轮换后旧值立即失效（时序安全比较），填新值 |
 | 分类器挂了 | classifier 容器 | shadow 无影响；active 自动回退规则层（级联方式先升大模型再判，两级都挂才回退），服务不中断 |
 | 429 频出 | 限流计数 | 正常保护；单租户长期顶格 → 调 config.rateLimit |
-| 客户端报 400「请求体不是合法 JSON」 | 客户端是否压缩请求体（Content-Encoding） | v0.8.1 起 gzip/deflate/br（含复合）自动解压——先升级；仍报错则为损坏数据（「解压失败」）或解压后超 50MB（「解压后请求体超过上限」）。zstd 等其余编码报 415，客户端关压缩或改用支持编码。v0.8.4 起 error.type 按真实错误区分（`invalid_request_error`=JSON 损坏，`unsupported_content_encoding` 仅 415）——排查时先看 type 再看 message |
+| 客户端报 400「请求体不是合法 JSON」 | 客户端是否压缩请求体（Content-Encoding） | v0.8.1 起 gzip/deflate/br（含复合）自动解压——先升级；仍报错则为损坏数据（「解压失败」）或解压后超 50MB（「解压后请求体超过上限」）。zstd 等其余编码报 415，客户端关压缩或改用支持编码。v0.9.0 起 error.type 按真实错误区分（`invalid_request_error`=JSON 损坏，`unsupported_content_encoding` 仅 415）——排查时先看 type 再看 message |
 
 ### 扩容与回滚
 

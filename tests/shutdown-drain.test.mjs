@@ -169,7 +169,7 @@ test('SIGTERM 排空：主请求返回后的在途 shadow 复核不丢，进程�
       const r = await fetch(`http://127.0.0.1:${port1}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: 'Bearer test-key' },
-        body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: '帮我把这段话翻译成英文再总结一下要点' }] })
+        body: JSON.stringify({ messages: [{ role: 'user', content: '帮我把这段话翻译成英文再总结一下要点' }] })
       });
       assert.equal(r.status, 200, '主请求应先成功返回');
       // 4. 主响应已返回但后台分类(1.2s)仍在途 → 立即 SIGTERM
@@ -211,7 +211,7 @@ test('SIGTERM 8s 上限：卡死后台任务按上限放弃，退出耗时落在
       const r = await fetch(`http://127.0.0.1:${port2}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: 'Bearer test-key' },
-        body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: '帮我把这段话翻译成英文再总结一下要点' }] })
+        body: JSON.stringify({ messages: [{ role: 'user', content: '帮我把这段话翻译成英文再总结一下要点' }] })
       });
       assert.equal(r.status, 200);
       const t0 = Date.now();

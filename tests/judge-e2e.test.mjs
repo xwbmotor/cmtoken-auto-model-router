@@ -103,7 +103,7 @@ async function fire(port, { sessionId = 'judge-sess-1', stream = false } = {}) {
   const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer k', 'x-session-id': sessionId },
-    body: JSON.stringify({ model: 'auto', stream, messages: [{ role: 'user', content: '写一段冒泡排序的 Python 代码' }] })
+    body: JSON.stringify({ stream, messages: [{ role: 'user', content: '写一段冒泡排序的 Python 代码' }] })
   });
   await r.text();
   return r;

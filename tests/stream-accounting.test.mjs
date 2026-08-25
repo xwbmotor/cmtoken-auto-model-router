@@ -83,7 +83,7 @@ test('e2e 记账生命周期：流式成功落 completed、非流式成功落 su
     });
 
     // 1) 流式成功：SSE 完整走完 → completed +1、success +1
-    const s1 = await post({ model: 'auto', stream: true, messages: [{ role: 'user', content: '写一句问候' }] });
+    const s1 = await post({ stream: true, messages: [{ role: 'user', content: '写一句问候' }] });
     assert.equal(s1.status, 200);
     const stext = await s1.text();
     assert.match(stext, /你好/);
@@ -95,7 +95,7 @@ test('e2e 记账生命周期：流式成功落 completed、非流式成功落 su
     assert.ok(succ1 >= 1, '流式成功应进 success 计数');
 
     // 2) 非流式成功：success +1（text() 完成后落账）
-    const s2 = await post({ model: 'auto', messages: [{ role: 'user', content: '写一句问候' }] });
+    const s2 = await post({ messages: [{ role: 'user', content: '写一句问候' }] });
     assert.equal(s2.status, 200);
     await s2.text();
     await sleep(300);
@@ -104,7 +104,7 @@ test('e2e 记账生命周期：流式成功落 completed、非流式成功落 su
     assert.equal(succ2, succ1 + 1, `非流式成功应使 success +1（${succ1}→${succ2}）`);
 
     // 3) 断流：aborted +1 且不新增 success（不双记）
-    const s3 = await post({ model: 'auto', stream: true, messages: [{ role: 'user', content: '写一句问候' }] });
+    const s3 = await post({ stream: true, messages: [{ role: 'user', content: '写一句问候' }] });
     assert.equal(s3.status, 200);
     await s3.text().catch(() => {}); // 断流会抛
     await sleep(300);

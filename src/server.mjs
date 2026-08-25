@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from '
 import { spawn } from 'node:child_process';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { loadConfig, projectRoot, saveConfig, validateConfig } from './config.mjs';
-import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice, recommendReasoningLevel } from './router.mjs';
+import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice, recommendReasoningLevel, isAutoRequest, autoModelId } from './router.mjs';
 import { resolveModelScope, scopeIntersectsConfig, scopeAllows, scopeCacheStats } from './model-scope.mjs';
 import { classifySemantically, shouldUseSemanticRouter } from './semantic-router.mjs';
 // v0.8.0 Judge：异步 shadow 评分器（独立事件流 judge-reviews；十审边界：不进在线决策闭环）
@@ -403,7 +403,7 @@ function replayHeldout(dump, policyConfig) {
   const init = () => ({ taskAcc: 0, count: 0, modelDist: {}, qualitySum: 0, costSum: 0, misread: { underCalled: 0, overCalled: 0, taskSwapped: 0 }, modelShifts: {} });
   const result = { rules: init(), partial: init(), full: init() };
   for (const row of dump) {
-    const body = { model: 'auto', messages: [{ role: 'user', content: String(row.text || '') }] };
+    const body = { model: autoModelId(config), messages: [{ role: 'user', content: String(row.text || '') }] };
     const baseAnalysis = analyzeRequest(body, policyConfig);
     const baseModel = routeRequest(body, policyConfig, { health: {}, analysisOverride: baseAnalysis, trafficBucket: 0 }).suggestedModel;
     const semantic = { task: row.clf, tier: row.tier, complexity: row.complexity, confidence: row.confidence, reason: 'replay' };
@@ -454,7 +454,7 @@ function replayHeldout(dump, policyConfig) {
 
 function simulatePolicy(policyConfig) {
   const rows = SIMULATION_SAMPLES.map((sample) => {
-    const decision = routeRequest({ model: 'auto', ...sample.body }, policyConfig, { health: {}, trafficBucket: 0 });
+    const decision = routeRequest({ model: autoModelId(config), ...sample.body }, policyConfig, { health: {}, trafficBucket: 0 });
     const candidate = decision.candidates.find((item) => item.model === decision.suggestedModel);
     const model = policyConfig.models.find((item) => item.id === decision.suggestedModel);
     const costYuan = estimateCostYuan(sample.body, decision.analysis, model, policyConfig, decision.reasoningLevel || 'off');
@@ -546,7 +546,7 @@ function simulateSensitivity(proposed) {
   ];
   const STEP = 0.02;
   const proposedAt = (cfg) => SIMULATION_SAMPLES.map((sample) => {
-    try { return routeRequest({ model: 'auto', ...sample.body }, cfg, { health: {}, trafficBucket: 0 }).suggestedModel; } catch { return null; }
+    try { return routeRequest({ model: autoModelId(config), ...sample.body }, cfg, { health: {}, trafficBucket: 0 }).suggestedModel; } catch { return null; }
   });
   const basePicks = proposedAt(proposed);
   const result = {};
@@ -590,7 +590,7 @@ function proposeDominanceReason(cfg) {
   if (enabled.length < 2) return '启用模型不足 2 个，无切换空间';
   const picks = {};
   for (const sample of SIMULATION_SAMPLES) {
-    try { const m = routeRequest({ model: 'auto', ...sample.body }, cfg, { health: {}, trafficBucket: 0 }).suggestedModel; picks[m] = (picks[m] || 0) + 1; } catch {}
+    try { const m = routeRequest({ model: autoModelId(config), ...sample.body }, cfg, { health: {}, trafficBucket: 0 }).suggestedModel; picks[m] = (picks[m] || 0) + 1; } catch {}
   }
   const top = Object.entries(picks).sort((a, b) => b[1] - a[1])[0];
   if (!top) return null;
@@ -1040,7 +1040,7 @@ async function proxyCompletion(req, res) {
   try { body = await readJson(req); } catch (error) { return errorJson(res, error.status || 400, error.message, error.code || 'invalid_request_error'); }
   if (!Array.isArray(body.messages)) return errorJson(res, 400, 'messages 必须是数组', 'invalid_request_error');
   counters.total += 1;
-  const auto = !body.model || body.model === 'auto';
+  const auto = isAutoRequest(body, config);
   let decision;
   if (auto) {
     counters.auto += 1;
@@ -1399,7 +1399,13 @@ const server = http.createServer(async (req, res) => {
     const ready = probe.reachable && !shutdownManager.draining;
     return json(res, ready ? 200 : 503, { ready, status: ready ? 'ready' : 'not_ready', upstreamReachable: probe.reachable, upstreamStatus: probe.status ?? null, upstreamError: probe.error ?? null, configVersion: config.version, checkedAt: new Date().toISOString() });
   }
-  if (req.method === 'GET' && url.pathname === '/v1/models') return json(res, 200, { object: 'list', data: [{ id: 'auto', object: 'model', owned_by: 'router' }, ...config.models.filter((m) => m.enabled).map((m) => ({ id: m.id, object: 'model', owned_by: m.ownership }))] });
+  if (req.method === 'GET' && url.pathname === '/v1/models') {
+    // 十四审 P2：模型发现默认只暴露 auto 入口（exposeModelList=all 才含池内模型）——
+    // 客户端模型选择器只应看到路由入口，池内模型是内部实现细节（点名仍走 allowExplicitModel）。
+    const autoEntry = { id: autoModelId(config), object: 'model', owned_by: 'router' };
+    const pool = config.routing.exposeModelList === 'all' ? config.models.filter((m) => m.enabled).map((m) => ({ id: m.id, object: 'model', owned_by: m.ownership })) : [];
+    return json(res, 200, { object: 'list', data: [autoEntry, ...pool] });
+  }
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') return proxyCompletion(req, res);
   if (url.pathname.startsWith('/admin/api/') && !authorized(req, 'ADMIN_TOKEN')) {
     // 鉴权失败也限流（独立更严的桶）：否则 ADMIN_TOKEN 可被无限暴力破解

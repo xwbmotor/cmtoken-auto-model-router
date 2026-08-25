@@ -88,7 +88,7 @@ test('e2e 超时 fallback：attempt 1 超时不得污染 attempt 2（独立 cont
     assert.ok(await waitForHealth(port), 'server 启动超时');
     const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer any' },
-      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: '写一句问候' }] })
+      body: JSON.stringify({ messages: [{ role: 'user', content: '写一句问候' }] })
     });
     // v0.5.2 单例 controller：attempt 2 复用 aborted signal → fetch 立即抛 → 502。
     // v0.5.3 独立 controller：attempt 2 正常发出 → 200。
@@ -132,7 +132,7 @@ test('e2e 非流式客户端断开：写回前断开记失败不记成功（交�
   await held.release();
   try {
     assert.ok(await waitForHealth(port), 'server 启动超时');
-    const reqBody = JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: '写一句问候' }] });
+    const reqBody = JSON.stringify({ messages: [{ role: 'user', content: '写一句问候' }] });
     const sock = net.connect({ port, host: '127.0.0.1' });
     sock.on('error', () => {});
     sock.write(`POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Type: application/json\r\nAuthorization: Bearer any\r\nContent-Length: ${Buffer.byteLength(reqBody)}\r\nConnection: close\r\n\r\n${reqBody}`);

@@ -69,7 +69,7 @@ test('e2e strict：L3 分类调用打到 MaaS 的是服务端 Key，不是客户
     const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer router-secret-key-123' },
-      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: '这个东西到底是什么意思呢，帮我讲讲呗，我不太明白' }] })
+      body: JSON.stringify({ messages: [{ role: 'user', content: '这个东西到底是什么意思呢，帮我讲讲呗，我不太明白' }] })
     });
     assert.ok(r.ok, `auto 请求应 200，实际 ${r.status}`);
     await r.text();
@@ -127,7 +127,7 @@ test('e2e passthrough：L3 分类透传客户端 MaaS Key（四审行为不回�
     const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer tenant-maas-key-789' },
-      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: '这个东西到底是什么意思呢，帮我讲讲呗，我不太明白' }] })
+      body: JSON.stringify({ messages: [{ role: 'user', content: '这个东西到底是什么意思呢，帮我讲讲呗，我不太明白' }] })
     });
     assert.ok(r.ok);
     await r.text();

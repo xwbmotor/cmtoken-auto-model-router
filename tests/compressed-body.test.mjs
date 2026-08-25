@@ -53,7 +53,7 @@ test('压缩请求体：gzip/deflate/br 与复合编码均通过解析层（进�
   try {
     assert.ok(await waitForHealth(port), 'server 启动超时');
 
-    const payload = JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] });
+    const payload = JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] });
 
     // 1) plain 基线：进入路由（环境性 502/500，而非解析层 400 invalid JSON）
     const plain = await post(port, payload);
@@ -132,7 +132,7 @@ test('压缩请求体：解压炸弹防护——解压后超 50MB 上限按 400 
     const body = await res.json();
     assert.match(body.error.message, /解压后请求体超过/);
     // 进程存活：随后一个普通请求仍能正常处理
-    const follow = await post(port, JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] }));
+    const follow = await post(port, JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }));
     assert.equal(follow.status, 502);
   } finally {
     child.kill('SIGKILL');

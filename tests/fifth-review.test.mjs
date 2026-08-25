@@ -114,7 +114,7 @@ test('e2e 流式请求决策日志恰一条（requestId 唯一性）', async () 
       const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: 'Bearer k', 'x-session-id': `idem-${i}` },
-        body: JSON.stringify({ model: 'auto', stream: true, messages: [{ role: 'user', content: '写一句五个字的诗' }] })
+        body: JSON.stringify({ stream: true, messages: [{ role: 'user', content: '写一句五个字的诗' }] })
       });
       assert.ok(r.ok, `流式请求 ${i} 应 200`);
       await r.text(); // 读完整流（触发 close + end 双路径）

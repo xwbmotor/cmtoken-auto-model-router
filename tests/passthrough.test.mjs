@@ -43,7 +43,7 @@ test('passthrough：客户端 Authorization 原样转发上游 + 入口只查非
     assert.ok(healthy, 'server should be healthy');
 
     // 3a. 无 key → 401（缺 Authorization）
-    const noKey = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: '你好' }] }) });
+    const noKey = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: '你好' }] }) });
     assert.equal(noKey.status, 401);
 
     // 3b. 带租户 key → 200，且上游收到的就是调用方的 key（非 Bearer+服务端 key 拼接）
@@ -51,7 +51,7 @@ test('passthrough：客户端 Authorization 原样转发上游 + 入口只查非
     const ok = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${tenantKey}` },
-      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: '你好' }] })
+      body: JSON.stringify({ messages: [{ role: 'user', content: '你好' }] })
     });
     assert.equal(ok.status, 200, 'tenant key request should succeed');
     const payload = await ok.json();

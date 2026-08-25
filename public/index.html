@@ -45,6 +45,8 @@
           <label class="check"><input id="preferSelf" type="checkbox"><span class="lbl">满足质量要求时优先自建 <span class="help" data-help="勾选后自建模型额外加分，同等条件下优先用自建而非生态模型。">?</span></span></label>
           <label class="check"><input id="reasoningEnabled" type="checkbox"><span class="lbl">按难度自动调节思考深度 <span class="help" data-help="大模型回答前会先「思考」，思考越深质量越高但越慢越贵。开启后路由按难度自动带档位：复杂任务深思考、简单任务浅思考。仅对已实测验证过该参数的模型发送，其余模型不发送（避免上游报错）。">?</span></span></label>
           <label class="check"><input id="decisionLogEnabled" type="checkbox"><span class="lbl">记录决策日志 <span class="help" data-help="每次路由决策脱敏落盘（不记录密钥和完整对话），用于质量分析和标注集采集。">?</span></span></label>
+          <label><span class="lbl">Auto 对外模型名 <span class="help" data-help="客户端 model 参数的智能路由入口名（v0.8.4 默认「cmtoken-auto」，留空请求也走此入口）。修改后旧名立即 400——属硬切，需通知全部客户端同步改；不得与池内模型 ID 重名。">?</span></span><input id="autoModelId" type="text" placeholder="cmtoken-auto"></label>
+          <label><span class="lbl">模型发现列表 <span class="help" data-help="GET /v1/models 返回内容：auto-only=仅暴露智能路由入口（默认，客户端选择器只见一个模型）；all=附带池内全部启用模型（内部调试用）。不影响点名权限（allowExplicitModel）。">?</span></span><select id="exposeModelList"><option value="auto-only">仅 auto 入口（默认）</option><option value="all">含池内模型</option></select></label>
         </div>
       </div>
       <div class="policy-section">

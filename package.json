@@ -1,6 +1,6 @@
 {
   "name": "cmt-auto-model-router",
-  "version": "0.8.4",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "description": "OpenAI-compatible, self-hosted-first model auto router for China Mobile MaaS",

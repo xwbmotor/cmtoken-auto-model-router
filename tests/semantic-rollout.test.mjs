@@ -89,7 +89,7 @@ async function fire(port, { sessionId = null, requestId = null } = {}) {
   if (requestId) headers['x-request-id'] = requestId;
   const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
     method: 'POST', headers,
-    body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: LOW_CONF_PROMPT }] })
+    body: JSON.stringify({ messages: [{ role: 'user', content: LOW_CONF_PROMPT }] })
   });
   await r.text();
   return r;

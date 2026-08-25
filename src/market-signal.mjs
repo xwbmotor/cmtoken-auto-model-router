@@ -26,6 +26,7 @@ export class MarketSignal {
     this.coverage = {};       // { [task]: { total, active } } 每任务样本量与是否激活
     this.loadedAt = 0;
     this.refreshMs = options.refreshMs ?? 5 * 60 * 1000; // 内存缓存 5 分钟
+    this.autoModelId = 'auto'; // 十四审缺省：未调 updateConfig 时（如单测直接构造）按旧缺省名归并
   }
 
   updateConfig(config) {
@@ -35,6 +36,10 @@ export class MarketSignal {
     if (cfg.minSamplePerTask != null) this.minSamplePerTask = Number(cfg.minSamplePerTask);
     if (cfg.maxAdjust != null) this.maxAdjust = Number(cfg.maxAdjust);
     this.enabled = cfg.enabled !== false; // 默认开（样本不足自然休眠，无副作用）
+    // 十四审：auto 对外名可配（如「cmtoken-auto」）。requestedModel 判定按当前配置名归并——
+    // 硬切改名后的新日志落新名；旧日志（requestedModel='auto'）在该名与池内模型不重合时
+    // 会被视为 explicit——按窗口期滚动淘汰，不需要迁移数据。
+    this.autoModelId = (config.routing?.autoModelId && String(config.routing.autoModelId).trim()) || 'auto';
   }
 
   // 从决策日志重建信号表（惰性 + 定时刷新；决策日志开启时每次 rebuild 全量重算，窗口内数据量小）
@@ -52,7 +57,7 @@ export class MarketSignal {
       const task = d.analysis?.task;
       const model = outcome.model || d.selectedModel;
       if (!task || !model || task === 'explicit') continue; // 点名请求不进份额（但进 explicit 计数）
-      if (d.requestedModel && d.requestedModel !== 'auto') continue; // 点名请求单独计 explicit
+      if (d.requestedModel && d.requestedModel !== this.autoModelId) continue; // 点名请求单独计 explicit（十四审：按当前配置的 auto 名归并）
       const slot = byTask[task] ||= { total: 0, models: {} };
       slot.total += 1;
       const m = slot.models[model] ||= { n: 0, fails: 0, explicit: 0 };
@@ -64,7 +69,7 @@ export class MarketSignal {
       const at = Date.parse(row.at || '');
       if (!Number.isFinite(at) || at < since) continue;
       const d = row.decision || {};
-      if (!d.requestedModel || d.requestedModel === 'auto') continue;
+      if (!d.requestedModel || d.requestedModel === this.autoModelId) continue;
       // 点名请求在服务层 task 被记为 'explicit'，真实任务存于 decision.explicitTask（v0.5.1 起补记）；
       // 旧日志无该字段时跳过（宁缺毋滥）——否则 explicitBoost 恒为 0
       const task = d.explicitTask || (d.analysis?.task !== 'explicit' ? d.analysis?.task : null);

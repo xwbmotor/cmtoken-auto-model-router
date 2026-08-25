@@ -99,7 +99,7 @@ test('real server: rate limit 超限返回 429', async () => {
     const hj = await waitForHealth(port);
     assert.ok(hj, 'server 启动超时');
 
-    const body = JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] });
+    const body = JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] });
     const headers = { 'content-type': 'application/json', authorization: 'Bearer test-key' };
     // 前 2 个请求消耗 burst（走到上游失败，因为测试环境无 MAAS_API_KEY）
     await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', headers, body });

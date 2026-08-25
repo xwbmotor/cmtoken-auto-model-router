@@ -84,7 +84,9 @@ export function renderPrometheusMetrics(snapshot) {
   const judgeRows = ['sampled', 'qualityDone', 'taskCheckDone', 'errors', 'persistErrors'].map((k) => `router_judge_total{stage="${k}"} ${judge[k] || 0}`);
   metric(lines, 'router_judge_total', 'counter', 'Judge 异步 shadow 评分各阶段计数（不进在线决策闭环；sampled=抽样入选，errors 含解析失败，persistErrors=guard 状态持久化失败）', judgeRows);
   if (judge.tokens) metric(lines, 'router_judge_tokens_total', 'counter', 'Judge 调用累计 token（进程口径，自然日翻转；与每日上限对照请看 guard_* 系列）', [`router_judge_tokens_total ${judge.tokens}`]);
-  if (judge.gaugeCircuit) metric(lines, 'router_judge_circuit_state', 'gauge', 'Judge 熔断状态（0=closed 1=half-open 2=open）', [`router_judge_circuit_state ${judge.gaugeCircuit}`]);
+  // 十四审 P2：gauge 必须恒输出 0/1/2——closed(0) 时 if 短路会让整条指标消失，
+  // Prometheus 端 absent() 无法区分「正常」与「judge 模块被移除」，状态回退也测不出。
+  if (Number.isFinite(Number(judge.gaugeCircuit))) metric(lines, 'router_judge_circuit_state', 'gauge', 'Judge 熔断状态（0=closed 1=half-open 2=open；恒输出，closed 不是缺席）', [`router_judge_circuit_state ${Number(judge.gaugeCircuit)}`]);
   // 十三审 P1-2：guard 持久化口径（重启不重置）——预算对账以这组为准
   if (Number.isFinite(Number(judge.guardCalls))) {
     metric(lines, 'router_judge_guard_calls_today', 'gauge', 'Judge 当日已结算调用数（Guard 持久化口径，重启不重置；与 dailyMaxCalls 对照）', [`router_judge_guard_calls_today ${judge.guardCalls}`]);

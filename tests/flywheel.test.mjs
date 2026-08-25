@@ -61,14 +61,14 @@ test('飞轮：usage 捕获（流式 usage chunk 被切割成两半也能解析�
   await sleep(1500);
   try {
     // 1. 流式：客户端正常收到完整 SSE
-    const r1 = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer rk' }, body: JSON.stringify({ model: 'auto', stream: true, messages: [{ role: 'user', content: '复杂的长篇分析' }] }) });
+    const r1 = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer rk' }, body: JSON.stringify({ stream: true, messages: [{ role: 'user', content: '复杂的长篇分析' }] }) });
     assert.equal(r1.status, 200);
     const sse = await r1.text();
     assert.ok(sse.includes('[DONE]'), '流式应完整收到 [DONE]');
     assert.ok(sse.includes('"usage"'), '流式尾块应含 usage');
 
     // 2. 非流式
-    const r2 = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer rk' }, body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: '简单摘要' }] }) });
+    const r2 = await fetch(`http://127.0.0.1:${routerPort}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer rk' }, body: JSON.stringify({ messages: [{ role: 'user', content: '简单摘要' }] }) });
     assert.equal(r2.status, 200);
     const j2 = await r2.json();
     assert.equal(j2.usage.prompt_tokens, 80);
