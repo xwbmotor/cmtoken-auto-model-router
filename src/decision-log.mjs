@@ -9,6 +9,7 @@ const DEFAULTS = {
   maxFileBytes: 16 * 1024 * 1024,   //单文件 16MB
   maxFiles: 14,                     //最多保留 14 个轮转文件
   redactMessages: true,             //默认脱敏：不落盘完整用户消息
+  logAnswerText: false,             //回答原文落盘开关（与 redactMessages 独立；数据留存期开）
   filePrefix: 'decisions'           //泛化事件流前缀（semantic-reviews 复用同一套轮转/串行写）
 };
 
@@ -80,7 +81,15 @@ export class DecisionLog {
   }
 
   redact(body) {
-    if (!this.options.redactMessages) return body;
+    // 数据留存模式（redactMessages=false）：消息原文全量落盘（content 完整字符串），
+    // 供离线训练取数；非文本 content 统一标注 [non-text] 保持行结构可解析。
+    if (!this.options.redactMessages) {
+      const messages = (body?.messages || []).map((message, index) => {
+        const content = typeof message?.content === 'string' ? message.content : '[non-text]';
+        return { index, role: message?.role, chars: content.length, content };
+      });
+      return { model: body?.model, stream: Boolean(body?.stream), max_tokens: body?.max_tokens, messages };
+    }
     const messages = (body?.messages || []).map((message, index) => {
       const content = typeof message?.content === 'string' ? message.content : '[non-text]';
       return { index, role: message?.role, chars: content.length, head: content.slice(0, 160) };

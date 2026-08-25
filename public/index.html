@@ -44,7 +44,9 @@
           <label><span class="lbl">Auto 生效流量 <span class="help" data-help="灰度比例——N% 的 auto 请求采用路由建议，其余仍走固定兜底模型。">?</span></span><output id="trafficValue"></output><input id="activeTrafficPercent" type="range" min="0" max="100" step="5"></label>
           <label class="check"><input id="preferSelf" type="checkbox"><span class="lbl">满足质量要求时优先自建 <span class="help" data-help="勾选后自建模型额外加分，同等条件下优先用自建而非生态模型。">?</span></span></label>
           <label class="check"><input id="reasoningEnabled" type="checkbox"><span class="lbl">按难度自动调节思考深度 <span class="help" data-help="大模型回答前会先「思考」，思考越深质量越高但越慢越贵。开启后路由按难度自动带档位：复杂任务深思考、简单任务浅思考。仅对已实测验证过该参数的模型发送，其余模型不发送（避免上游报错）。">?</span></span></label>
-          <label class="check"><input id="decisionLogEnabled" type="checkbox"><span class="lbl">记录决策日志 <span class="help" data-help="每次路由决策脱敏落盘（不记录密钥和完整对话），用于质量分析和标注集采集。">?</span></span></label>
+          <label class="check"><input id="decisionLogEnabled" type="checkbox"><span class="lbl">记录决策日志 <span class="help" data-help="每次路由决策落盘（不记录密钥），用于质量分析和标注集采集。">?</span></span></label>
+          <label class="check"><input id="logFullRequest" type="checkbox"><span class="lbl">请求原文留存 <span class="help" data-help="数据留存模式：消息原文全量落盘（content 完整字符串，替代默认 160 字符截断），供离线训练取数。注意：开启后用户对话内容明文存于 data/decisions/，用毕即关。">?</span></span></label>
+          <label class="check"><input id="logAnswerText" type="checkbox"><span class="lbl">回答原文留存 <span class="help" data-help="模型回答正文（非流式 message.content / 流式增量拼接）落盘到决策日志 outcome.answerText，与请求留存相互独立。训练数据采集期开启，用毕即关。">?</span></span></label>
           <label><span class="lbl">Auto 对外模型名 <span class="help" data-help="客户端 model 参数的智能路由入口名（「cmtoken-auto」，留空请求也走此入口）。修改后旧名立即 400——属硬切，需通知全部客户端同步改；不得与池内模型 ID 重名。">?</span></span><input id="autoModelId" type="text" placeholder="cmtoken-auto"></label>
           <label><span class="lbl">模型发现列表 <span class="help" data-help="GET /v1/models 返回内容：auto-only=仅暴露智能路由入口（默认，客户端选择器只见一个模型）；all=附带池内全部启用模型（内部调试用）。不影响点名权限（allowExplicitModel）。">?</span></span><select id="exposeModelList"><option value="auto-only">仅 auto 入口（默认）</option><option value="all">含池内模型</option></select></label>
         </div>

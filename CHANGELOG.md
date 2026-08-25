@@ -2,6 +2,11 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.9.6] - 2026-08-25
+
+### 功能
+- 数据留存模式（训练数据采集期）：`decisionLog.redactMessages=false` 请求原文全量落盘；`decisionLog.logAnswerText=true` 回回答原文落 `outcome.answerText`（流式/非流式两条交付路径，256KB 上限）。两开关独立、热更新；管理页新增「请求原文留存/回答原文留存」；默认均关闭（保持脱敏）
+
 ## [0.9.5] - 2026-08-25
 
 ### 规范化

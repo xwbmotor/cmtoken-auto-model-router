@@ -161,6 +161,7 @@ export function validateConfig(config) {
     if (typeof config.decisionLog.dirPath !== 'string' || !config.decisionLog.dirPath) throw new Error('decisionLog.dirPath 必须是非空字符串');
     if (config.decisionLog.maxFiles !== undefined && (!Number.isInteger(Number(config.decisionLog.maxFiles)) || Number(config.decisionLog.maxFiles) < 1)) throw new Error('decisionLog.maxFiles 必须是正整数');
     if (config.decisionLog.redactMessages !== undefined && typeof config.decisionLog.redactMessages !== 'boolean') throw new Error('decisionLog.redactMessages 必须是布尔值');
+    if (config.decisionLog.logAnswerText !== undefined && typeof config.decisionLog.logAnswerText !== 'boolean') throw new Error('decisionLog.logAnswerText 必须是布尔值（回答原文落盘开关）');
   }
   if (config.rateLimit) {
     if (typeof config.rateLimit.enabled !== 'boolean') throw new Error('rateLimit.enabled 必须是布尔值');

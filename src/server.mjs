@@ -2134,7 +2134,13 @@ async function proxyCompletion(req, res) {
 
     requestLogWritten = true;
 
-    decisionLog.write({ sessionFingerprint: sessionFingerprintOf(req.headers['x-session-id']), requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, outcome);
+    // 数据留存：回答原文入决策日志（logAnswerText 开时；judgeCtx.answerText 为交付路径
+    // 提取的纯正文——非流式 choices[0].message.content / 流式 SSE delta 拼接）
+    const retainedOutcome = decisionLog.options?.logAnswerText && judgeCtx.answerText
+      ? { ...outcome, answerText: String(judgeCtx.answerText).slice(0, 262144) }
+      : outcome;
+
+    decisionLog.write({ sessionFingerprint: sessionFingerprintOf(req.headers['x-session-id']), requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, retainedOutcome);
 
     // judge：异步 shadow 评分钩子（内部自带 enabled/抽样/护栏闸，失败静默不影响任何路径）
 
