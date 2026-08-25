@@ -125,6 +125,12 @@ export function validateConfig(config) {
     }
   }
   // v0.8.0 Judge：异步 shadow 评分器（十审边界：只离线评分，不进在线决策闭环）
+  // v0.8.1 十二审 P1-5：judge 是付费调用，事件流必须可审计——judge 开 + 决策日志关
+  // 的组合直接拒绝（judge 流启停虽已独立于 decisionLog.enabled，但决策行与评审事件的
+  // requestId 关联依赖决策日志；两者都关会导致评分调用无审计链）。
+  if (config.judge?.enabled === true && config.decisionLog?.enabled === false) {
+    throw new Error('judge.enabled=true 时 decisionLog.enabled 不得为 false——评审事件需与决策行按 requestId 关联审计（十二审 P1）');
+  }
   if (config.judge) {
     if (typeof config.judge.enabled !== 'boolean') throw new Error('judge.enabled 必须是布尔值');
     const jm = config.judge.model;
@@ -137,6 +143,11 @@ export function validateConfig(config) {
     if (config.judge.dailyMaxTokens !== undefined && (!Number.isInteger(Number(config.judge.dailyMaxTokens)) || Number(config.judge.dailyMaxTokens) < 1)) throw new Error('judge.dailyMaxTokens 必须是正整数（每日 token 上限，成本护栏）');
     if (config.judge.circuitThreshold !== undefined && (!Number.isInteger(Number(config.judge.circuitThreshold)) || Number(config.judge.circuitThreshold) < 1)) throw new Error('judge.circuitThreshold 必须是正整数（连续失败熔断阈值）');
     if (config.judge.cooldownMs !== undefined && (!Number.isInteger(Number(config.judge.cooldownMs)) || Number(config.judge.cooldownMs) < 1000)) throw new Error('judge.cooldownMs 必须是 ≥1000 的整数（熔断冷却毫秒）');
+    if (config.judge.redactPatterns !== undefined) {
+      if (!Array.isArray(config.judge.redactPatterns) || config.judge.redactPatterns.some((x) => typeof x !== 'string' || !x)) throw new Error('judge.redactPatterns 必须是非空字符串数组（发送评审模型前的脱敏正则）');
+      for (const x of config.judge.redactPatterns) { try { new RegExp(x); } catch (e) { throw new Error(`judge.redactPatterns 含非法正则 ${JSON.stringify(x)}：${e.message}`); } }
+    }
+    if (config.judge.guardStatePath !== undefined && (typeof config.judge.guardStatePath !== 'string' || !config.judge.guardStatePath)) throw new Error('judge.guardStatePath 必须是非空字符串（预算/熔断状态持久化文件路径）');
   }
   if (config.decisionLog) {
     if (typeof config.decisionLog.enabled !== 'boolean') throw new Error('decisionLog.enabled 必须是布尔值');

@@ -53,10 +53,17 @@ const gate = {
   onTag: Boolean(git.tag),
   tagMatchesVersion: git.tag === tagExpected,
 };
-const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion;
+// v0.8.1 十二审 P2：供应链证据进门禁——镜像 ID 与 OCI revision 非空且 revision==HEAD，
+// 否则报告不能标 validForRelease（tag 可变，sha256 摘要+revision 才绑定 build 产物）。
+const images = {
+  routerImageId: collect(() => execSync(`docker images --no-trunc --format "{{.ID}}" cmt-auto-model-router:${pkg.version}`, { encoding: 'utf8' }).trim() || null),
+  routerLabelsRevision: collect(() => execSync(`docker inspect --format "{{ index .Config.Labels \\"org.opencontainers.image.revision\\" }}" cmt-auto-model-router:${pkg.version}`, { encoding: 'utf8' }).trim() || null),
+};
+gate.imageEvidence = Boolean(images.routerImageId) && Boolean(images.routerLabelsRevision) && images.routerLabelsRevision === git.commit;
+const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence;
 if (!validForRelease && !allowDirty) {
   console.error('[test:release] 发布证据链门禁未过：' + JSON.stringify({ ...gate, tag: git.tag, tagExpected, dirtyCount: git.dirty.length }));
-  console.error('  正式发布流程：代码+compose 同 commit → git tag v{ver} → 干净 worktree 跑 npm run test:release。');
+  console.error('  正式发布流程：代码+compose 同 commit → docker build --build-arg GIT_REVISION=<HEAD> → git tag v{ver} → 干净 worktree 跑 npm run test:release。');
   console.error('  开发调试可加 --allow-dirty（报告标记 validForRelease=false，不作为发布证据）。');
   process.exit(3);
 }
@@ -94,10 +101,7 @@ child.on('exit', (code, signal) => {
     git,
     // 十一审建议：记录本地镜像 image ID——tag 是可变的，image ID（sha256 摘要）才与 build 产物
     // 密码学绑定。云端部署后 docker inspect 对照，验证「运行镜像确实对应本报告」。
-    images: {
-      routerImageId: collect(() => execSync(`docker images --no-trunc --format "{{.ID}}" cmt-auto-model-router:${pkg.version}`, { encoding: 'utf8' }).trim() || null),
-      routerLabelsRevision: collect(() => execSync(`docker inspect --format "{{ index .Config.Labels \\"org.opencontainers.image.revision\\" }}" cmt-auto-model-router:${pkg.version}`, { encoding: 'utf8' }).trim() || null),
-    },
+    images,
     config: { path: 'config/router.json', sha256: configSha256 },
     strict: 'AMR_TEST_STRICT_SKIP=1（任何 skip 视为失败）',
     logTail: out.split(/\r?\n/).slice(-40).join('\n'),
@@ -116,6 +120,7 @@ child.on('exit', (code, signal) => {
   if (!gate.clean) console.error(`[test:release] worktree 不干净（${git.dirty.length} 处）${allowDirty ? '——--allow-dirty 降级，报告不可作发布证据' : ''}`);
   if (!gate.onTag) console.error('[test:release] HEAD 无 exact tag——报告对应的 commit 不是发布 tag。');
   else if (!gate.tagMatchesVersion) console.error(`[test:release] tag ${git.tag} 与 package.json ${tagExpected} 不一致。`);
+  if (!gate.imageEvidence) console.error(`[test:release] 镜像证据不完整或 revision 不等于 HEAD（imageId=${images.routerImageId}, revision=${images.routerLabelsRevision}, HEAD=${git.commit}）——先 docker build --build-arg GIT_REVISION=${git.commit} 。`);
   if (code === 0 && validForRelease) {
     console.log(`\n[test:release] 全量通过（含 replay，无 skip）且发布证据链完整（tag=${git.tag}）。`);
     console.log('[test:release] 注意：报告不提交回 tag——作为 Release Artifact 归档（reports/ 目录已被协议排除）。');

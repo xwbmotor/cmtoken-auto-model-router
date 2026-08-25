@@ -46,7 +46,22 @@ function mockUpstream({ judgeBehavior = 'good' } = {}) {
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 100, completion_tokens: 40, total_tokens: 140 } }));
       }
-      // 业务回答
+      // 业务回答（stream=true 时回 SSE——验证 v0.8.1 正文提取：judge 应收到纯正文而非原始 SSE）
+      let parsed = null;
+      try { parsed = JSON.parse(body); } catch { /* ignore */ }
+      if (parsed && parsed.stream === true) {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        const events = [
+          { choices: [{ delta: { role: 'assistant' } }] },
+          { choices: [{ delta: { content: '这是流式' } }] },
+          { choices: [{ delta: { content: '业务回答内容' } }] },
+          { choices: [{ delta: {}, finish_reason: 'stop' }] },
+        ];
+        for (const e of events) res.write(`data: ${JSON.stringify(e)}\n\n`);
+        res.write(`data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":10,"total_tokens":30}}\n\n`);
+        res.write('data: [DONE]\n\n');
+        return res.end();
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ choices: [{ message: { content: '这是业务回答内容' } }], usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } }));
     });
@@ -59,20 +74,29 @@ const baseConfig = JSON.parse(await readFile(new URL('../config/router.json', im
 async function startRouter({ env }) {
   const held = await holdPort();
   const port = held.port;
+  // v0.8.1 十二审 P2：不再 stdio:'ignore'——捕获 stderr/stdout 尾部，启动失败时打印，
+  // 避免「judgeCtx ReferenceError 被当环境问题」的假故障重演（十一审教训）。
+  let childLog = '';
   const child = spawn(process.execPath, ['src/server.mjs'], {
     env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', ADMIN_TOKEN: 'adm', METRICS_TOKEN: 'met', ...env },
-    cwd: process.cwd(), stdio: 'ignore'
+    cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe']
   });
+  child.stdout.on('data', (c) => { childLog += c; childLog = childLog.slice(-8000); });
+  child.stderr.on('data', (c) => { childLog += c; childLog = childLog.slice(-8000); });
   await held.release();
-  if (!(await waitForHealth(port))) { child.kill(); throw new Error('server 启动超时'); }
+  if (!(await waitForHealth(port))) {
+    child.kill();
+    const tail = childLog.split(/\r?\n/).slice(-40).join('\n');
+    throw new Error(`server 启动超时——子进程输出尾部：\n${tail || '(无输出)'}`);
+  }
   return { child, port };
 }
 
-async function fire(port, { sessionId = 'judge-sess-1' } = {}) {
+async function fire(port, { sessionId = 'judge-sess-1', stream = false } = {}) {
   const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer k', 'x-session-id': sessionId },
-    body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: '写一段冒泡排序的 Python 代码' }] })
+    body: JSON.stringify({ model: 'auto', stream, messages: [{ role: 'user', content: '写一段冒泡排序的 Python 代码' }] })
   });
   await r.text();
   return r;
@@ -113,7 +137,8 @@ async function setupCase({ judgeOver, judgeBehavior = 'good' }) {
 test('e2e judge 100% 抽样：quality+taskCheck 事件落盘、指纹脱敏、judge 上游被调', async () => {
   const { workDir, upstream, seen, child, port } = await setupCase({ judgeOver: { enabled: true, samplePercent: 100, model: 'judge-model-x', taskCheckEnabled: true } });
   try {
-    const r = await fire(port);
+    // v0.8.1 十二审 P1-1：走流式路径——验证 judge 输入是 SSE 提取后的纯正文
+    const r = await fire(port, { stream: true });
     assert.equal(r.status, 200, '主请求必须正常（judge 不影响在线路径）');
     const events = await waitEvents(workDir, (ev) => ev.some((e) => e.event === 'quality'));
     const q = events.find((e) => e.event === 'quality');
@@ -131,6 +156,12 @@ test('e2e judge 100% 抽样：quality+taskCheck 事件落盘、指纹脱敏、ju
     assert.ok(!rawAll.includes('judge-sess-1'), '原始 session id 不得出现在 judge 事件流');
     assert.ok(q.answeredModel, '事件记录被评的回答模型');
     assert.ok(seen.some((s) => s.body.includes(JUDGE_MARK) && s.body.includes('冒泡排序')), 'judge 调用应带原始问题打到 mock 上游');
+    // P1-1 核心断言：judge 收到的回答必须是纯正文——不含 SSE 协议行、[DONE]、usage、信封 JSON 键
+    const judgeCall = seen.find((s) => s.body.includes(JUDGE_MARK));
+    assert.ok(judgeCall, '应存在 judge 调用');
+    assert.ok(judgeCall.body.includes('这是流式业务回答内容'), 'judge 输入应含 SSE delta.content 拼接的纯正文');
+    assert.ok(!judgeCall.body.includes('[DONE]'), 'judge 输入不得含 [DONE] 协议行');
+    assert.ok(!judgeCall.body.includes('completion_tokens'), 'judge 输入不得含 usage 信封字段');
   } finally { child.kill(); upstream.close(); }
 });
 

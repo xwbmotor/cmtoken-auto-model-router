@@ -6,6 +6,8 @@ import {
   shouldSampleJudge, buildJudgeMessages, buildTaskCheckMessages, parseJudgeJson,
   normalizeScore, normalizeDimension, normalizeVerdict, randomAbOrder,
   JudgeGuard, callJudgeModel, judgePromptHash, JUDGE_RUBRIC_VERSION,
+  JUDGE_TASK_ENUM, normalizeSuggestedTask, looksLikeQualityVerdict, isValidTaskCheckVerdict,
+  extractNonStreamAnswerText, createAnswerCollector, compileRedactPatterns, redactText,
 } from '../src/judge.mjs';
 
 const SECRET = Buffer.from('x'.repeat(43), 'utf8');
@@ -73,8 +75,8 @@ test('rubric prompt：hash 稳定、版本字段存在、提示词含四维度�
 });
 
 test('taskCheck 提示词：携带判定与编码表', () => {
-  const msgs = buildTaskCheckMessages({ messages: [{ role: 'user', content: '帮我写 SQL' }], predictedTask: 'sql', predictedTier: 'balanced' });
-  assert.match(msgs[1].content, /task=sql tier=balanced/);
+  const msgs = buildTaskCheckMessages({ messages: [{ role: 'user', content: '帮我写 SQL' }], routeTask: 'coding', subTask: 'sql', predictedTier: 'balanced' });
+  assert.match(msgs[1].content, /routeTask=coding subTask=sql tier=balanced/);
   assert.match(msgs[0].content, /task_agree/);
 });
 
@@ -86,48 +88,104 @@ test('A/B 顺序随机：两种顺序都能出，且可注入确定性随机源'
   assert.deepEqual(randomAbOrder(() => 0.1), ['A', 'B']);
 });
 
-test('JudgeGuard：每日调用/token 双预算 + 自然日翻转', () => {
+test('JudgeGuard：每日调用/token 双预算（reserve 预占制）+ 自然日翻转', () => {
   let t = Date.UTC(2026, 7, 25, 1);
   const g = new JudgeGuard({ dailyMaxCalls: 2, dailyMaxTokens: 1000, now: () => t });
-  assert.equal(g.canCall().ok, true);
-  g.recordCall(600); g.recordCall(100);
-  assert.equal(g.canCall().reason, 'daily_calls_exhausted');
+  const r1 = g.reserve({ estTokens: 100 });
+  assert.equal(r1.ok, true);
+  g.settle(r1.handle, { tokens: 600, ok: true });
+  const r2 = g.reserve({ estTokens: 100 });
+  g.settle(r2.handle, { tokens: 100, ok: true });
+  assert.equal(g.reserve().reason, 'daily_calls_exhausted');
   t += 86400000; // 次日
-  assert.equal(g.canCall().ok, true, '跨日应重置');
+  assert.equal(g.reserve().ok, true, '跨日应重置');
   const g2 = new JudgeGuard({ dailyMaxCalls: 100, dailyMaxTokens: 500, now: () => t });
-  g2.recordCall(501);
-  assert.equal(g2.canCall().reason, 'daily_tokens_exhausted');
+  const r3 = g2.reserve({ estTokens: 400 });
+  assert.equal(r3.ok, true);
+  g2.settle(r3.handle, { tokens: 501, ok: true }); // 实际消耗超出预估，按实际结算
+  assert.equal(g2.reserve().reason, 'daily_tokens_exhausted', '实际 token 已超上限，后续一律拦');
 });
 
-test('JudgeGuard：连续失败熔断 → 冷却后半开试探（一次失败再开，成功关闭）', () => {
+test('JudgeGuard：并发预占不穿透——N 个并发 reserve 在 await 期间全部计数', () => {
+  const g = new JudgeGuard({ dailyMaxCalls: 3, now: () => 1000 });
+  const held = [g.reserve(), g.reserve(), g.reserve()];
+  assert.ok(held.every((r) => r.ok), '前三个应全部预占成功');
+  assert.equal(g.reserve().reason, 'daily_calls_exhausted', '第 4 个并发必须被拦（旧 canCall 制会穿透）');
+  g.release(held[2].handle);
+  assert.equal(g.reserve().ok, true, 'release 退还名额');
+  g.settle(held[0].handle, { tokens: 10, ok: true });
+  assert.equal(g.settle(held[0].handle, { tokens: 10, ok: true }), false, '重复 settle 必须拒绝');
+});
+
+test('JudgeGuard：在途 token 预估占用预算（防 token 穿透）', () => {
+  const g = new JudgeGuard({ dailyMaxCalls: 100, dailyMaxTokens: 1000, now: () => 1000 });
+  const r1 = g.reserve({ estTokens: 800 });
+  assert.ok(r1.ok);
+  assert.equal(g.reserve({ estTokens: 800 }).reason, 'daily_tokens_exhausted', '在途预估也要占预算（800+800>1000 拦截）');
+  g.settle(r1.handle, { tokens: 300, ok: true }); // 实际只用了 300，多占额度退回
+  const r2 = g.reserve({ estTokens: 700 }); // 300+700=1000 ≤ 1000 放行
+  assert.ok(r2.ok, '结算后退回多占的额度');
+  g.settle(r2.handle, { tokens: 300, ok: true });
+  assert.equal(g.reserve({ estTokens: 500 }).reason, 'daily_tokens_exhausted', '600 已用+500 预估超限拦截');
+});
+
+test('JudgeGuard：连续失败熔断 → 冷却后半开单探针（失败再开，成功关闭）', () => {
   let t = 1000000;
   const g = new JudgeGuard({ circuitThreshold: 3, cooldownMs: 1000, now: () => t });
-  g.recordFailure(); g.recordFailure();
-  assert.equal(g.canCall().ok, true, '未到阈值不熔断');
-  g.recordFailure();
-  assert.equal(g.canCall().reason, 'circuit_open');
+  const a1 = g.reserve(); g.settle(a1.handle, { ok: false });
+  const a2 = g.reserve(); g.settle(a2.handle, { ok: false });
+  const a3 = g.reserve();
+  assert.equal(a3.ok, true, '两败未到阈值不熔断');
+  g.settle(a3.handle, { ok: false }); // 第三败 → open
+  assert.equal(g.reserve().reason, 'circuit_open');
   t += 500;
-  assert.equal(g.canCall().reason, 'circuit_open', '冷却未到仍 open');
+  assert.equal(g.reserve().reason, 'circuit_open', '冷却未到仍 open');
   t += 600; // 过冷却
-  assert.equal(g.canCall().ok, true, '冷却后 half-open 放行试探');
-  g.recordFailure(); // 半开试探失败
-  assert.equal(g.canCall().reason, 'circuit_open', '半开失败回 open');
+  const probe = g.reserve();
+  assert.equal(probe.ok, true, '冷却后 half-open 放行试探');
+  assert.equal(g.reserve().reason, 'circuit_open', '半开期间第二个并发请求必须被拦（单探针）');
+  g.settle(probe.handle, { ok: false }); // 半开试探失败
+  assert.equal(g.reserve().reason, 'circuit_open', '半开失败回 open');
   t += 1001;
-  assert.equal(g.canCall().ok, true);
-  g.recordSuccess(); // 半开成功
+  const probe2 = g.reserve();
+  g.settle(probe2.handle, { ok: true }); // 半开成功
   assert.equal(g.snapshot().circuit, 'closed');
   assert.equal(g.snapshot().consecutiveFailures, 0);
+});
+
+test('JudgeGuard：persist/restore——重启恢复当日用量与熔断态，跨日归零', () => {
+  const states = [];
+  let t = Date.UTC(2026, 7, 25, 1);
+  const g = new JudgeGuard({ dailyMaxCalls: 10, circuitThreshold: 3, now: () => t, persist: (s) => states.push(s) });
+  const r1 = g.reserve(); g.settle(r1.handle, { tokens: 500, ok: true });
+  const r2 = g.reserve(); g.settle(r2.handle, { ok: false });
+  const r3 = g.reserve(); g.settle(r3.handle, { ok: false });
+  const r4 = g.reserve(); g.settle(r4.handle, { ok: false });
+  const saved = g.snapshot();
+  assert.equal(saved.circuit, 'open', '三连败应熔断');
+  const g2 = new JudgeGuard({ dailyMaxCalls: 10, circuitThreshold: 3, now: () => t });
+  g2.restore(states.at(-1));
+  const after = g2.snapshot();
+  assert.equal(after.calls, saved.calls, '重启后当日调用数不重置');
+  assert.equal(after.tokens, saved.tokens, '重启后当日 token 不重置');
+  assert.equal(after.circuit, 'open', '重启后熔断态保留');
+  assert.notEqual(g2.reserve().ok, true, '重启后熔断期间仍拦');
+  t += 86400000;
+  assert.equal(g2.reserve().ok, true, '跨日恢复');
 });
 
 test('JudgeGuard.updateLimits：热更新上限不清当日用量/熔断态', () => {
   let t = 1000000;
   const g = new JudgeGuard({ dailyMaxCalls: 10, now: () => t });
-  g.recordCall(0); g.recordCall(0);
+  const r1 = g.reserve(); g.settle(r1.handle, { tokens: 0, ok: true });
+  const r2 = g.reserve(); g.settle(r2.handle, { tokens: 0, ok: true });
   g.updateLimits({ dailyMaxCalls: 1 }); // 上限降到 1，已用 2
-  assert.equal(g.canCall().reason, 'daily_calls_exhausted', '已超新上限仍拦');
-  g.recordFailure(); g.recordFailure(); g.recordFailure();
+  assert.equal(g.reserve().reason, 'daily_calls_exhausted', '已超新上限仍拦');
+  g.updateLimits({ dailyMaxCalls: 999 }); // 再放宽，制造两次失败 settle
+  const f1 = g.reserve(); g.settle(f1.handle, { ok: false });
+  const f2 = g.reserve(); g.settle(f2.handle, { ok: false });
   g.updateLimits({ dailyMaxCalls: 999 });
-  assert.equal(g.snapshot().calls, 2, 'updateLimits 不得清零用量');
+  assert.equal(g.snapshot().calls, 4, 'updateLimits 不得清零用量');
 });
 
 test('callJudgeModel：ok 路径带 usage/latency，非 200 报错，超时 abort', async () => {
@@ -159,4 +217,99 @@ test('pair 评审 prompt：order 决定槽位呈现顺序，labels 随槽位标�
   assert.ok(aLabel < slotA, '槽位A 标注的应是 model-b');
   assert.match(msgs[1].content, /model-a/);
   assert.match(msgs[0].content, /verdict/);
+});
+
+// ─── v0.8.1 十二审修复面用例 ───
+const CHARS_NN = String.fromCharCode(10, 10);
+
+
+test('正文提取（非流式）：解析 choices[0].message.content，兼容多段数组；信封字段不入正文', () => {
+  const env = JSON.stringify({ id: 'chatcmpl-1', object: 'chat.completion', model: 'glm-4.7', choices: [{ index: 0, message: { role: 'assistant', content: '回答正文第一句。回答正文第二句。' }, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } });
+  const t = extractNonStreamAnswerText(env);
+  assert.equal(t, '回答正文第一句。回答正文第二句。');
+  assert.ok(!t.includes('total_tokens'), '正文不得混入 usage');
+  // 多段 content（vision 风格）
+  const multi = JSON.stringify({ choices: [{ message: { content: [{ type: 'text', text: '甲' }, { type: 'text', text: '乙' }] } }] });
+  assert.equal(extractNonStreamAnswerText(multi), '甲乙');
+  // 坏输入
+  assert.equal(extractNonStreamAnswerText('not json'), null);
+  assert.equal(extractNonStreamAnswerText('{}'), null);
+  assert.equal(extractNonStreamAnswerText(''), null);
+});
+
+test('正文提取（流式 SSE）：delta.content 增量拼接，协议行/usage/[DONE]/reasoning 不入正文；chunk 边界切分多字节字符安全', () => {
+  const c = createAnswerCollector(65536);
+  const ev1 = 'data: ' + JSON.stringify({ choices: [{ delta: { role: 'assistant' } }] }) + '\n\n';
+  const ev2 = 'data: ' + JSON.stringify({ choices: [{ delta: { content: '你好' } }] }) + '\n\n';
+  const ev3 = 'data: ' + JSON.stringify({ choices: [{ delta: { content: '，世界' } }] }) + '\n\n';
+  const usage = 'data: ' + JSON.stringify({ choices: [], usage: { total_tokens: 99 } }) + '\n\n';
+  const done = 'data: [DONE]\n\n';
+  // 故意按字节中间切断（多字节中文跨 chunk）
+  const whole = Buffer.from(ev1 + ev2 + ev3 + usage + done);
+  const cut = Math.floor(whole.length * 0.4);
+  c.push(whole.subarray(0, cut));
+  c.push(whole.subarray(cut));
+  const t = c.text();
+  assert.equal(t, '你好，世界');
+  assert.ok(!t.includes('total_tokens') && !t.includes('DONE') && !t.includes('data:'), '协议噪音不得入正文');
+  // reasoning 字段（思考型模型）不混入
+  const c2 = createAnswerCollector(65536);
+  c2.push(Buffer.from('data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: '思考中' } }] }) + '\n\n'));
+  c2.push(Buffer.from('data: ' + JSON.stringify({ choices: [{ delta: { content: '正文' } }] }) + '\n\n'));
+  assert.equal(c2.text(), '正文');
+  // undici 真实场景：chunk 是纯 Uint8Array（toString 无编码参数）——必须入口 Buffer 化
+  const cU = createAnswerCollector(65536);
+  const raw = Buffer.from('data: ' + JSON.stringify({ choices: [{ delta: { content: 'Uint8Array 边界' } }] }) + CHARS_NN);
+  const arr = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+  cU.push(arr);
+  assert.equal(cU.text(), 'Uint8Array 边界');
+  // 64KB 软上限
+  const c3 = createAnswerCollector(10);
+  c3.push(Buffer.from('data: ' + JSON.stringify({ choices: [{ delta: { content: '0123456789ABCDEF' } }] }) + '\n\n'));
+  assert.equal(c3.text().length, 10, '软上限截断');
+});
+
+test('分类契约：JUDGE_TASK_ENUM 与路由大类一致；suggested_task 枚举校验；task_agree 必须布尔', () => {
+  assert.deepEqual(JUDGE_TASK_ENUM, ['coding', 'reasoning', 'creative', 'extraction', 'agent', 'default']);
+  assert.equal(normalizeSuggestedTask('coding'), 'coding');
+  assert.equal(normalizeSuggestedTask('sql'), null, 'sql 是 subTask 细类，不得作为路由大类建议');
+  assert.equal(normalizeSuggestedTask('EXPLICIT'), null);
+  assert.equal(normalizeSuggestedTask(null), null);
+  assert.equal(isValidTaskCheckVerdict({ task_agree: true, reason: '对' }), true);
+  assert.equal(isValidTaskCheckVerdict({ task_agree: 'true' }), false, '字符串 true 不是布尔');
+  assert.equal(isValidTaskCheckVerdict({}), false);
+  assert.equal(isValidTaskCheckVerdict(null), false);
+});
+
+test('taskCheck 提示词 v2：呈现 routeTask/subTask 区分、大类编码表、不含 subTask 细类判定', () => {
+  const msgs = buildTaskCheckMessages({ messages: [{ role: 'user', content: '帮我写 SQL' }], routeTask: 'extraction', subTask: 'sql', predictedTier: 'balanced' });
+  assert.match(msgs[1].content, /routeTask=extraction subTask=sql tier=balanced/);
+  assert.match(msgs[0].content, /coding\/reasoning\/creative\/extraction\/agent\/default/);
+  assert.doesNotMatch(msgs[0].content, /编码表[^\n]*sql/, '大类编码表行不得混入 subTask 细类');
+});
+
+test('空 verdict 拦截：{} / null / 缺四维 不算评分成功', () => {
+  assert.equal(looksLikeQualityVerdict({}), false);
+  assert.equal(looksLikeQualityVerdict(null), false);
+  assert.equal(looksLikeQualityVerdict({ overall_comment: '只有总评' }), false, '只有 overall_comment 不算有效 verdict');
+  assert.equal(looksLikeQualityVerdict({ correctness: { score: 8 } }), true);
+  assert.equal(looksLikeQualityVerdict({ instruction_following: { score: 9 } }), true);
+  assert.equal(looksLikeQualityVerdict({ completeness: { score: null, verifiable: false } }), true, '维度存在即有效（值可缺失）');
+});
+
+test('redactPatterns：compile + 替换，非法正则静默跳过', () => {
+  const pats = compileRedactPatterns(['sk-[A-Za-z0-9]{8,}', '[bad regex']);
+  assert.equal(pats.length, 1, '非法正则跳过');
+  const out = redactText('key 是 sk-abc12345xyz 请保密', pats);
+  assert.equal(out, 'key 是 [REDACTED] 请保密');
+  assert.equal(redactText(null, pats), null);
+  assert.equal(redactText('普通文本', []), '普通文本');
+});
+
+test('buildJudgeMessages：redactors 作用于用户消息与回答正文', () => {
+  const pats = compileRedactPatterns(['密码是 \\d+']);
+  const msgs = buildJudgeMessages({ messages: [{ role: 'user', content: '密码是 123456' }], answerText: '你的密码是 654321', redactors: pats });
+  assert.ok(msgs[1].content.includes('[REDACTED]'));
+  assert.ok(!msgs[1].content.includes('123456'));
+  assert.ok(!msgs[1].content.includes('654321'));
 });

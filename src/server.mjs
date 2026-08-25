@@ -1,14 +1,15 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { extname, join, normalize } from 'node:path';
+import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { loadConfig, projectRoot, saveConfig, validateConfig } from './config.mjs';
 import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice, recommendReasoningLevel } from './router.mjs';
 import { resolveModelScope, scopeIntersectsConfig, scopeAllows, scopeCacheStats } from './model-scope.mjs';
 import { classifySemantically, shouldUseSemanticRouter } from './semantic-router.mjs';
 // v0.8.0 Judge：异步 shadow 评分器（独立事件流 judge-reviews；十审边界：不进在线决策闭环）
-import { shouldSampleJudge, buildJudgeMessages, buildTaskCheckMessages, parseJudgeJson, normalizeDimension, normalizeVerdict, randomAbOrder, JudgeGuard, callJudgeModel, judgePromptHash, JUDGE_RUBRIC_VERSION } from './judge.mjs';
+// v0.8.1 十二审：正文提取/预占闸/分类契约/独立开关/状态持久化/redact
+import { shouldSampleJudge, buildJudgeMessages, buildTaskCheckMessages, parseJudgeJson, normalizeDimension, normalizeVerdict, randomAbOrder, JudgeGuard, callJudgeModel, judgePromptHash, JUDGE_RUBRIC_VERSION, JUDGE_TASK_ENUM, normalizeSuggestedTask, looksLikeQualityVerdict, isValidTaskCheckVerdict, extractNonStreamAnswerText, createAnswerCollector, compileRedactPatterns, redactText } from './judge.mjs';
 import { BudgetTracker, estimateCostYuan } from './budget.mjs';
 import { FeedbackLog } from './feedback.mjs';
 import { DecisionLog } from './decision-log.mjs';
@@ -38,15 +39,34 @@ const decisionLog = await DecisionLog.create(projectRoot, config);
 // 事件按 requestId 关联决策日志，shadow 观察期数据重启不再丢。
 const semanticLog = await DecisionLog.create(projectRoot, { decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } });
 // v0.8.0：judge 事件流（第三条独立流——与决策/语义复核隔离，只写不改）
-const judgeLog = await DecisionLog.create(projectRoot, { decisionLog: { ...(config.decisionLog || {}), filePrefix: 'judge-reviews' } });
-const judgeGuard = new JudgeGuard(config.judge || {});
+// v0.8.1 十二审 P1-5：judge 流启停独立于 decisionLog.enabled——付费调用必须留审计，
+// 「judge 开 + 决策日志关」导致评分调用无落盘的漏洞已堵（config 校验层双保险）。
+const judgeLog = await DecisionLog.create(projectRoot, { decisionLog: { ...(config.decisionLog || {}), enabled: Boolean(config.judge?.enabled), filePrefix: 'judge-reviews' } });
+// v0.8.1 十二审 P1-2：JudgeGuard 状态持久化——重启恢复当日用量与熔断态，预算不再被重启重置。
+const judgeGuardStatePath = resolve(projectRoot, config.judge?.guardStatePath || './data/judge-guard-state.json');
+const judgeGuard = new JudgeGuard({ ...(config.judge || {}), persist: (s) => { try { mkdirSync(dirname(judgeGuardStatePath), { recursive: true }); writeFileSync(judgeGuardStatePath, JSON.stringify(s)); } catch { /* 状态文件写失败不阻断评分 */ } } });
+if (existsSync(judgeGuardStatePath)) {
+  try { judgeGuard.restore(JSON.parse(readFileSync(judgeGuardStatePath, 'utf8'))); } catch { /* 损坏状态按空起步 */ }
+  logger.info('judge_guard_restored', { day: judgeGuard.snapshot().day, calls: judgeGuard.snapshot().calls, tokens: judgeGuard.snapshot().tokens, circuit: judgeGuard.snapshot().circuit });
+}
 // v0.8.0：judge 指标（进程级；/metrics 暴露。sampled 在入选时+1，完成/错误在管线内+1）
-const judgeCounters = { sampled: 0, qualityDone: 0, taskCheckDone: 0, errors: 0, tokens: 0, gaugeCircuit: 0 };
-function judgeBump(k, n = 1) { judgeCounters[k] = (judgeCounters[k] || 0) + n; }
+// v0.8.1 十二审 P2：judgeCounters 增加自然日翻转（与 JudgeGuard 同口径 UTC 日），管理页
+// 「今日用量」不再显示进程累计——重启清零但运行期间口径正确，且 guard 状态有磁盘账。
+const judgeCounters = { day: null, sampled: 0, qualityDone: 0, taskCheckDone: 0, errors: 0, tokens: 0, gaugeCircuit: 0 };
+function judgeBump(k, n = 1) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (judgeCounters.day !== today) { judgeCounters.day = today; judgeCounters.sampled = 0; judgeCounters.qualityDone = 0; judgeCounters.taskCheckDone = 0; judgeCounters.errors = 0; judgeCounters.tokens = 0; }
+  judgeCounters[k] = (judgeCounters[k] || 0) + n;
+}
+// v0.8.1 十二审 P1-5 修复面：judge.enabled 热更/重载时同步 judgeLog 启停（独立开关语义）
+function judgeLogUpdate() { judgeLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), enabled: Boolean(config.judge?.enabled), filePrefix: 'judge-reviews' } }); }
 const judgeRuntime = {
   get enabled() { return Boolean(config.judge?.enabled); },
 };
 // fire-and-forget judge 管线入口：请求完成后异步评分（绝不 await 在响应路径上）
+// v0.8.1 十二审：①正文提取在交付路径完成（judgeCtx.answerText 已是纯正文）
+// ②reserve→settle 预占闸（quality 与 taskCheck 各自 reserve，预算不穿透）
+// ③taskCheck 只核路由大类（explicit 请求跳过）④空 verdict 不计成功 ⑤redactPatterns 脱敏
 function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, sessionIdRaw, semanticAssessment }) {
   try {
     if (!judgeRuntime.enabled) return;
@@ -54,27 +74,29 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
     const jc = config.judge;
     if (!shouldSampleJudge(requestId, jc.samplePercent, semanticBucketSecret)) return;
     judgeBump('sampled');
-    if (!answerText || !String(answerText).trim()) return; // 无回答文本（空流/纯 tool call）不评
+    if (!answerText || !String(answerText).trim()) return; // 无回答正文（空流/纯 tool call/信封解析失败）不评
+    const redactors = compileRedactPatterns(jc.redactPatterns);
     const task = trackSemanticTask((async () => {
       const at = new Date().toISOString();
-      const gate = judgeGuard.canCall();
-      if (!gate.ok) {
-        judgeLog.writeRaw({ at, v: 1, requestId, event: 'skipped', reason: gate.reason });
+      // —— 预占闸（P1-2）：await 上游前原子预占——并发请求不再穿透每日预算
+      const rq = judgeGuard.reserve({ estTokens: 8000 });
+      if (!rq.ok) {
+        judgeLog.writeRaw({ at, v: 1, requestId, event: 'skipped', reason: rq.reason });
         return;
       }
       const base = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl).replace(/\/$/, '');
       const apiKey = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
-      if (!apiKey) { judgeLog.writeRaw({ at, v: 1, requestId, event: 'skipped', reason: 'no_api_key' }); return; }
+      if (!apiKey) { judgeGuard.release(rq.handle); judgeLog.writeRaw({ at, v: 1, requestId, event: 'skipped', reason: 'no_api_key' }); return; }
       const model = jc.model;
       const common = { model, baseUrl: base, apiKey, timeoutMs: Number(jc.timeoutMs) || 60000, fetchImpl: fetch };
       // ① 质量评分（单份）
-      const q = await callJudgeModel({ ...common, messages: buildJudgeMessages({ messages: body.messages, answerText }) });
-      if (!q.ok) { judgeGuard.recordFailure(); judgeBump('errors'); judgeLog.writeRaw({ at, v: 1, requestId, event: 'error', stage: 'quality', error: q.error, latencyMs: q.latencyMs }); return; }
-      judgeGuard.recordCall(q.usage?.total_tokens || 0);
+      const q = await callJudgeModel({ ...common, messages: buildJudgeMessages({ messages: body.messages, answerText, redactors }) });
+      if (!q.ok) { judgeGuard.settle(rq.handle, { ok: false }); judgeBump('errors'); judgeLog.writeRaw({ at, v: 1, requestId, event: 'error', stage: 'quality', error: q.error, latencyMs: q.latencyMs }); return; }
       const parsed = parseJudgeJson(q.text);
-      if (!parsed) { judgeGuard.recordFailure(); judgeBump('errors'); judgeLog.writeRaw({ at, v: 1, requestId, event: 'error', stage: 'quality_parse', latencyMs: q.latencyMs }); return; }
-      judgeGuard.recordSuccess();
-      judgeBump('qualityDone'); judgeCounters.tokens += q.usage?.total_tokens || 0;
+      // 空 verdict（{}）不算成功：四维全 missing 不得计入 qualityDone（P2）
+      if (!parsed || !looksLikeQualityVerdict(parsed)) { judgeGuard.settle(rq.handle, { ok: false }); judgeBump('errors'); judgeLog.writeRaw({ at, v: 1, requestId, event: 'error', stage: 'quality_parse', latencyMs: q.latencyMs }); return; }
+      judgeGuard.settle(rq.handle, { tokens: q.usage?.total_tokens || 0, ok: true });
+      judgeBump('qualityDone'); judgeBump('tokens', q.usage?.total_tokens || 0);
       const quality = {
         correctness: normalizeDimension(parsed.correctness),
         instruction_following: normalizeDimension(parsed.instruction_following),
@@ -85,21 +107,34 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
       const judgeEvent = {
         at, v: 1, requestId, event: 'quality', rubricVersion: JUDGE_RUBRIC_VERSION, rubricHash: judgePromptHash(),
         judgeModel: model,
-        answeredModel: outcome.model, task: decision?.analysis?.task, tier: decision?.analysis?.tier,
+        answeredModel: outcome.model, task: decision?.analysis?.task, subTask: decision?.analysis?.subTask ?? null, tier: decision?.analysis?.tier,
         sessionFingerprint: sessionFingerprintOf(sessionIdRaw),
         quality, usage: q.usage, latencyMs: q.latencyMs,
       };
-      // ② 分类核对（task_agree）——独立第二次调用，与质量分分开落
-      if (jc.taskCheckEnabled) {
-        const t = await callJudgeModel({ ...common, messages: buildTaskCheckMessages({ messages: body.messages, predictedTask: decision?.analysis?.task, predictedTier: decision?.analysis?.tier }) });
-        if (t.ok) {
-          judgeGuard.recordCall(t.usage?.total_tokens || 0);
-          const tp = parseJudgeJson(t.text);
-          if (tp) {
-            judgeEvent.taskCheck = { agree: tp.task_agree === true, reason: String(tp.reason || '').slice(0, 80) || null, suggested: tp.suggested_task || null, latencyMs: t.latencyMs };
-            judgeBump('taskCheckDone'); judgeCounters.tokens += t.usage?.total_tokens || 0;
-          } else judgeEvent.taskCheck = { agree: null, reason: 'parse_failed', latencyMs: t.latencyMs };
-        } else { judgeGuard.recordFailure(); judgeBump('errors'); }
+      // ② 分类核对（task_agree）——独立第二次调用，与质量分分开落。
+      // 只核路由大类枚举；显式模型请求（routeMethod='explicit'）没有路由判定，跳过核对。
+      const routeMethod = decision?.analysis?.routeMethod;
+      if (jc.taskCheckEnabled && routeMethod !== 'explicit') {
+        // taskCheck 单独预占（P1-2：第二次调用不再绕过预算闸）
+        const rt = judgeGuard.reserve({ estTokens: 2000 });
+        if (rt.ok) {
+          const t = await callJudgeModel({ ...common, messages: buildTaskCheckMessages({ messages: body.messages, routeTask: decision?.analysis?.task, subTask: decision?.analysis?.subTask, predictedTier: decision?.analysis?.tier, redactors }) });
+          if (t.ok) {
+            const tp = parseJudgeJson(t.text);
+            // task_agree 必须是布尔（P1-3：枚举/形状校验，防 'true' 字符串等脏值）
+            if (tp && isValidTaskCheckVerdict(tp)) {
+              judgeGuard.settle(rt.handle, { tokens: t.usage?.total_tokens || 0, ok: true });
+              judgeEvent.taskCheck = { agree: tp.task_agree === true, reason: String(tp.reason || '').slice(0, 80) || null, suggested: normalizeSuggestedTask(tp.suggested_task), latencyMs: t.latencyMs };
+              judgeBump('taskCheckDone'); judgeBump('tokens', t.usage?.total_tokens || 0);
+            } else {
+              judgeGuard.settle(rt.handle, { ok: false }); // 形状不对视作失败（熔断计数）
+              judgeEvent.taskCheck = { agree: null, reason: 'parse_failed', latencyMs: t.latencyMs };
+              judgeBump('errors');
+            }
+          } else { judgeGuard.settle(rt.handle, { ok: false }); judgeBump('errors'); }
+        } else {
+          judgeEvent.taskCheck = { agree: null, reason: rt.reason === 'circuit_open' ? 'circuit_open' : 'budget', latencyMs: null };
+        }
       }
       judgeLog.writeRaw(judgeEvent);
     })());
@@ -1045,7 +1080,10 @@ async function proxyCompletion(req, res) {
   let requestLogWritten = false;
   // v0.8.0 judge：请求级上下文。answerText 由两条交付路径（非流式 res.end 前 / 流式落账前）
   // 填充（64KB 软上限），writeOutcomeLog 首次落账时交给异步 judge 管线（fire-and-forget）。
-  const judgeCtx = { answerText: null };
+  // v0.8.1 十二审 P1-1：answerText 存的是【纯正文】——非流式经 extractNonStreamAnswerText
+  // 解析 choices[0].message.content；流式经 SSE 收集器增量提取 delta.content。Judge 不再见
+  // 响应信封（usage/chunk JSON/data:/[DONE]）。解析失败 → null → 评分跳过（评信封不如不评）。
+  const judgeCtx = { answerText: null, collector: createAnswerCollector(65536) };
   const writeOutcomeLog = (outcome) => {
     if (requestLogWritten) return;
     requestLogWritten = true;
@@ -1225,7 +1263,7 @@ async function proxyCompletion(req, res) {
         delivery.log = { entry: logEntry, outcome: usage ? { ...logOutcome, usage, actualCostYuan: usage.prompt != null && usage.completion != null ? computeActualCostFromUsage(usage, selectedConfig) : logOutcome.actualCostYuan } : logOutcome };
         delivery.delivered = true;
         delivery.guardActive = true;
-        judgeCtx.answerText = String(responseText || '').slice(0, 65536); // v0.8.0 judge
+        judgeCtx.answerText = extractNonStreamAnswerText(responseText); // v0.8.1 十二审 P1-1：纯正文（非原始 JSON 信封）
         clearTimeout(timer); return void res.end(responseText);
       }
       // 流式：逐块转发（背压安全），并从 SSE 尾块提取 usage（飞轮：实际 token 消耗）
@@ -1234,15 +1272,17 @@ async function proxyCompletion(req, res) {
       const tailChunks = []; let tailBytes = 0;
       const trimTail = () => { if (tailBytes > 8192) { const merged = Buffer.concat(tailChunks).subarray(-4096); tailChunks.length = 0; tailChunks.push(merged); tailBytes = merged.length; } };
       // v0.8.0 judge：流式回答全文累积（软上限 64KB——超过即截断保留头部，防长流撑内存）
-      const judgeChunks = []; let judgeBytes = 0;
+      // v0.8.1 十二审 P1-1：不再累积原始 SSE 字节——SSE 收集器逐块解析 delta.content，
+      // judge 拿到的是纯正文（usage/[DONE]/chunk JSON 不再进评分输入）
       for await (const chunk of upstream.body) {
         if (body.stream === true) armTimer(); // 流式闲置超时：有数据流动就续命
         if (!res.write(chunk)) await new Promise((resolve) => res.once('drain', resolve));
         tailChunks.push(Buffer.from(chunk)); tailBytes += chunk.length; trimTail();
-        if (judgeBytes < 65536) { judgeChunks.push(Buffer.from(chunk)); judgeBytes += chunk.length; }
+        judgeCtx.collector.push(chunk); // 字节边界安全（只在 \n 切行，UTF-8 多字节序列不含 0x0a）
       }
       const sseTail = Buffer.concat(tailChunks).toString('utf8');
       if (isStream && !usage) usage = extractUsage('text/event-stream', sseTail);
+      judgeCtx.answerText = judgeCtx.collector.text(); // 交付路径终点取纯正文（收集器全程在转发循环外喂——见下方 push 调用点）
       // v0.5.4 修四审 P1：流式成功不再在上游迭代完成时立即落账（原实现 markOutcome(true) 在
       // res.end() 前——只证明上游完整，不证明客户端收完尾部数据）。改为 res.end() 回调后落账。
       // 时序陷阱（首轮实现踩中）：undici 客户端收完 body 会立即关连接，close 事件可抢在
@@ -1253,7 +1293,7 @@ async function proxyCompletion(req, res) {
       delivery.log = { entry: logEntry, outcome: usage ? { ...logOutcome, usage, actualCostYuan: usage.prompt != null && usage.completion != null ? computeActualCostFromUsage(usage, selectedConfig) : logOutcome.actualCostYuan } : logOutcome };
       delivery.delivered = true;
       delivery.guardActive = true;
-      judgeCtx.answerText = Buffer.concat(judgeChunks).toString('utf8').slice(0, 65536); // v0.8.0 judge
+      // v0.8.1 十二审 P1-1：answerText 已在转发循环后由 collector.text() 提取（上一行），此处无需再赋值
       const streamDone = new Promise((resolve) => res.end(() => resolve()));
       await streamDone;
       markOutcome(true);
@@ -1471,7 +1511,7 @@ const server = http.createServer(async (req, res) => {
       const next = await readJson(req);
       // v0.7.2 八审 P1：热切 active 前置校验——缺 secret 拒绝落盘（返回 4xx 让运营改 .env 后重启）
       assertSemanticBucketSecretForMode(next?.semanticRouter?.mode);
-      config = await saveConfig(next); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); judgeLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'judge-reviews' } }); judgeGuard.updateLimits(config.judge || {}); return json(res, 200, config);
+      config = await saveConfig(next); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); judgeLogUpdate(); judgeGuard.updateLimits(config.judge || {}); return json(res, 200, config);
     }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
   }
@@ -1751,7 +1791,7 @@ function subCategoryOf(task, subTask) {
     try {
       const next = await loadConfig();
       assertSemanticBucketSecretForMode(next.semanticRouter?.mode);
-      config = next; budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); judgeLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'judge-reviews' } }); judgeGuard.updateLimits(config.judge || {}); return json(res, 200, { ok: true, version: config.version });
+      config = next; budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); judgeLogUpdate(); judgeGuard.updateLimits(config.judge || {}); return json(res, 200, { ok: true, version: config.version });
     }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
   }
@@ -1792,7 +1832,7 @@ const shutdownManager = createShutdownManager({
         new Promise((r) => setTimeout(r, 8000)),
       ]);
     }
-    await Promise.allSettled([decisionLog.writeChain, semanticLog.writeChain, budgetTracker.pendingWrite]);
+    await Promise.allSettled([decisionLog.writeChain, semanticLog.writeChain, judgeLog.writeChain, budgetTracker.pendingWrite]);
   },
 });
 installCrashHandlers(logger);
