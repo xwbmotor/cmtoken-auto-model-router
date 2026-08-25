@@ -527,6 +527,17 @@ const rateLimiter = createRateLimiter({ rpm: Number(config.rateLimit?.rpm ?? 120
 
 const adminAuthLimiter = createRateLimiter({ rpm: 10, burst: 10 });
 
+// v0.9.3 管理端登录会话：ADMIN_TOKEN 换 HttpOnly cookie（2h 空闲 / 12h 绝对上限）；Bearer 依旧兼容脚本调用。
+const adminSessions = new Map(); // sid -> { lastSeen, absExpires }
+const ADMIN_SESSION_IDLE_MS = 2 * 60 * 60 * 1000;
+const ADMIN_SESSION_ABS_MS = 12 * 60 * 60 * 1000;
+const ADMIN_SESSION_COOKIE = 'amr_admin_session';
+function parseCookies(req) { const out = {}; const raw = req.headers.cookie; if (!raw) return out; for (const part of raw.split(';')) { const i = part.indexOf('='); if (i > 0) out[part.slice(0, i).trim()] = part.slice(i + 1).trim(); } return out; }
+function getAdminSession(req) { const sid = parseCookies(req)[ADMIN_SESSION_COOKIE]; if (!sid || !adminSessions.has(sid)) return null; const sess = adminSessions.get(sid); const now = Date.now(); if (now - sess.lastSeen > ADMIN_SESSION_IDLE_MS || now > sess.absExpires) { adminSessions.delete(sid); return null; } sess.lastSeen = now; return sess; }
+function authorizedAdmin(req) { if (!process.env.ADMIN_TOKEN) return true; if (safeEqual(req.headers.authorization, `Bearer ${process.env.ADMIN_TOKEN}`)) return true; return getAdminSession(req) != null; }
+// 会话表定期清扫（防长期积累）
+setInterval(() => { const now = Date.now(); for (const [sid, sess] of adminSessions) { if (now - sess.lastSeen > ADMIN_SESSION_IDLE_MS || now > sess.absExpires) adminSessions.delete(sid); } }, 10 * 60 * 1000).unref();
+
 
 const health = {};
 
@@ -4253,7 +4264,17 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') return proxyCompletion(req, res);
 
 
-  if (url.pathname.startsWith('/admin/api/') && !authorized(req, 'ADMIN_TOKEN')) {
+  // v0.9.3：登录端点自身不能要求已登录（先有鸡后有蛋）；其余 /admin/api/* 接受 Bearer 或会话 cookie
+  if (req.method === 'POST' && url.pathname === '/admin/api/login') {
+    const verdict = adminAuthLimiter.check('admin-login:' + (req.socket.remoteAddress || 'unknown'));
+    if (!verdict.allowed) return json(res, 429, { error: { message: '登录尝试过于频繁，请稍后再试', type: 'rate_limit_exceeded', code: 429 } }, { 'retry-after': String(Math.ceil(verdict.retryAfterMs / 1000)) });
+    try { const body = await readJson(req); if (!safeEqual(`Bearer ${body.token}`, `Bearer ${process.env.ADMIN_TOKEN}`) && !(process.env.ADMIN_TOKEN && safeEqual(body.token, process.env.ADMIN_TOKEN))) return errorJson(res, 401, 'Admin Token 无效', 'authentication_error'); const sid = randomBytes(32).toString('hex'); const now = Date.now(); adminSessions.set(sid, { lastSeen: now, absExpires: now + ADMIN_SESSION_ABS_MS }); return json(res, 200, { ok: true, expiresInMs: ADMIN_SESSION_IDLE_MS }, { 'set-cookie': `${ADMIN_SESSION_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(ADMIN_SESSION_ABS_MS / 1000)}` }); } catch { return errorJson(res, 400, '请求体必须是 JSON', 'invalid_request_error'); }
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/logout') {
+    const sid = parseCookies(req)[ADMIN_SESSION_COOKIE]; if (sid) adminSessions.delete(sid);
+    return json(res, 200, { ok: true }, { 'set-cookie': `${ADMIN_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0` });
+  }
+  if (url.pathname.startsWith('/admin/api/') && !authorizedAdmin(req)) {
 
 
     // 鉴权失败也限流（独立更严的桶）：否则 ADMIN_TOKEN 可被无限暴力破解
@@ -5560,6 +5581,10 @@ function subCategoryOf(task, subTask) {
   }
 
 
+  // v0.9.3 管理页登录门：index/app.js 无会话一律回登录页（样式与手册放行——登录页也需要）；API 调用不受影响
+  if (req.method === 'GET' && ['/index.html', '/', '/app.js', '/manual.html'].includes(url.pathname) && !authorizedAdmin(req)) {
+    return staticFile('/login.html', res);
+  }
   if (req.method === 'GET' && await staticFile(url.pathname, res)) return;
 
 
