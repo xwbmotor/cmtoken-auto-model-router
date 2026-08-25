@@ -1,8 +1,8 @@
-// Judge 上游通道秘密存储（v0.9.2）：管理端可配 judge 端点+key，独立落 data/judge-secret.json。
+// Judge 上游通道秘密存储：管理端可配 judge 端点+key，独立落 data/judge-secret.json。
 // 安全边界（与 config/judge 分离的原因）：
-//   1. key 永不进 config/router.json——GET /admin/api/config 永远带不出 key；
-//   2. GET 只回 masked 视图（apiKeySet + 末4位预览），不回明文；
-//   3. 原子写（tmp+rename），损坏文件容错返回 null（judge 退化 skipped:no_api_key，不影响业务）。
+// 1. key 永不进 config/router.json——GET /admin/api/config 永远带不出 key；
+// 2. GET 只回 masked 视图（apiKeySet + 末4位预览），不回明文；
+// 3. 原子写（tmp+rename），损坏文件容错返回 null（judge 退化 skipped:no_api_key，不影响业务）。
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -24,7 +24,7 @@ export class JudgeSecretStore {
     if (!baseUrl || !apiKey) throw new Error('judge secret 需要 baseUrl 与 apiKey');
     mkdirSync(dirname(this.path), { recursive: true });
     const tmp = `${this.path}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ baseUrl: baseUrl.replace(/\/$/, ''), apiKey }, null, 2), { mode: 0o600 }); // 十四审 P1：密钥文件仅运行用户可读写
+    writeFileSync(tmp, JSON.stringify({ baseUrl: baseUrl.replace(/\/$/, ''), apiKey }, null, 2), { mode: 0o600 }); // 
     renameSync(tmp, this.path);
   }
   clear() {

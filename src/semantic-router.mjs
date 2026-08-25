@@ -1,13 +1,13 @@
 // 语义复核：provider 分发层。
 // 合同：所有评估器（自训练小模型 / 轻量大模型 / 未来其他）都返回同一份 assessment：
-//   { task, tier, complexity, confidence, reason }
+// { task, tier, complexity, confidence, reason }
 // provider 由 config.semanticRouter.provider 选择：
-//   - openai-chat：现有行为，用 chat-completions 模型 + 分类 prompt（向后兼容：无 provider 字段且有 model 时默认）
-//   - http-json  ：POST 到自训练小模型的 HTTP 端点，直接返回合同 JSON
-//   - cascade    ：级联复核——先问自训练小模型；小模型失败或自身置信度不足时升级 MaaS 大模型；
-//                  大模型也不行才把错误抛给调用方（由上层退回规则层决策）。
-//                  成本逻辑：大部分请求小模型能定，只有拿不准的少数才付大模型的调用成本。
-//   - disabled   ：不复核（等价 semanticRouter.enabled=false，显式声明用）
+// - openai-chat：现有行为，用 chat-completions 模型 + 分类 prompt（向后兼容：无 provider 字段且有 model 时默认）
+// - http-json ：POST 到自训练小模型的 HTTP 端点，直接返回合同 JSON
+// - cascade ：级联复核——先问自训练小模型；小模型失败或自身置信度不足时升级 MaaS 大模型；
+// 大模型也不行才把错误抛给调用方（由上层退回规则层决策）。
+// 成本逻辑：大部分请求小模型能定，只有拿不准的少数才付大模型的调用成本。
+// - disabled ：不复核（等价 semanticRouter.enabled=false，显式声明用）
 import { classifierText, requestText } from './router.mjs';
 
 const ALLOWED_TASKS = new Set(['default', 'coding', 'reasoning', 'creative', 'extraction']);
@@ -22,7 +22,7 @@ export function semanticProvider(config) {
 export function shouldUseSemanticRouter(analysis, body, config) {
   const policy = config.semanticRouter;
   if (!policy?.enabled || semanticProvider(config) === 'disabled') return false;
-  // v0.6.1 五审 P2：文本口径统一（L2/L3 与 L1 同口径）——分类输入不再包含 system/assistant
+  // ——分类输入不再包含 system/assistant
   const text = classifierText(body).trim();
   if (text.length < Number(policy.minCharacters || 12)) return false;
   return analysis.confidence < Number(policy.confidenceThreshold ?? 0.7);
@@ -56,10 +56,10 @@ async function classifyViaOpenAIChat(body, config, options) {
   if (!chat.model) throw new Error('openai-chat 评估器缺少模型配置');
   const base = (options.baseUrl || config.upstreamBaseUrl).replace(/\/$/, '');
   if (!options.apiKey) throw new Error('语义分类器缺少上游 API Key');
-  // v0.6.1 五审 P2：分类文本与 L1 同口径（user 为主，排除 system/assistant）——原 requestText
+  // ——原 requestText
   // 会把 system 提示与 assistant 历史代码一并送分类，系统性拽向 coding
   const text = classifierText(body).slice(-Number(policy.maxInputCharacters || 6000));
-  // v0.6.0：携带前级判断（cascade 升级时）。大模型复核不是盲判——小模型结论作为参照意见
+  // 大模型复核不是盲判——小模型结论作为参照意见
   // 注入 prompt，明确「仅参考，可同意可推翻」；证明有效性的最终标准是决策日志对比。
   const prior = options.priorAssessment ? `\n\n小模型初判（仅参考，可同意可推翻）：{"task":"${options.priorAssessment.task}","tier":"${options.priorAssessment.tier}","confidence":${options.priorAssessment.confidence},"reason":"${(options.priorAssessment.reason || '').slice(0, 80)}"}` : '';
   const prompt = `你是模型路由分类器，只判断任务，不回答用户问题。\n\n任务类型只能是：default、coding、reasoning、creative、extraction。任务类型 task 含义：default=通用问答；coding=要求产出/修改/调试代码；reasoning=多步推理、方案权衡、根因分析；creative=创作文案故事；extraction=结构化提取转换。\n难度只能是：simple、balanced、complex。complexity 是 0 到 1；confidence 是你对分类的置信度。\n复杂架构、多目标权衡、长链条推理应提高难度；寒暄、直接事实、简单格式转换应降低难度。\n复杂任务低估的风险高于简单任务高估，证据不足时适度向上取整。\n注意：用户说「不要代码」时不是 coding；「什么是 X」概念解释、对已有材料的总结/翻译是 default 或 extraction，不是材料所属领域任务的请求。\n${prior}\n\n严格只输出 JSON：{"task":"...","tier":"...","complexity":0.0,"confidence":0.0,"reason":"不超过80字"}\n\n用户请求：\n${text}`;
@@ -82,7 +82,6 @@ async function classifyViaOpenAIChat(body, config, options) {
     if (!response.ok) throw new Error(`语义分类器返回 HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
     const payload = await response.json();
     const assessment = parseSemanticAssessment(payload?.choices?.[0]?.message?.content);
-    // v0.6.1 五审 P1：提取大模型分类调用的真实 usage（原实现只取 choices——L3 升级产生的
     // 真实 token 费用从未进预算台账，shadow 阶段是「真实付费但不改路由」的隐藏成本）
     const u = payload?.usage;
     const overheadUsage = (u && Number.isFinite(u.prompt_tokens) && Number.isFinite(u.completion_tokens))
@@ -102,7 +101,6 @@ async function classifyViaHttpJson(body, config, options) {
   const endpoint = policy.httpJson || {};
   const url = process.env.SEMANTIC_CLASSIFIER_URL || endpoint.url;
   if (!url) throw new Error('http-json 评估器缺少 url 配置');
-  // v0.6.1 五审 P2：同 openai-chat——分类文本与 L1 同口径（user 为主，排除 system/assistant）
   const text = classifierText(body).slice(-Number(policy.maxInputCharacters || 6000));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('语义分类器超时')), Number(endpoint.timeoutMs || policy.timeoutMs || 2000));
@@ -123,12 +121,12 @@ async function classifyViaHttpJson(body, config, options) {
 }
 
 // —— provider: cascade（小模型 → 大模型级联） ——
-// v0.6.0 三阈值语义拆分（四审：原 minConfidence 同时承担「升级线」与「采纳线」两语义）：
-//   - smallAcceptThreshold（cascade 内）：小模型 confidence ≥ 此值直接采纳，否则升级大模型。
-//     默认 0.7；兼容回退：未配置时读 minConfidence（0.5 旧默认语义=升级线），都无则 0.7。
-//   - finalAdoptionThreshold（server 层，见 resolveAutoDecision）：语义复核最终结果的采纳线，
-//     低于它退回规则层决策。默认读 minConfidence ?? 0（= 旧行为：一律采纳）。
-//   minConfidence 保留为兼容别名，不再承担新语义；新配置只用上面两个明确命名的字段。
+// 三阈值语义拆分：
+// - smallAcceptThreshold（cascade 内）：小模型 confidence ≥ 此值直接采纳，否则升级大模型。
+// 默认 0.7；兼容回退：未配置时读 minConfidence（0.5 旧默认语义=升级线），都无则 0.7。
+// - finalAdoptionThreshold（server 层，见 resolveAutoDecision）：语义复核最终结果的采纳线，
+// 低于它退回规则层决策。默认读 minConfidence ?? 0（= 旧行为：一律采纳）。
+// minConfidence 保留为兼容别名，不再承担新语义；新配置只用上面两个明确命名的字段。
 export function resolveSmallAcceptThreshold(policy = {}) {
   if (policy.smallAcceptThreshold !== undefined) return Number(policy.smallAcceptThreshold);
   if (policy.minConfidence !== undefined && Number(policy.minConfidence) > 0) return Number(policy.minConfidence);
@@ -152,19 +150,17 @@ export async function classifyViaCascade(body, config, options) {
     return { ...small, cascade: { level: 'small', acceptThreshold, latencyMs: smallLatencyMs, smallLatencyMs, largeLatencyMs: null, totalLatencyMs: smallLatencyMs } };
   }
   // 第二级：升级 MaaS 大模型（小模型挂了兜底 / 小模型拿不准复核）。
-  // v0.6.0：prompt 携带小模型判断（四审：原实现 smallAttempt 仅事后补日志元数据，
   // 大模型看不到小模型结论，复核等于盲判）；大模型挂时若小模型有产出则降级返回小模型
   // （degraded-small，由 server 按 finalAdoptionThreshold 决定采纳或退回规则层），双挂才抛。
   let escalated;
   const largeStarted = Date.now();
-  let largeLatencyMs = 0; // v0.7.1：提前定义——catch 分支也要计入 L3 失败等待时间
+  let largeLatencyMs = 0; // 
   try {
     escalated = await classifyViaOpenAIChat(body, config, { ...options, priorAssessment: small || null });
     largeLatencyMs = Date.now() - largeStarted;
   } catch (largeError) {
     largeLatencyMs = Date.now() - largeStarted;
     if (small) {
-      // v0.7.1 七审 P1-3：降级路径的耗时=small+L3失败等待（超时可达 timeoutMs 量级）。
       // 原实现 latencyMs=smallLatencyMs 把 L3 白等的时间丢了——运营会严重低估 active 附加时延。
       const degradedTotalMs = smallLatencyMs + largeLatencyMs;
       return {
@@ -179,7 +175,7 @@ export async function classifyViaCascade(body, config, options) {
     throw merged;
   }
   const totalLatencyMs = smallLatencyMs + largeLatencyMs;
-  // v0.7.1 七审 P1-3：三字段全量落盘（small/large/total），主指标=totalLatencyMs（级联真实附加时延）
+  // 主指标=totalLatencyMs（级联真实附加时延）
   const meta = { escalatedFrom: 'http-json', cascade: { level: 'large', acceptThreshold, latencyMs: largeLatencyMs, smallLatencyMs, largeLatencyMs, totalLatencyMs } };
   if (small) meta.smallAttempt = { task: small.task, tier: small.tier, confidence: small.confidence, latencyMs: smallLatencyMs };
   if (smallError) meta.smallError = String(smallError.message).slice(0, 200);

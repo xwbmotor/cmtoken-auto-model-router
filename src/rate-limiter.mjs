@@ -3,10 +3,10 @@
 // 桶按需创建，10 分钟未用自动清理，避免内存泄漏。
 
 export function createRateLimiter({ rpm = 120, burst = rpm } = {}) {
-  let refillRate = rpm / 60000;      // tokens per millisecond
+  let refillRate = rpm / 60000; // tokens per millisecond
   let capacity = burst;
-  const buckets = new Map();          // key -> { tokens, lastRefill }
-  const idleMs = 10 * 60 * 1000;      // 10 分钟未访问的桶自动清理
+  const buckets = new Map(); // key -> { tokens, lastRefill }
+  const idleMs = 10 * 60 * 1000; // 10 分钟未访问的桶自动清理
 
   function check(key, now = Date.now()) {
     let b = buckets.get(key);

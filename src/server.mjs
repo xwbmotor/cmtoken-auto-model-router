@@ -4,7 +4,6 @@ import { readFile } from 'node:fs/promises';
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, statSync, chmodSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
-// v0.9.2：Judge 上游通道秘密存储（端点+key 独立落盘，不进 config/git）
 import { JudgeSecretStore } from './judge-secret.mjs';
 
 import { spawn } from 'node:child_process';
@@ -19,9 +18,8 @@ import { resolveModelScope, scopeIntersectsConfig, scopeAllows, scopeCacheStats 
 
 import { classifySemantically, shouldUseSemanticRouter } from './semantic-router.mjs';
 
-// v0.8.0 Judge：异步 shadow 评分器（独立事件流 judge-reviews；十审边界：不进在线决策闭环）
+// Judge：异步 shadow 评分器（独立事件流 judge-reviews；
 
-// v0.8.1 十二审：正文提取/预占闸/分类契约/独立开关/状态持久化/redact
 
 import { shouldSampleJudge, buildJudgeMessages, buildTaskCheckMessages, parseJudgeJson, normalizeDimension, normalizeVerdict, randomAbOrder, JudgeGuard, callJudgeModel, judgePromptHash, JUDGE_RUBRIC_VERSION, JUDGE_TASK_ENUM, normalizeSuggestedTask, looksLikeQualityVerdict, isValidTaskCheckVerdict, extractNonStreamAnswerText, createAnswerCollector, compileRedactPatterns, redactText } from './judge.mjs';
 
@@ -57,13 +55,12 @@ const port = Number(process.env.PORT || 8787);
 
 // 长流式 chat 的客户端可能挂 60~120 分钟，必须显式放宽默认 5 秒 keepAlive/headers 超时
 
-const serverKeepAliveMs = Number(process.env.HTTP_KEEPALIVE_MS || 300000);    // 5 分钟
+const serverKeepAliveMs = Number(process.env.HTTP_KEEPALIVE_MS || 300000); // 5 分钟
 
 const serverHeadersTimeoutMs = Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 310000); // 比 keepAlive 略高
 
 let config = await loadConfig();
 
-// v0.7.2 八审 P1：active 模式启动强校验（无持久 secret 时 fail fast，防止重启重洗实验组）
 
 assertSemanticBucketSecretForMode(config.semanticRouter?.mode);
 
@@ -71,7 +68,6 @@ const budgetTracker = await BudgetTracker.create(projectRoot, config);
 
 const decisionLog = await DecisionLog.create(projectRoot, config);
 
-// v0.7.0 六审 P1：语义复核事件流（独立实例——DecisionLog 实例状态含 currentFile/writeChain，
 
 // 两个流各持一个才能并行轮转互不踩脚；共享 enabled/目录/轮转参数，filePrefix 区分文件名）。
 
@@ -79,32 +75,27 @@ const decisionLog = await DecisionLog.create(projectRoot, config);
 
 const semanticLog = await DecisionLog.create(projectRoot, { decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } });
 
-// v0.8.0：judge 事件流（第三条独立流——与决策/语义复核隔离，只写不改）
 
-// v0.8.1 十二审 P1-5：judge 流启停独立于 decisionLog.enabled——付费调用必须留审计，
 
 // 「judge 开 + 决策日志关」导致评分调用无落盘的漏洞已堵（config 校验层双保险）。
 
 const judgeLog = await DecisionLog.create(projectRoot, { decisionLog: { ...(config.decisionLog || {}), enabled: Boolean(config.judge?.enabled), filePrefix: 'judge-reviews' } });
 
-// v0.8.1 十二审 P1-2：JudgeGuard 状态持久化——重启恢复当日用量与熔断态，预算不再被重启重置。
 
 const judgeGuardStatePath = resolve(projectRoot, config.judge?.guardStatePath || './data/judge-guard-state.json');
-// v0.9.2：管理端可配 judge 上游（baseUrl+key）。优先级：judge-secret.json > 环境变量 > config.upstreamBaseUrl
+// 评审通道优先级：judge-secret.json > 环境变量 > config.upstreamBaseUrl
 const judgeSecretStore = new JudgeSecretStore({ path: resolve(projectRoot, './data/judge-secret.json') });
-// 十四审 P1：启动即收紧密钥文件权限（Linux chmod 0600；Windows 无此语义自动跳过）
 try { const st = statSync(judgeSecretStore.path); if ((st.mode & 0o777) !== 0o600) chmodSync(judgeSecretStore.path, 0o600); } catch { /* 文件不存在（未配置）或 Windows：跳过 */ }
 
-// 十三审 P2：原子持久化——临时文件+rename（writeFileSync 直写进程中断会留截断 JSON，
 
 // 下次启动静默按空状态恢复=预算被重置）；persist 失败计数进 judgeCounters（不再无声吞掉）。
 
-// v0.9.1（Codex P2）：guard 持久化异步化——同 tick 多次状态变更合并为一次写盘（合并写+串行链），
+// guard 持久化异步化：同 tick 多次状态变更合并为一次写盘（合并写+串行链），
 // writeFileSync/renameSync 不再阻塞主事件循环；原子语义保留（tmp + rename）。
 // 末次快照胜出：persist 回调只记录最新状态并调度微任务，串行链保证前序写完成后才写新快照。
 const guardPersist = (() => {
-  let pending = null;   // 待写快照（只保留最新）
-  let writing = false;  // 串行链在途标记
+  let pending = null; // 待写快照（只保留最新）
+  let writing = false; // 串行链在途标记
   const flush = async () => {
     if (writing || pending === null) return;
     writing = true;
@@ -133,9 +124,8 @@ if (existsSync(judgeGuardStatePath)) {
 
 }
 
-// v0.8.0：judge 指标（进程级；/metrics 暴露。sampled 在入选时+1，完成/错误在管线内+1）
 
-// v0.8.1 十二审 P2：judgeCounters 增加自然日翻转（与 JudgeGuard 同口径 UTC 日），管理页
+// 管理页
 
 // 「今日用量」不再显示进程累计——重启清零但运行期间口径正确，且 guard 状态有磁盘账。
 
@@ -151,7 +141,6 @@ function judgeBump(k, n = 1) {
 
 }
 
-// v0.8.1 十二审 P1-5 修复面：judge.enabled 热更/重载时同步 judgeLog 启停（独立开关语义）
 
 function judgeLogUpdate() { judgeLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), enabled: Boolean(config.judge?.enabled), filePrefix: 'judge-reviews' } }); }
 
@@ -163,7 +152,6 @@ const judgeRuntime = {
 
 // fire-and-forget judge 管线入口：请求完成后异步评分（绝不 await 在响应路径上）
 
-// v0.8.1 十二审：①正文提取在交付路径完成（judgeCtx.answerText 已是纯正文）
 
 // ②reserve→settle 预占闸（quality 与 taskCheck 各自 reserve，预算不穿透）
 
@@ -191,7 +179,7 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
 
       const at = new Date().toISOString();
 
-      // —— 预占闸（P1-2）：await 上游前原子预占——并发请求不再穿透每日预算
+      // —— 预占闸：await 上游前原子预占——并发请求不再穿透每日预算
 
       const rq = judgeGuard.reserve({ estTokens: 8000 });
 
@@ -203,7 +191,7 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
 
       }
 
-      // v0.9.2：通道优先级=管理端配置(secret store) > 环境变量 > config 缺省——glm-5.3 可指向 MaaS 或外部兼容端点
+      // > 环境变量 > config 缺省——glm-5.3 可指向 MaaS 或外部兼容端点
       const judgeSecret = judgeSecretStore.get();
       const base = (judgeSecret?.baseUrl || process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl).replace(/\/$/, '');
       const apiKey = judgeSecret?.apiKey || process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
@@ -222,7 +210,7 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
 
       const parsed = parseJudgeJson(q.text);
 
-      // 空 verdict（{}）不算成功：四维全 missing 不得计入 qualityDone（P2）
+      // 空 verdict（{}）不算成功：四维全 missing 不得计入 qualityDone
 
       if (!parsed || !looksLikeQualityVerdict(parsed)) { judgeGuard.settle(rq.handle, { ok: false }); judgeBump('errors'); judgeLog.writeRaw({ at, v: 1, requestId, event: 'error', stage: 'quality_parse', latencyMs: q.latencyMs }); return; }
 
@@ -266,7 +254,7 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
 
       if (jc.taskCheckEnabled && routeMethod !== 'explicit') {
 
-        // taskCheck 单独预占（P1-2：第二次调用不再绕过预算闸）
+        // taskCheck 单独预占
 
         const rt = judgeGuard.reserve({ estTokens: 2000 });
 
@@ -278,7 +266,7 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
 
             const tp = parseJudgeJson(t.text);
 
-            // task_agree 必须是布尔（P1-3：枚举/形状校验，防 'true' 字符串等脏值）
+            // task_agree 必须是布尔
 
             if (tp && isValidTaskCheckVerdict(tp)) {
 
@@ -320,7 +308,6 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
 
 }
 
-// v0.7.1 七审 P1-2：后台语义复核任务注册表。shadow/rollout_hold 的 classifyAndCompare 是
 
 // fire-and-forget——HTTP 响应已结束但复核还在跑，容器滚动重启时进程直接退出会丢「正在复核
 
@@ -360,7 +347,7 @@ const rateLimiter = createRateLimiter({ rpm: Number(config.rateLimit?.rpm ?? 120
 
 const adminAuthLimiter = createRateLimiter({ rpm: 10, burst: 10 });
 
-// v0.9.3 管理端登录会话：ADMIN_TOKEN 换 HttpOnly cookie（2h 空闲 / 12h 绝对上限）；Bearer 依旧兼容脚本调用。
+// 管理端登录会话：ADMIN_TOKEN 换 HttpOnly cookie（2h 空闲 / 12h 绝对上限）；Bearer 依旧兼容脚本调用。
 const adminSessions = new Map(); // sid -> { lastSeen, absExpires }
 const ADMIN_SESSION_IDLE_MS = 2 * 60 * 60 * 1000;
 const ADMIN_SESSION_ABS_MS = 12 * 60 * 60 * 1000;
@@ -513,9 +500,8 @@ const SIMULATION_SAMPLES = [
 
 ];
 
-// 分类器评测/回放的 Python 解析（v0.5.2）：CLASSIFIER_PYTHON > .venv（探活通过才用）> PATH python。
+// 分类器评测/回放的 Python 解析：CLASSIFIER_PYTHON > .venv（探活通过才用）> PATH python。
 
-// Codex 二审：.venv 的 python.exe 可能记录失效绝对路径——existsSync 不等于可执行，spawn error 静默炸。
 
 let classifierPythonCache = null;
 
@@ -567,7 +553,7 @@ async function resolveClassifierPython() {
 
 // - passthrough 模式不要求 ROUTER_ACCESS_KEY（客户端 key 真伪由上游 401 判定）
 
-// - v0.5.2：非本机绑定时 METRICS_TOKEN 也必填（否则 /metrics 暴露模型清单/流量规模/预算——信息泄露面）
+// - 
 
 if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
 
@@ -603,19 +589,19 @@ function errorJson(res, status, message, type = 'router_error') {
 
 const BODY_LIMITS = {
 
-  '/v1/chat/completions': 50 * 1024 * 1024,  // 50MB：vision base64 + 长工具 schema + 长上下文
+  '/v1/chat/completions': 50 * 1024 * 1024, // 50MB：vision base64 + 长工具 schema + 长上下文
 
   '/admin/api/config': 1 * 1024 * 1024,
 
   '/admin/api/preview': 1 * 1024 * 1024,
 
   '/admin/api/simulate': 1 * 1024 * 1024,
-  '/admin/api/judge/secret': 8 * 1024  // v0.9.2：key 上报走独立小上限（<8KB）
+  '/admin/api/judge/secret': 8 * 1024 // 
 };
 
-const DEFAULT_BODY_LIMIT = 64 * 1024;  // 健康检查、reload、metrics、decisions 等 GET/POST 小体
+const DEFAULT_BODY_LIMIT = 64 * 1024; // 健康检查、reload、metrics、decisions 等 GET/POST 小体
 
-// v0.8.1：客户端压缩请求体（Content-Encoding: gzip/deflate/br）兼容——WorkBuddy 等客户端对请求体
+// 兼容——WorkBuddy 等客户端对请求体
 
 // 默认压缩发送，Node 原生 http server 不会自动解压，JSON.parse 收到压缩字节直接 400「请求体不是合法 JSON」。
 
@@ -785,7 +771,7 @@ function record(entry) {
 
 }
 
-// key 指纹筛选（最近请求面板）：内存环形缓冲里也带 keyFingerprint（v0.4.27）
+// key 指纹筛选（最近请求面板）：内存环形缓冲里也带 keyFingerprint
 
 let recentKeyFilter = null;
 
@@ -797,11 +783,11 @@ function setRecentKeyFilter(fp) { recentKeyFilter = fp; }
 
 // 三种决策链对比（与 runtime 真实代码路径一致）：
 
-//   rules-only     ：现状 shadow——路由只看规则层分析
+// rules-only ：现状 shadow——路由只看规则层分析
 
-//   partial-active ：现有 active 模式语义——仅规则置信 < confidenceThreshold（即未命中桶 0.55）时采纳小模型
+// partial-active ：现有 active 模式语义——仅规则置信 < confidenceThreshold（即未命中桶 0.55）时采纳小模型
 
-//   full-active    ：激进——所有请求都采纳小模型任务标签（需 confidenceThreshold>0.98 才等效）
+// full-active ：激进——所有请求都采纳小模型任务标签（需 confidenceThreshold>0.98 才等效）
 
 // 输出：任务判准率、模型分布、质量/成本均值、误判方向分解（漏判难任务=质量风险 / 多判难任务=成本浪费）。
 
@@ -869,11 +855,11 @@ function replayHeldout(dump, policyConfig) {
 
         const gr = taskRank[row.gold] ?? 0;
 
-        if (pr < gr) agg.misread.underCalled += 1;       // 漏判难任务 → 质量风险
+        if (pr < gr) agg.misread.underCalled += 1; // 漏判难任务 → 质量风险
 
-        else if (pr > gr) agg.misread.overCalled += 1;    // 多判难任务 → 成本浪费
+        else if (pr > gr) agg.misread.overCalled += 1; // 多判难任务 → 成本浪费
 
-        else agg.misread.taskSwapped += 1;                // 同档互错 → 影响小
+        else agg.misread.taskSwapped += 1; // 同档互错 → 影响小
 
       }
 
@@ -1303,17 +1289,17 @@ function sessionModel(req, decision) {
 
   const current = sessions.get(id);
 
-  // v0.5.4 修四审：粘性加闸（原实现只要旧模型还在 fallback 列表就沿用 30 分钟——
+  // 修
 
   // 先问简单题再问复杂题也会被钉在旧模型上，逐问题路由被会话粘性吞掉）。
 
-  // 闸门三条件（与四审建议一致）：
+  // 闸门三条件（与：
 
-  //   1. 旧模型仍是本请求的合格候选（在 fallbackOrder 中）
+  // 1. 旧模型仍是本请求的合格候选（在 fallbackOrder 中）
 
-  //   2. 任务类型/难度未变（同 task 且同 tier——复杂度升档必须允许重新路由）
+  // 2. 任务类型/难度未变（同 task 且同 tier——复杂度升档必须允许重新路由）
 
-  //   3. 新旧最优分差小（best.score − sticky.score ≤ 阈值，默认 0.05——旧模型明显劣化时让位）
+  // 3. 新旧最优分差小（best.score − sticky.score ≤ 阈值，默认 0.05——旧模型明显劣化时让位）
 
   if (current && current.expiresAt > Date.now() && decision.fallbackOrder.includes(current.model)) {
 
@@ -1359,7 +1345,7 @@ function keyFingerprint(authorizationHeader) {
 
 }
 
-// v0.7.4 十审 P1：会话指纹——决策/复核日志一律落 HMAC 指纹（sidfp:<16hex>），原始
+// 原始
 
 // x-session-id 不落盘（客户端可控字段，可能含手机号/账号/工单号——与 key 同等敏感）。
 
@@ -1433,7 +1419,7 @@ function setDeepParameter(payload, dottedPath, value) {
 
 // passthrough: 客户端的 Authorization 头原样转发 MaaS——供 MaaS 网关分流 model=auto 场景：
 
-//   同一 URL 同一租户 key 调 auto 与直连模型完全一致，计费/配额自然落到调用方租户。
+// 同一 URL 同一租户 key 调 auto 与直连模型完全一致，计费/配额自然落到调用方租户。
 
 // —— 飞轮：上游回包 usage 捕获（流式需解析 SSE chunk）：返回 {prompt,completion,cached} 或 null ——
 
@@ -1607,11 +1593,9 @@ async function probeUpstream() {
 
 function semanticOptions(clientAuthHeader = null) {
 
-  // v0.6.0：passthrough 模式下大模型分类器允许透传本次客户端 key（四审：原实现只读服务端
 
   // key，passthrough 无服务端 key 时 cascade 升级必报「缺少上游 API Key」）。客户端 key 优先。
 
-  // v0.6.1 五审 P1 修正：仅 passthrough 允许客户端 key。strict 模式下客户端 Authorization 是
 
   // ROUTER_ACCESS_KEY（本路由的准入凭证），不是 MaaS key——拿它打 MaaS 必 401，还会把 Router
 
@@ -1643,7 +1627,7 @@ function recordSemanticReview(review) {
 
 }
 
-// v0.6.1 五审 P1：路由开销（L3 大模型分类调用）入账。返回 { overheadUsage, overheadCostYuan,
+// 入账。返回 { overheadUsage, overheadCostYuan,
 
 // classifierLatencyMs }——由调用方并进 review/决策日志，金额现金入预算台账（已确定无需预占冲正）。
 
@@ -1687,7 +1671,6 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 
     const semanticAnalysis = mergeSemanticAssessment(baseAnalysis, assessment, true);
 
-    // v0.6.1 五审 P1：语义重路由沿用首次路由的租户候选范围。原实现只传 health/analysisOverride/
 
     // budgetPressure/trafficBucket——L2/L3 重判 task/tier 后第二次 routeRequest 拿全量模型池打分，
 
@@ -1701,7 +1684,7 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 
     if (track && disagreed) counters.semantic.disagreed += 1;
 
-    // v0.6.1 五审 P2：cascade 分层计数（small 直采 / large 升级 / small-degraded 降级）——
+    // ——
 
     // 运营调 smallAcceptThreshold 时需要看到 L3 调用率（=成本）的对应变化
 
@@ -1711,7 +1694,6 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 
       counters.semantic.byCascadeLevel[assessment.cascade.level] = (counters.semantic.byCascadeLevel[assessment.cascade.level] || 0) + 1;
 
-      // v0.7.0 六审步骤5：每层时延累计（sum/count 供 Prometheus 求均值/P95 需自行按事件日志算）
 
       const lv = assessment.cascade.level;
 
@@ -1721,7 +1703,6 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 
       agg.count += 1;
 
-      // v0.7.1 七审 P1-3：指标主口径=totalLatencyMs（small-degraded 含 L3 失败等待，large=small+large）
 
       agg.sumMs += Number(assessment.cascade.totalLatencyMs ?? assessment.cascade.latencyMs ?? 0);
 
@@ -1729,7 +1710,6 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 
     const review = { at: new Date().toISOString(), assessment, base: { task: baseAnalysis.task, tier: baseAnalysis.tier, complexity: baseAnalysis.complexity, model: baseDecision.suggestedModel }, proposed: { task: semanticAnalysis.task, tier: semanticAnalysis.tier, complexity: semanticAnalysis.complexity, model: proposed.suggestedModel }, disagreed };
 
-    // v0.6.1 五审 P1：L3 大模型分类调用成本入账（原实现完全不入预算台账——真实付费的黑洞）。
 
     // 按 assessment.model 的 token 定价 × 真实 usage 现金入账（非预占：金额已确定无需冲正）；
 
@@ -1743,7 +1723,7 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 
     if (track) recordSemanticReview(review);
 
-    // v0.7.0 六审 P1：复核事件持久化（shadow/active 通用）。按 requestId 关联决策日志，
+    // 按 requestId 关联决策日志，
 
     // 重启不丢；含三层结果对照、cascade 层级、开销与时延。语义复核频繁但单条小（<2KB），
 
@@ -1761,7 +1741,6 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 
       recordSemanticReview({ at: new Date().toISOString(), error: error.message });
 
-      // v0.7.0 六审 P1：失败也持久化——否则错误率分母失真（只有成功事件存活 = 幸存者偏差）
 
       semanticLog.writeRaw({ at: new Date().toISOString(), v: 1, requestId, error: String(error.message).slice(0, 300) });
 
@@ -1773,35 +1752,33 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 
 }
 
-// v0.7.1 七审 P1-1：语义灰度分桶加固。三个变化：
 
 // ① 无盐 SHA-256(客户端可控 requestId) → HMAC(secret)。secret=进程级随机（不落盘、不进 config
 
-//    API、不跨重启稳定）——客户端无法预计算自己落在哪个桶，服务端也不受重启前桶漂移影响
+// API、不跨重启稳定）——客户端无法预计算自己落在哪个桶，服务端也不受重启前桶漂移影响
 
-//    （shadow/hold 对照组按请求独立归因，无需跨重启同桶）。若未来要求跨重启稳定（如按会话
+// （shadow/hold 对照组按请求独立归因，无需跨重启同桶）。若未来要求跨重启稳定（如按会话
 
-//    长期对照），把 secret 换成 SEMANTIC_BUCKET_SECRET 环境变量即可，逻辑不变。
+// 长期对照），把 secret 换成 SEMANTIC_BUCKET_SECRET 环境变量即可，逻辑不变。
 
 // ② 桶键优先级：x-session-id（同会话稳定分桶，重试不换组）> keyFingerprint（同租户稳定）
 
-//    > 服务端内部实验ID（randomUUID，绝不复用客户端 x-request-id——七审：外部请求ID与
+// > 服务端内部实验ID（randomUUID，绝不复用客户端 x-request-id——
 
-//    内部实验ID分离，客户端构造 ID 无法操纵分组）。
+// 内部实验ID分离，客户端构造 ID 无法操纵分组）。
 
 // ③ 返回 { bucket, key } 一并落事件，事后可审计每次分桶用了哪个键。
 
 // secret 来源：SEMANTIC_BUCKET_SECRET（跨重启稳定，部署方可选）> 进程级随机（默认）。
 
-// 两者都不可被客户端预计算——分桶输入（session/fingerprint/内部ID）+服务端秘密，七审 P1-1。
+// 两者都不可被客户端预计算——分桶输入（session/fingerprint/内部ID）+服务端秘密，
 
-// v0.7.2 八审 P1：active 模式必须显式配置 secret（随机 secret 每次重启重洗实验组，跨重启
 
 // 污染对照）。shadow 允许缺省。校验在启动与热切换两处执行（semanticRouter.mode=active）。
 
 const semanticBucketSecret = process.env.SEMANTIC_BUCKET_SECRET ? Buffer.from(process.env.SEMANTIC_BUCKET_SECRET, 'utf8') : randomBytes(32);
 
-// v0.7.3 九审 P2 / v0.7.4 十审口径修正：这是**长度下限**（≥32 字节）而非熵证明——32 个
+// 而非熵证明——32 个
 
 // 重复字符也能过校验。防预计算依赖「用随机生成命令产出」的运维纪律，代码只拦明显弱值。
 
@@ -1809,7 +1786,7 @@ const semanticBucketSecret = process.env.SEMANTIC_BUCKET_SECRET ? Buffer.from(pr
 
 // 下限覆盖三种主流生成方式；过短即拒绝启动（fail fast 优于带弱 secret 上线）。
 
-// 十三审 P2：judge.guardStatePath 启动时固定（judgeGuardStatePath 是模块级 const）——热更/重载
+// ——热更/重载
 
 // 改该字段不会切换实际持久化文件，静默接受会制造「配置说 A 文件、状态写 B 文件」的分裂。
 
@@ -1855,9 +1832,8 @@ function assertSemanticBucketSecretForMode(mode) {
 
 function semanticBucketOf({ sessionId = null, keyFingerprint = null, requestId = null } = {}) {
 
-  // v0.7.2 八审 P2：来源标注——audit 字段带 source（session/fingerprint/internal），
 
-  // 指标计数器按来源分布。匿名占比高=大量请求无 session 无 key 指纹（v0.7.3 九审勘误：
+  // 指标计数器按来源分布。匿名占比高=大量请求无 session 无 key 指纹 
 
   // 本指标不区分「探测」与「自然匿名流量」——探测检测需另建 per-key session 基数统计）。
 
@@ -1867,11 +1843,9 @@ function semanticBucketOf({ sessionId = null, keyFingerprint = null, requestId =
 
   const bucket = Number(parseInt(createHmac('sha256', semanticBucketSecret).update(`semantic-rollout:${key}`).digest('hex').slice(0, 8), 16) % 100);
 
-  // v0.7.3 九审 P2：bucketKey 落盘前转 HMAC 短指纹——sid:/fp: 前缀后的原值（session ID 可能
 
   // 含账号/手机号）不进日志。指纹与分桶同 secret：审计可对账「同一会话稳定同组」，但无法反查原值。
 
-  // v0.7.4 十审：12→16 hex（48bit 在百万级 session 下碰撞概率不可忽略；16hex=64bit）。
 
   const hmac = createHmac('sha256', semanticBucketSecret).update(`bucket-key-fp:${key}`).digest('hex').slice(0, 16);
 
@@ -1923,7 +1897,6 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
 
   }
 
-  // v0.7.0 六审 P1：语义路由独立灰度。routing.activeTrafficPercent 控制的是「模型路由 vs 固定
 
   // shadow 模型」的放量；语义分类采纳是另一个实验变量，必须独立分桶——否则 shadow→active 一步切
 
@@ -1937,15 +1910,13 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
 
   const semanticRolloutApplied = config.semanticRouter.mode === 'active' && semanticBucket < semanticPercent;
 
-  // v0.7.2 八审 P2：rollout 元数据统一对象——hold/applied/rejected 三状态同源，
 
   // 实验组不再缺 bucketKey（此前只有对照组可审计分桶身份来源）。
 
-  // v0.7.3 九审 P2：bucketKey=HMAC 短指纹（loggedKey），sid:/fp: 后原值不落盘。
+  // sid:/fp: 后原值不落盘。
 
   const semanticRollout = { bucket: semanticBucket, bucketKey: semanticBucketKey, bucketKeySource: semanticBucketSource, percent: semanticPercent };
 
-  // v0.7.2 八审 P2：分桶键来源统一计数（hold/applied/rejected 三态同源，探测观测不分路径）
 
   counters.semantic.bucketKeySource ??= {};
 
@@ -1967,7 +1938,6 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
 
     if (config.semanticRouter.mode === 'active') {
 
-      // v0.6.0：采纳线独立成 finalAdoptionThreshold（四审：原 minConfidence 双语义——
 
       // cascade 里当升级线、这里当采纳线）。语义复核最终结果（无论来自小模型直接采纳、
 
@@ -2107,11 +2077,11 @@ async function proxyCompletion(req, res) {
 
   const attempts = [decision.selectedModel, ...fallback].slice(0, auto ? config.routing.maxAttempts : 1);
 
-  // 记账上下文（try/catch 外声明——v0.5.2 修复 v0.5.1 作用域 bug：markStreamOutcome/reserveId 原声明在 try 内，
+  // 记账上下文（try/catch 外声明—— 修复 作用域 bug：markStreamOutcome/reserveId 原声明在 try 内，
 
   // catch 不可见，断流时先抛 ReferenceError 掩盖原始错误）。生命周期（每个 attempt 恰好一次）：
 
-  //   reserve(估算) → [成功: markOutcome(true) + settle(实际 usage；无 usage 保留估算)] | [失败: markOutcome(false) + settle(null) 保留估算]
+  // reserve(估算) → [成功: markOutcome(true) + settle(实际 usage；无 usage 保留估算)] | [失败: markOutcome(false) + settle(null) 保留估算]
 
   let reserveId = null;
 
@@ -2119,11 +2089,11 @@ async function proxyCompletion(req, res) {
 
   let settledAttempt = false; // 预算落账闸（防 fallback 重试路径双结算）
 
-  let outcomeSettled = true;  // 成功/失败落账闸（true=无在途 attempt，调用 no-op）
+  let outcomeSettled = true; // 成功/失败落账闸（true=无在途 attempt，调用 no-op）
 
-  let actxCtx = null;         // { model, started, ttftMs, isStream } 当前 attempt 快照
+  let actxCtx = null; // { model, started, ttftMs, isStream } 当前 attempt 快照
 
-  // —— 客户端断开哨兵 + 非流式交付守卫（v0.5.3，Codex 三审 P1）——
+  // —— 客户端断开哨兵 + 非流式交付守卫 ——
 
   // 哨兵在 attempts 循环前注册：客户端在任何阶段断开（含服务端还在等上游响应头时）都能捕获；
 
@@ -2135,7 +2105,7 @@ async function proxyCompletion(req, res) {
 
   const delivery = { delivered: false, usage: null, log: null, guardActive: false };
 
-  // v0.6.1 五审 P1：决策日志幂等闸。预算（settledAttempt）与成功计数（outcomeSettled）各有闸门，
+  // 与成功计数（outcomeSettled）各有闸门，
 
   // 唯独 decisionLog.write 无闸——成功流式会双写（close 守卫 + res.end 回调各一次，本地 200 条
 
@@ -2147,11 +2117,10 @@ async function proxyCompletion(req, res) {
 
   let requestLogWritten = false;
 
-  // v0.8.0 judge：请求级上下文。answerText 由两条交付路径（非流式 res.end 前 / 流式落账前）
+  // judge：请求级上下文。answerText 由两条交付路径（非流式 res.end 前 / 流式落账前）
 
   // 填充（64KB 软上限），writeOutcomeLog 首次落账时交给异步 judge 管线（fire-and-forget）。
 
-  // v0.8.1 十二审 P1-1：answerText 存的是【纯正文】——非流式经 extractNonStreamAnswerText
 
   // 解析 choices[0].message.content；流式经 SSE 收集器增量提取 delta.content。Judge 不再见
 
@@ -2167,7 +2136,7 @@ async function proxyCompletion(req, res) {
 
     decisionLog.write({ sessionFingerprint: sessionFingerprintOf(req.headers['x-session-id']), requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, outcome);
 
-    // v0.8.0 judge：异步 shadow 评分钩子（内部自带 enabled/抽样/护栏闸，失败静默不影响任何路径）
+    // judge：异步 shadow 评分钩子（内部自带 enabled/抽样/护栏闸，失败静默不影响任何路径）
 
     maybeJudgeRequest({ requestId: req.requestId, outcome, decision, body, answerText: judgeCtx.answerText, sessionIdRaw: req.headers['x-session-id'] });
 
@@ -2181,7 +2150,6 @@ async function proxyCompletion(req, res) {
 
       // attempt 前段（等上游响应头/读上游 body）客户端断开：无在途响应可交付，记客户端写失败
 
-      // （v0.5.3：原实现只置标志不落账——成功失败都不记、reserve 等结算泄漏到进程重启）
 
       if (!outcomeSettled) {
 
@@ -2255,7 +2223,7 @@ async function proxyCompletion(req, res) {
 
   };
 
-  // 单次落账（v0.5.2）：成功只在「响应体完整交付」后记；失败只在 mid-flight 中断记
+  // 单次落账：成功只在「响应体完整交付」后记；失败只在 mid-flight 中断记
 
   // （attempt 前段失败由 catch 的 updateHealth+post-loop counters.errors 记，不在此重复）
 
@@ -2299,7 +2267,7 @@ async function proxyCompletion(req, res) {
 
   };
 
-  // v0.5.3 修三审 P1：controller 改为每 attempt 独立创建。原实现在循环外创建单例——
+  // 修
 
   // 第一次超时 abort 后 signal 永久失效，后续 fallback 复用已 aborted 的 signal 立即失败，
 
@@ -2307,13 +2275,13 @@ async function proxyCompletion(req, res) {
 
   let controller = null;
 
-  // 超时语义（v0.4.26 修复流式长回答被掐）：
+  // 超时语义 修复流式长回答被掐）：
 
-  //   非流式 = 整请求总超时；流式 = 闲置超时（收到任何上游数据即续命）。
+  // 非流式 = 整请求总超时；流式 = 闲置超时（收到任何上游数据即续命）。
 
-  //   旧实现对流式也用一次性总超时——dsf 长回答（31 tok/s，10k 字≈110s+）撞 120s 线被 abort，
+  // 旧实现对流式也用一次性总超时——dsf 长回答（31 tok/s，10k 字≈110s+）撞 120s 线被 abort，
 
-  //   客户端表现为流中断后反复续写仍截断。闲置超时只杀真堵死（无数据流动）的连接。
+  // 客户端表现为流中断后反复续写仍截断。闲置超时只杀真堵死（无数据流动）的连接。
 
   const timeoutMs = Number(config.routing.requestTimeoutMs) || 120000;
 
@@ -2337,7 +2305,7 @@ async function proxyCompletion(req, res) {
 
     const started = Date.now();
 
-    controller = new AbortController(); // 新 attempt 新 signal（三审 P1：超时 abort 不再泄漏到 fallback）
+    controller = new AbortController(); // 新 attempt 新 signal
 
     armTimer(); // 每次尝试独立计时（旧实现 timer 在循环外只设一次，attempt 2 继承剩余预算）
 
@@ -2365,7 +2333,7 @@ async function proxyCompletion(req, res) {
 
       }
 
-      // 客户端已在等待上游期间断开（v0.5.3）：响应无处交付，记失败结账直接返回——
+      // 客户端已在等待上游期间断开：响应无处交付，记失败结账直接返回——
 
       // 不 reserve、不 fallback（无人接收结果，重试只是烧钱）、不写死 socket
 
@@ -2393,7 +2361,7 @@ async function proxyCompletion(req, res) {
 
       let usage = null;
 
-      // 记账纪律：首包到达 ≠ 成功。非流式：响应体整体读完才算成功（text() 后记）；
+      // 记账纪律：首包到达 ≠ 成功。非流式：响应体整体读完才算成功（text 后记）；
 
       // 流式：此处只留 TTFT 观测，成功/失败在流尾落账（markStreamOutcome），中断只记失败不双记。
 
@@ -2411,7 +2379,7 @@ async function proxyCompletion(req, res) {
 
       actxCtx = { model, started, ttftMs: firstByteLatencyMs, isStream: body.stream === true, auto };
 
-      // 有 usage 按实际 token 冲正；无 usage 保留估算并标记 estimated（v0.5.2：settleWithUsage 统一入口）
+      // 有 usage 按实际 token 冲正；无 usage 保留估算并标记 estimated
 
       settleWithUsageGlobal = (u) => {
 
@@ -2439,7 +2407,7 @@ async function proxyCompletion(req, res) {
 
         usage = extractUsage(upstream.headers.get('content-type'), responseText);
 
-        // v0.5.4 fix four-review P1: recheck clientGone after body read. During the read the close guard
+        // fix four-review 
 
         // already settled via guardActive=false branch (outcomeSettled=true, reserve closed) — continuing here would
 
@@ -2457,7 +2425,7 @@ async function proxyCompletion(req, res) {
 
         }
 
-        // Success accounting stays with the close guard (v0.5.3 fix): delivered-then-finished semantics.
+        // Success accounting stays with the close guard fix): delivered-then-finished semantics.
 
       }
 
@@ -2507,7 +2475,7 @@ async function proxyCompletion(req, res) {
 
         // 非流式：一次性写回。成功落账由 close 守卫按「writableFinished && delivered」判定——
 
-        // v0.5.3 修三审 P1：v0.5.2 在 text() 读毕即记成功，客户端已断开时记了假成功。
+        // 修 读毕即记成功，客户端已断开时记了假成功。
 
         delivery.usage = usage;
 
@@ -2517,7 +2485,7 @@ async function proxyCompletion(req, res) {
 
         delivery.guardActive = true;
 
-        judgeCtx.answerText = extractNonStreamAnswerText(responseText); // v0.8.1 十二审 P1-1：纯正文（非原始 JSON 信封）
+        judgeCtx.answerText = extractNonStreamAnswerText(responseText); // 
 
         clearTimeout(timer); return void res.end(responseText);
 
@@ -2525,7 +2493,7 @@ async function proxyCompletion(req, res) {
 
       // 流式：逐块转发（背压安全），并从 SSE 尾块提取 usage（飞轮：实际 token 消耗）
 
-      // 超时续命：每收到一个 chunk 重置闲置计时器——只要上游还在产 token 就不掐（v0.4.26）
+      // 超时续命：每收到一个 chunk 重置闲置计时器——只要上游还在产 token 就不掐
 
       // 注意：undici 的 chunk 是 Uint8Array，toString('utf8') 不生效（会输出字节数字）——必须 Buffer 化
 
@@ -2533,9 +2501,8 @@ async function proxyCompletion(req, res) {
 
       const trimTail = () => { if (tailBytes > 8192) { const merged = Buffer.concat(tailChunks).subarray(-4096); tailChunks.length = 0; tailChunks.push(merged); tailBytes = merged.length; } };
 
-      // v0.8.0 judge：流式回答全文累积（软上限 64KB——超过即截断保留头部，防长流撑内存）
+      // judge：流式回答全文累积（软上限 64KB——超过即截断保留头部，防长流撑内存）
 
-      // v0.8.1 十二审 P1-1：不再累积原始 SSE 字节——SSE 收集器逐块解析 delta.content，
 
       // judge 拿到的是纯正文（usage/[DONE]/chunk JSON 不再进评分输入）
 
@@ -2557,15 +2524,15 @@ async function proxyCompletion(req, res) {
 
       judgeCtx.answerText = judgeCtx.collector.text(); // 交付路径终点取纯正文（收集器全程在转发循环外喂——见下方 push 调用点）
 
-      // v0.5.4 修四审 P1：流式成功不再在上游迭代完成时立即落账（原实现 markOutcome(true) 在
+      // 修 在
 
-      // res.end() 前——只证明上游完整，不证明客户端收完尾部数据）。改为 res.end() 回调后落账。
+      // res.end 前——只证明上游完整，不证明客户端收完尾部数据）。改为 res.end 回调后落账。
 
       // 时序陷阱（首轮实现踩中）：undici 客户端收完 body 会立即关连接，close 事件可抢在
 
       // end 回调之前到达——若此刻守卫未激活（guardActive=false），成功流被误记 client_disconnected。
 
-      // 因此发起 end() 前先激活守卫并标记 delivered：close 与 end 回调谁先到都只落一次账
+      // 因此发起 end 前先激活守卫并标记 delivered：close 与 end 回调谁先到都只落一次账
 
       // （outcomeSettled 闸互斥；writableFinished 区分「收完才关」与「没收完就断」）。
 
@@ -2577,7 +2544,7 @@ async function proxyCompletion(req, res) {
 
       delivery.guardActive = true;
 
-      // v0.8.1 十二审 P1-1：answerText 已在转发循环后由 collector.text() 提取（上一行），此处无需再赋值
+      // 提取（上一行），此处无需再赋值
 
       const streamDone = new Promise((resolve) => res.end(() => resolve()));
 
@@ -2587,7 +2554,6 @@ async function proxyCompletion(req, res) {
 
       settleWithUsage(usage);
 
-      // v0.6.1 五审 P1：改走请求级幂等闸（原直接 decisionLog.write——close 守卫若先到已写一条，
 
       // 此处再写即双写；200 条实测 9 个重复 requestId 全部为流式）
 
@@ -2617,9 +2583,7 @@ async function proxyCompletion(req, res) {
 
         // mid-flight 中断（流式断流/非流式写回失败）：单次失败落账 + 预算保留估算
 
-        // （v0.5.2：markOutcome/settleAttempt 声明在 try 外，此处可见——原实现引用 try 内 const 抛 ReferenceError）
 
-        // v0.6.1 五审 P1：补决策日志（原实现只记 metrics 不落日志——与双写同属「每请求恰一条」缺口）
 
         markOutcome(false, error);
 
@@ -2657,7 +2621,6 @@ async function proxyCompletion(req, res) {
 
   record(failure);
 
-  // v0.6.1 五审 P1：走请求级幂等闸（防 attempt 前段 close 守卫已写过失败日志后这里再写一条）
 
   writeOutcomeLog({ ok: false, model: attempts.at(-1), error: (lastError?.message || '').slice(0, 500) });
 
@@ -2759,7 +2722,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/v1/models') {
 
-    // 十四审 P2：模型发现默认只暴露 auto 入口（exposeModelList=all 才含池内模型）——
+    // ——
 
     // 客户端模型选择器只应看到路由入口，池内模型是内部实现细节（点名仍走 allowExplicitModel）。
 
@@ -2773,7 +2736,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && url.pathname === '/v1/chat/completions') return proxyCompletion(req, res);
 
-  // v0.9.3：登录端点自身不能要求已登录（先有鸡后有蛋）；其余 /admin/api/* 接受 Bearer 或会话 cookie
+  // ；其余 /admin/api/* 接受 Bearer 或会话 cookie
   if (req.method === 'POST' && url.pathname === '/admin/api/login') {
     const verdict = adminAuthLimiter.check('admin-login:' + (req.socket.remoteAddress || 'unknown'));
     if (!verdict.allowed) return json(res, 429, { error: { message: '登录尝试过于频繁，请稍后再试', type: 'rate_limit_exceeded', code: 429 } }, { 'retry-after': String(Math.ceil(verdict.retryAfterMs / 1000)) });
@@ -2798,7 +2761,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/admin/api/config') return json(res, 200, config);
-  // v0.9.2：Judge 上游通道管理端配置——GET 只回 masked（key 末4位），PUT 更新/清除；key 永不回传、不入 config
+  // PUT 更新/清除；key 永不回传、不入 config
   if (req.method === 'GET' && url.pathname === '/admin/api/judge/secret') {
     return json(res, 200, { ...judgeSecretStore.masked(), source: 'admin-config', note: 'key 已落 data/judge-secret.json（git-ignored）；GET 永不回明文' });
   }
@@ -2808,7 +2771,7 @@ const server = http.createServer(async (req, res) => {
       if (body.clear) { judgeSecretStore.clear(); return json(res, 200, judgeSecretStore.masked()); }
       if (!body.baseUrl || !body.apiKey) return errorJson(res, 400, '需要 baseUrl 与 apiKey（或 clear:true 清除）', 'invalid_judge_secret');
       if (!/^https?:\/\//.test(body.baseUrl)) return errorJson(res, 400, 'baseUrl 必须是 http(s) 端点', 'invalid_judge_secret');
-      // 十四审 P1：外部 Judge 端点强制 HTTPS；仅内网回环（127.0.0.1/localhost/[::1]）允许 HTTP
+      // 允许 HTTP
       const jsHost = (() => { try { return new URL(body.baseUrl).hostname; } catch { return null; } })();
       if (body.baseUrl.startsWith('http://') && !['127.0.0.1', 'localhost', '[::1]'].includes(jsHost)) return errorJson(res, 400, '外部 Judge 端点必须 HTTPS（内网回环才允许 http）', 'invalid_judge_secret');
       judgeSecretStore.save({ baseUrl: String(body.baseUrl), apiKey: String(body.apiKey) });
@@ -3044,7 +3007,6 @@ const server = http.createServer(async (req, res) => {
 
       const next = await readJson(req);
 
-      // v0.7.2 八审 P1：热切 active 前置校验——缺 secret 拒绝落盘（返回 4xx 让运营改 .env 后重启）
 
       assertSemanticBucketSecretForMode(next?.semanticRouter?.mode);
 
@@ -3114,21 +3076,21 @@ const TASK_CATEGORIES = {
 
   // 路由打分层 5 族 + agent（quality 跑分支撑），仅用于打分回退，不决定展示大类
 
-  default:    { subs: ['qa-knowledge', 'conversation', 'customer-support', 'finance-trading', 'security-audit', 'summarization', 'translation', 'other'] },
+  default: { subs: ['qa-knowledge', 'conversation', 'customer-support', 'finance-trading', 'security-audit', 'summarization', 'translation', 'other'] },
 
-  coding:     { subs: ['code-generation', 'debugging', 'code-review', 'sql-database', 'frontend-ui', 'devops-config', 'shell-execution', 'file-io', 'repo-scanning'] },
+  coding: { subs: ['code-generation', 'debugging', 'code-review', 'sql-database', 'frontend-ui', 'devops-config', 'shell-execution', 'file-io', 'repo-scanning'] },
 
-  reasoning:  { subs: ['multi-step-planning', 'research-reports', 'math', 'security-audit', 'finance-trading', 'customer-support', 'summarization', 'translation'] },
+  reasoning: { subs: ['multi-step-planning', 'research-reports', 'math', 'security-audit', 'finance-trading', 'customer-support', 'summarization', 'translation'] },
 
-  creative:   { subs: ['content-writing', 'roleplay-fiction'] },
+  creative: { subs: ['content-writing', 'roleplay-fiction'] },
 
   extraction: { subs: ['data-extraction', 'data-transformation', 'classification', 'summarization', 'translation', 'math'] },
 
-  agent:      { subs: ['multi-step-planning', 'tool-dispatch', 'workflow-execution', 'web-search', 'memory-extraction', 'devops'] },
+  agent: { subs: ['multi-step-planning', 'tool-dispatch', 'workflow-execution', 'web-search', 'memory-extraction', 'devops'] },
 
-  explicit:   { subs: [] },
+  explicit: { subs: [] },
 
-  unknown:    { subs: [] }
+  unknown: { subs: [] }
 
 };
 
@@ -3228,7 +3190,7 @@ function subCategoryOf(task, subTask) {
 
   // 每类任务展示首选模型+使用份额+满意度——「大家把流量花在了哪」一目了然。
 
-  // 路由体检报表：见 buildRoutingReport()
+  // 路由体检报表：见 buildRoutingReport
 
   if (req.method === 'GET' && url.pathname === '/admin/api/routing-report') {
 
@@ -3380,7 +3342,6 @@ function subCategoryOf(task, subTask) {
 
     const visibleRecent = recentKeyFilter ? recent.filter((x) => (x.keyFingerprint || '') === recentKeyFilter) : recent;
 
-    // 十三审 P1-2：judge 节带 guard 持久化快照——管理页显示的预算用量/熔断状态必须与
 
     // 真正执行闸一致（进程 counters 重启清零，guard 从磁盘恢复；两者并列展示，不互相覆盖）。
 
@@ -3396,7 +3357,7 @@ function subCategoryOf(task, subTask) {
 
     const script = join(projectRoot, 'scripts', 'evaluate_classifier.py');
 
-    const pythonCmd = await resolveClassifierPython(); // v0.5.2：探活优先级 CLASSIFIER_PYTHON > .venv(探活) > python
+    const pythonCmd = await resolveClassifierPython(); // > python
 
     if (!pythonCmd) return errorJson(res, 500, '找不到可用的 Python（检查 CLASSIFIER_PYTHON 环境变量或安装 python）', 'classifier_eval_error');
 
@@ -3440,7 +3401,7 @@ function subCategoryOf(task, subTask) {
 
     const script = join(projectRoot, 'scripts', 'evaluate_classifier.py');
 
-    const pythonCmd = await resolveClassifierPython(); // v0.5.2：同 evaluate 探活优先级
+    const pythonCmd = await resolveClassifierPython(); // 
 
     if (!pythonCmd) return errorJson(res, 500, '找不到可用的 Python（检查 CLASSIFIER_PYTHON 环境变量或安装 python）', 'classifier_replay_error');
 
@@ -3492,7 +3453,6 @@ function subCategoryOf(task, subTask) {
 
   }
 
-  // v0.7.0 六审第四优先级：标注抽样导出。把决策日志 + 语义复核事件按 requestId 关联成标注行
 
   // （每行=一次请求的完整可归因链），供人工标注正确 task/tier 或裁判打分。脱敏文本默认截断，
 
@@ -3510,7 +3470,7 @@ function subCategoryOf(task, subTask) {
 
       const reviews = await semanticLog.recent(count * 2).catch(() => []);
 
-      // v0.7.1 七审 P2：recent() 返回从新到旧——先见即最新。setIfAbsent 语义（首次写入胜出），
+      // 返回从新到旧——先见即最新。setIfAbsent 语义（首次写入胜出），
 
       // 修正原实现「后写覆盖」实际留下最老事件的错误。
 
@@ -3536,7 +3496,7 @@ function subCategoryOf(task, subTask) {
 
           }).join(' | ').slice(0, includeFullText ? undefined : 300),
 
-          // v0.7.1 七审 P2：redact 默认只存 head(160)——fullText=1 未必有真全文。标 truncated
+          // ——fullText=1 未必有真全文。标 truncated
 
           // 让 Judge/标注侧能自检样本是否可用，避免拿截断文本评完整回答质量。
 
@@ -3568,7 +3528,7 @@ function subCategoryOf(task, subTask) {
 
   }
 
-  // key 指纹筛选开关（最近请求面板 v0.4.27）：null=全部；8 位十六进制=只看该 key
+  // key 指纹筛选开关（最近请求面板 ：null=全部；8 位十六进制=只看该 key
 
   if (req.method === 'POST' && url.pathname === '/admin/api/recent-key-filter') {
 
@@ -3598,7 +3558,6 @@ function subCategoryOf(task, subTask) {
 
   if (req.method === 'POST' && url.pathname === '/admin/api/reload') {
 
-    // v0.7.3 九审 P1：reload 与启动/热切同一校验——先 load 到临时变量，active 无 secret
 
     // 拒绝（磁盘配置被外部改成 active 后 reload 不再是绕过口），校验通过才替换全局 config。
 
@@ -3656,7 +3615,7 @@ function subCategoryOf(task, subTask) {
 
   }
 
-  // v0.9.3 管理页登录门：index/app.js 无会话一律回登录页（样式与手册放行——登录页也需要）；API 调用不受影响
+  // 管理页登录门：index/app.js 无会话一律回登录页（样式与手册放行——登录页也需要）；API 调用不受影响
   if (req.method === 'GET' && ['/index.html', '/', '/app.js', '/manual.html'].includes(url.pathname) && !authorizedAdmin(req)) {
     return staticFile('/login.html', res);
   }
@@ -3676,7 +3635,6 @@ const shutdownManager = createShutdownManager({
 
   flush: async () => {
 
-    // v0.7.1 七审 P1-2：排空顺序①在途后台语义复核（≤8s，超时放弃——分类超时本身就该丢弃）
 
     // ②决策日志写链 ③语义事件写链 ④预算账本。HTTP 响应结束≠复核结束，滚动重启前必须等完。
 
@@ -3695,7 +3653,7 @@ const shutdownManager = createShutdownManager({
     }
 
     await Promise.allSettled([decisionLog.writeChain, semanticLog.writeChain, judgeLog.writeChain, budgetTracker.pendingWrite]);
-    await guardPersist.drain(); // v0.9.1：guard 异步持久化排空（在途快照不丢）
+    await guardPersist.drain(); // 
 
   },
 
@@ -3721,7 +3679,7 @@ if (process.env.AMR_TEST_SHUTDOWN_IPC === '1' && typeof process.send === 'functi
 
 // 测试钩子（AMR_TEST_STUCK_SEMANTIC_TASK=1）：注册一个永不 resolve 的语义后台任务，
 
-// 供关停排空的 8s 上限行为级测试使用（九审 P1-3：mock 慢分类会被分类器自身超时
+// 供关停排空的 8s 上限行为级测试使用
 
 // 提前终止，无法证明 Promise.race 的 8s 上限真实生效）。
 

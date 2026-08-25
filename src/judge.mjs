@@ -1,25 +1,23 @@
-// v0.8.0 Judge：异步 shadow 评分器（十审边界，全量遵守）
-// v0.8.1 十二审收口（5×P1+4×P2）：
-//   ①回答正文提取——非流式解析 choices[0].message.content、流式增量解析 SSE delta.content，
-//     Judge 不再收到完整响应信封（usage/chunk JSON/data:/[DONE] 干扰评分）
-//   ②JudgeGuard 改 reserve→settle/release 预占闸：并发不穿透每日预算、半开仅放一个探针、
-//     支持状态持久化钩子（重启不重置当日用量/熔断）
-//   ③分类契约统一——taskCheck 核对路由大类（coding/reasoning/creative/extraction/agent/default），
-//     subTask 仅参考；suggested_task 做枚举校验；空 verdict（{}）不再计成功
-//   ④redactPatterns 脱敏——发送给评审模型前按运维正则遮蔽敏感字段
+// Judge：异步 shadow 评分器
+// ①回答正文提取——非流式解析 choices[0].message.content、流式增量解析 SSE delta.content，
+// Judge 不再收到完整响应信封（usage/chunk JSON/data:/[DONE] 干扰评分）
+// ②JudgeGuard 改 reserve→settle/release 预占闸：并发不穿透每日预算、半开仅放一个探针、
+// 支持状态持久化钩子（重启不重置当日用量/熔断）
+// ③分类契约统一——taskCheck 核对路由大类（coding/reasoning/creative/extraction/agent/default），
+// subTask 仅参考；suggested_task 做枚举校验；空 verdict（{}）不再计成功
+// ④redactPatterns 脱敏——发送给评审模型前按运维正则遮蔽敏感字段
 // ─────────────────────────────────────────────────────────────────────────────
-// 设计边界（十审用户拍板，不可越）：
-//   1. 只做异步 shadow 评估，绝不进在线路由决策闭环
-//   2. 仅抽样 1%~5% 已完成请求异步评分，不增用户时延
-//   3. 结果独立事件流 judge-reviews-*.jsonl 落盘（与决策/复核流隔离；v0.8.1 起随 judge 开关启停，
-//      不再依赖 decisionLog.enabled——付费调用必须留审计）
-//   4. 分类准确率与回答质量分开评分，不混总分
-//   5. 质量拆正确性/指令遵循/完整性/安全性；无参考答案标「不可验证」不强判
-//   6. 双模型比较随机交换 A/B 顺序控位置偏差
-//   7. GLM-5.3 主 Judge 上线前须人工标注集校准；不把单一 Judge 当绝对真值
-//   8. 结果只用于离线报表与策略模拟，不影响路由（影响路由须过灰度判据）
-//   9. 每日成本上限/超时/熔断/降级；Judge 失败绝不影响正常回答
-//
+// 设计边界：
+// 1. 只做异步 shadow 评估，绝不进在线路由决策闭环
+// 2. 仅抽样 1%~5% 已完成请求异步评分，不增用户时延
+// 3. 结果独立事件流 judge-reviews-*.jsonl 落盘（与决策/复核流隔离； 起随 judge 开关启停，
+// 不再依赖 decisionLog.enabled——付费调用必须留审计）
+// 4. 分类准确率与回答质量分开评分，不混总分
+// 5. 质量拆正确性/指令遵循/完整性/安全性；无参考答案标「不可验证」不强判
+// 6. 双模型比较随机交换 A/B 顺序控位置偏差
+// 7. GLM-5.3 主 Judge 上线前须人工标注集校准；不把单一 Judge 当绝对真值
+// 8. 结果只用于离线报表与策略模拟，不影响路由（影响路由须过灰度判据）
+// 9. 每日成本上限/超时/熔断/降级；Judge 失败绝不影响正常回答
 // 模块自包含：不 import server（防环），全部依赖注入（fetchImpl/now/persist/log/secret），
 // 单测可直接构造。
 
@@ -101,7 +99,6 @@ export function buildJudgeMessages({ messages, answerText, comparison = null, re
 }
 
 // —— 分类准确率独立核对（与质量分分开，事件单独落）——
-// v0.8.1 十二审 P1-3：契约统一——核对的是路由层的大类枚举（与 analyzeRequest 输出一致），
 // 不再拿 subTask 细类编码表去对路由大类（旧版显式请求还会传 'explicit'，判无可判）。
 // subTask 仅作为参考信息呈现，不参与对错判定；显式模型请求（routeMethod='explicit'）无路由
 // 判定，由调用方直接跳过 taskCheck。
@@ -126,7 +123,7 @@ export function normalizeSuggestedTask(v) {
 }
 
 // 空 verdict（{} 或全维度缺失）不算评分成功——否则四维全 missing 仍计 qualityDone，
-// 污染成功率与校准数据集（十二审 P2）
+// 污染成功率与校准数据集
 export function looksLikeQualityVerdict(parsed) {
   return Boolean(parsed && typeof parsed === 'object'
     && (parsed.correctness != null || parsed.instruction_following != null || parsed.completeness != null || parsed.safety != null));
@@ -171,7 +168,7 @@ export function normalizeVerdict(v) {
   return ['A', 'B', 'tie', 'both_bad'].includes(v) ? v : null;
 }
 
-// —— 回答正文提取（十二审 P1-1：Judge 只见正文，不见响应信封）——
+// —— 回答正文提取——
 // 非流式：从完整 OpenAI JSON 中取 choices[0].message.content（兼容多段数组 content）。
 // 解析失败/无正文 → null（调用方跳过评分——评协议包装比不评更糟）。
 export function extractNonStreamAnswerText(rawText) {
@@ -188,7 +185,7 @@ export function extractNonStreamAnswerText(rawText) {
 }
 
 // 流式：SSE delta.content 增量累积器。逐 chunk push（字节边界安全——只在 \n 处切行，
-// \n 字节不出现在 UTF-8 多字节序列内），text() 取全文（≤maxChars）。
+// \n 字节不出现在 UTF-8 多字节序列内），text 取全文（≤maxChars）。
 // 忽略 data:/[DONE] 协议行、reasoning 增量与无法解析的行；部分上游在末块带 message.content 也兼容。
 export function createAnswerCollector(maxChars = 65536) {
   let pending = [];
@@ -236,16 +233,16 @@ export function createAnswerCollector(maxChars = 65536) {
   };
 }
 
-// —— 护栏状态机（熔断/每日预算；v0.8.1 十二审 P1-2 改预占制）——
+// —— 护栏状态机（熔断/每日预算； ——
 // 生命周期：reserve(预估 token) → settle(实际 token, 成败) | release(未发起调用时退还)。
-//   reserve：原子预占一个调用名额 + 预估 token——并发任务在 await 上游前即被计数，
-//            不再出现「N 个并发同时过闸、各自成功后才落账」的预算穿透。
-//   settle：按实际 usage 结算（成功计 token；失败计熔断）；幂等（重复 settle 无效）。
-//   release：预占后未发起调用（如缺 api key）时退还名额，不计调用。
+// reserve：原子预占一个调用名额 + 预估 token——并发任务在 await 上游前即被计数，
+// 不再出现「N 个并发同时过闸、各自成功后才落账」的预算穿透。
+// settle：按实际 usage 结算（成功计 token；失败计熔断）；幂等（重复 settle 无效）。
+// release：预占后未发起调用（如缺 api key）时退还名额，不计调用。
 // 熔断：consecutiveFailures ≥ circuitThreshold → open；冷却期满转 half-open 且只放
-//   一个探针（probeBusy），探针失败即回 open，成功才 closed——半开不再被并发试探打穿。
+// 一个探针（probeBusy），探针失败即回 open，成功才 closed——半开不再被并发试探打穿。
 // 持久化：persist 钩子（由 server 注入，写 data/judge-guard-state.json）；restore 恢复
-//   当日用量与熔断态——重启不再重置预算（多副本需外部共享账本或按副本硬分割，见运营手册）。
+// 当日用量与熔断态——重启不再重置预算（多副本需外部共享账本或按副本硬分割，见运营手册）。
 export class JudgeGuard {
   constructor({ dailyMaxCalls = 500, dailyMaxTokens = 2_000_000, circuitThreshold = 5, cooldownMs = 15 * 60_000, now = Date.now, persist = null } = {}) {
     this.dailyMaxCalls = Number(dailyMaxCalls) || 500;
@@ -282,7 +279,6 @@ export class JudgeGuard {
     if (this.calls + this.reserved.size >= this.dailyMaxCalls) return { ok: false, reason: 'daily_calls_exhausted' };
     // 在途预估 + 本次预估一起对账：并发调用尚未结算时也要占住 token 预算（防穿透）
     if (this.tokens + inflightTokens + (Number(estTokens) || 0) > this.dailyMaxTokens) return { ok: false, reason: 'daily_tokens_exhausted' };
-    // 十三审 P1-1：预算检查通过后才做状态迁移——迁移失败会留下悬空 probeBusy，永久卡死。
     // isProbe 绑定 reservation：release/settle 的所有出口据此恢复状态机。
     const isProbe = this.circuit === 'open'; // 冷却期满待探（下面立刻转 half-open）
     if (isProbe) { this.circuit = 'half-open'; this.probeBusy = true; }
@@ -291,7 +287,7 @@ export class JudgeGuard {
     return { ok: true, handle };
   }
   // 未发起上游调用时退还预占（不计数、不动熔断）。
-  // 十三审 P1-1：探针预占被 release（如缺 api key）必须回滚 half-open——否则 probeBusy 悬空，
+  // 必须回滚 half-open——否则 probeBusy 悬空，
   // 后续所有 reserve 都被「半开单探针」拦下，跨日也无法恢复（预占失败同理，见 reserve）。
   release(handle) {
     const r = this.reserved.get(handle);
@@ -337,7 +333,6 @@ export class JudgeGuard {
     this.probeBusy = false;
     this._rollover(); // 旧日期状态 → 当日用量归零
   }
-  // v0.8.0：配置热更新只改上限，不清熔断/当日用量（改配置不该重置成本护栏）
   updateLimits({ dailyMaxCalls, dailyMaxTokens, circuitThreshold, cooldownMs } = {}) {
     if (Number.isFinite(Number(dailyMaxCalls))) this.dailyMaxCalls = Number(dailyMaxCalls);
     if (Number.isFinite(Number(dailyMaxTokens))) this.dailyMaxTokens = Number(dailyMaxTokens);
@@ -349,7 +344,6 @@ export class JudgeGuard {
     let inflightTokens = 0;
     let probeReserved = false;
     for (const r of this.reserved.values()) { inflightTokens += r.estTokens; if (r.isProbe) probeReserved = true; }
-    // 十三审 P1-1 不变量：probeBusy=true ⇒ 恰好存在一个 isProbe 预占（悬空即状态机 bug，测试断言）
     const invariantOk = !this.probeBusy || (probeReserved && this.circuit === 'half-open');
     return { day: this.day, calls: this.calls, tokens: this.tokens, inflight: this.reserved.size, inflightTokens, circuit: this.circuit, probeBusy: this.probeBusy, invariantOk, openedAt: this.openedAt, consecutiveFailures: this.consecutiveFailures, dailyMaxCalls: this.dailyMaxCalls, dailyMaxTokens: this.dailyMaxTokens };
   }

@@ -1,9 +1,9 @@
 # MaaS 平台集成：把 auto 做成平台上的一个模型
 
 > 目标形态：业务方在 MaaS 上多了一个 `auto` 模型——**同 URL、同 apikey**，调 auto 背后自动路由到各实际模型，实现成本/效率/效果最优。调用方零改造（仍是标准 OpenAI 协议）。
-> 适用版本：v0.4.21 及以上（需 `ROUTER_KEY_MODE=passthrough`）
+> 适用版本：0.4.21 及以上（需 `ROUTER_KEY_MODE=passthrough`）
 
-> **模型入口（v0.9.0 起）**：统一入口名 `cmtoken-auto`（`model` 传该值或留空）；旧名 `auto` 已停用（400）。`GET /v1/models` 仅返回该入口，池内模型不对外暴露（`routing.exposeModelList=auto-only`）；需要点名的内部调试场景保持 `routing.allowExplicitModel` 不变。
+> **模型入口**：统一入口名 `cmtoken-auto`（`model` 传该值或留空）；旧名 `auto` 已停用（400）。`GET /v1/models` 仅返回该入口，池内模型不对外暴露（`routing.exposeModelList=auto-only`）；需要点名的内部调试场景保持 `routing.allowExplicitModel` 不变。
 
 ## 一、架构与前提
 
@@ -118,14 +118,14 @@ systemctl daemon-reload && systemctl enable --now auto-router
 | **当前线上策略（均衡风格）** | **0.902** | **0.222** | 比 Zero 质量持平、用户成本再降 11% |
 | Oracle（事后最优） | 0.935 | 0.241 | 质量上限参照 |
 
-当前策略距「静态先验最优」参考上界质量差距 3.3%（基于任务级质量先验的启发式参照，非逐请求真实作答的 regret；真最优需全候选离线评估），属正常区间；差距主要来自 Oracle 逐请求挑最贵可用模型的成本上探。日常调参前先在「切换影响预估」看量化影响；与「不做 auto 会怎样」对比表（v0.5.0）配合可读出相对固定单模型的收益。
+当前策略距「静态先验最优」参考上界质量差距 3.3%（基于任务级质量先验的启发式参照，非逐请求真实作答的 regret；真最优需全候选离线评估），属正常区间；差距主要来自 Oracle 逐请求挑最贵可用模型的成本上探。日常调参前先在「切换影响预估」看量化影响；与「不做 auto 会怎样」对比表配合可读出相对固定单模型的收益。
 
 ## 五、怎么运营（日常 SOP）
 
 ### 每天 5 分钟（值班）
 
 1. 打开管理端 `http://<router-host>:8787/`，填 ADMIN_TOKEN 连接
-2. 看八个指标卡：错误率、Fallback 次数、语义复核分歧率、路由分类开销（v0.7.0：当日 L2/L3 分类费用，净节省 = 固定模型基线 − 回答费用 − 此开销）——异常按 §处置预案
+2. 看八个指标卡：错误率、Fallback 次数、语义复核分歧率、路由分类开销（当日 L2/L3 分类费用，净节省 = 固定模型基线 − 回答费用 − 此开销）——异常按 §处置预案
 3. 看运行监控最近请求列表有无红条（失败）
 
 ### 每周/每月
@@ -138,14 +138,14 @@ systemctl daemon-reload && systemctl enable --now auto-router
 
 ### 运营红线与切换判据
 
-- 语义复核 shadow→active 判据（已固化）：真实流量 ≥500 条、分层人工标注准确率达标（v0.7.0 起用 `GET /admin/api/annotation-export` 导出标注集）、复杂任务漏判有上限、错误率 ≤1%、观察 ≥7 天；切 active 后**从「语义灰度比例」5% 起步**（v0.7.1 起默认即 5；独立灰度，按会话 HMAC 服务端秘密分桶，客户端无法操纵分组），逐档 5%→10%→25%→50%→100%，对照组 `rollout_hold` 全程后台观察
+- 语义复核 shadow→active 判据（已固化）：真实流量 ≥500 条、分层人工标注准确率达标（用 `GET /admin/api/annotation-export` 导出标注集）、复杂任务漏判有上限、错误率 ≤1%、观察 ≥7 天；切 active 后**从「语义灰度比例」5% 起步**（默认即 5；独立灰度，按会话 HMAC 服务端秘密分桶，客户端无法操纵分组），逐档 5%→10%→25%→50%→100%，对照组 `rollout_hold` 全程后台观察
 
-- **v0.7.2 八审运维补丁（生产切 active 前必读）**：①`SEMANTIC_BUCKET_SECRET` 写入宿主机 .env——`python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 或 `openssl rand -base64 32`。docker-compose.prod.yml 已注入该变量并用 `${VAR:?VAR is required}` 强校验；active 模式启动或热切到 active 也会校验，缺失即拒启动。shadow 模式可缺省（进程级随机不影响观察）。②管理页「语义灰度比例」tooltip 已同步说明 HMAC + 桶键优先级 + secret 跨重启稳定。③灰度分桶元数据三态（applied/rejected/hold）都带 bucketKey+source，审计更完整。④分桶键来源指标 `router_semantic_bucket_key_source_total{source}`——internal 异常升高即在线探测告警。⑤SIGTERM 排空行为级 e2e 已入测试套（tests/shutdown-drain.test.mjs），Windows 经 IPC 钩子触发同条 shutdownManager.shutdown 路径（POSIX 仍真信号）。⑥`classifierLatencyMs` 已统一 `totalLatencyMs` 口径。
+- **生产切 active 前的运维要点**：①`SEMANTIC_BUCKET_SECRET` 写入宿主机 .env——`python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 或 `openssl rand -base64 32`。docker-compose.prod.yml 已注入该变量并用 `${VAR:?VAR is required}` 强校验；active 模式启动或热切到 active 也会校验，缺失即拒启动。shadow 模式可缺省（进程级随机不影响观察）。②管理页「语义灰度比例」tooltip 已同步说明 HMAC + 桶键优先级 + secret 跨重启稳定。③灰度分桶元数据三态（applied/rejected/hold）都带 bucketKey+source，审计更完整。④分桶键来源指标 `router_semantic_bucket_key_source_total{source}`——internal 异常升高即在线探测告警。⑤SIGTERM 排空行为级 e2e 已入测试套（tests/shutdown-drain.test.mjs），Windows 经 IPC 钩子触发同条 shutdownManager.shutdown 路径（POSIX 仍真信号）。⑥`classifierLatencyMs` 已统一 `totalLatencyMs` 口径。
 
-- **v0.7.3 九审收口（升级操作不变，口径修正）**：①生产 compose 的 `SEMANTIC_BUCKET_SECRET` 恒必填（shadow 也配——统一口径防「shadow 期没配、切 active 才发现」）；本地开发 shadow 可缺省。②secret 强度下限 32 字节：active 模式配置过短值直接拒启动（报错含重新生成命令）。③`/admin/api/reload` 同样校验——磁盘配置改 active 后 reload 不能绕过 secret 检查。④决策/复核日志的 `bucketKey` 现为 HMAC 短指纹（`sid:9f3ab…`），原始 session ID 不落盘（隐私）。⑤分桶来源指标 internal=匿名请求占比，探测检测不由此指标承担。
+- **secret 与隐私口径**：①生产 compose 的 `SEMANTIC_BUCKET_SECRET` 恒必填（shadow 也配——统一口径防「shadow 期没配、切 active 才发现」）；本地开发 shadow 可缺省。②secret 强度下限 32 字节：active 模式配置过短值直接拒启动（报错含重新生成命令）。③`/admin/api/reload` 同样校验——磁盘配置改 active 后 reload 不能绕过 secret 检查。④决策/复核日志的 `bucketKey` 现为 HMAC 短指纹（`sid:9f3ab…`），原始 session ID 不落盘（隐私）。⑤分桶来源指标 internal=匿名请求占比，探测检测不由此指标承担。
 
-- **v0.7.4 十审（隐私与发布证据链）**：①决策/复核日志的会话标识为 `sessionFingerprint`（`sidfp:<16hex>` HMAC 指纹）——原始 `x-session-id` 不落盘（该字段客户端可控，可能含手机号/账号）；跨日志对账用同 secret 的指纹一致性行。②发布报告 `reports/release-*.json` 带 `validForRelease` 门禁（clean HEAD+exact tag）；报告不提交回被证明的 tag——发版流程：commit → tag → 干净 worktree 跑 `npm run test:release` → 报告归档。③`SEMANTIC_BUCKET_SECRET` 32 字节为**长度下限**，不证明熵——一律用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成。
-- **v0.8.0 Judge（异步质量评审）**：①抽样 1~5% 已成功请求异步调用评审模型（默认 glm-5.3）打分——不进在线路由、不增用户时延、失败不影响回答。②四维评分（正确性/指令遵循/完整性/安全性），无参考答案维度标不可验证不计分；分类核对独立事件不混总分。③四重护栏：每日调用/token 双预算（UTC 自然日翻转）、单次超时 60s、连续失败 5 次熔断（冷却后半开试探）——超限落 skipped 事件不报警。④数据面 `data/decisions/judge-reviews-*.jsonl`（judgeModel/rubric hash/answeredModel/sessionFingerprint 指纹/usage/时延），与决策/语义复核流隔离。⑤指标 `router_judge_total{stage}`/`router_judge_tokens`/`router_judge_circuit_state`（0 正常/1 半开/2 熔断）。⑥默认 enabled=false；开启走管理页 Judge 卡片或 config.judge 节，热更新即时生效（熔断与当日用量不清零）。⑦**v0.8.3 十二审收口**：评分输入改纯正文提取（信封/SSE 字节不再进评分）；预算预占-结算制且状态持久化 `data/judge-guard-state.json`（重启不清零）；judge 流启停独立于决策日志开关（judge 开+决策日志关被 config 校验拒绝——付费调用必须留审计链）；`judge.redactPatterns` 可配脱敏正则。
+- **隐私与发布证据链**：①决策/复核日志的会话标识为 `sessionFingerprint`（`sidfp:<16hex>` HMAC 指纹）——原始 `x-session-id` 不落盘（该字段客户端可控，可能含手机号/账号）；跨日志对账用同 secret 的指纹一致性行。②发布报告 `reports/release-*.json` 带 `validForRelease` 门禁（clean HEAD+exact tag）；报告不提交回被证明的 tag——发版流程：commit → tag → 干净 worktree 跑 `npm run test:release` → 报告归档。③`SEMANTIC_BUCKET_SECRET` 32 字节为**长度下限**，不证明熵——一律用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成。
+- **Judge（异步质量评审）**：①抽样 1~5% 已成功请求异步调用评审模型（默认 glm-5.3）打分——不进在线路由、不增用户时延、失败不影响回答。②四维评分（正确性/指令遵循/完整性/安全性），无参考答案维度标不可验证不计分；分类核对独立事件不混总分。③四重护栏：每日调用/token 双预算（UTC 自然日翻转）、单次超时 60s、连续失败 5 次熔断（冷却后半开试探）——超限落 skipped 事件不报警。④数据面 `data/decisions/judge-reviews-*.jsonl`（judgeModel/rubric hash/answeredModel/sessionFingerprint 指纹/usage/时延），与决策/语义复核流隔离。⑤指标 `router_judge_total{stage}`/`router_judge_tokens`/`router_judge_circuit_state`（0 正常/1 半开/2 熔断）。⑥默认 enabled=false；开启走管理页 Judge 卡片或 config.judge 节，热更新即时生效（熔断与当日用量不清零）。⑦**工程收口**：评分输入改纯正文提取（信封/SSE 字节不再进评分）；预算预占-结算制且状态持久化 `data/judge-guard-state.json`（重启不清零）；judge 流启停独立于决策日志开关（judge 开+决策日志关被 config 校验拒绝——付费调用必须留审计链）；`judge.redactPatterns` 可配脱敏正则。
 - 模型退网：管理端关该模型启用开关 → fallbackOrder 自动重排，无需重启
 - 新模型上线四步：管理端录入（质量分/成本/时延/部署）→ eval gate 50 条实测 → replay 预估 → 小流量灰度
 
@@ -160,7 +160,7 @@ systemctl daemon-reload && systemctl enable --now auto-router
 | 管理端连不上 | ADMIN_TOKEN | 轮换后旧值立即失效（时序安全比较），填新值 |
 | 分类器挂了 | classifier 容器 | shadow 无影响；active 自动回退规则层（级联方式先升大模型再判，两级都挂才回退），服务不中断 |
 | 429 频出 | 限流计数 | 正常保护；单租户长期顶格 → 调 config.rateLimit |
-| 客户端报 400「请求体不是合法 JSON」 | 客户端是否压缩请求体（Content-Encoding） | v0.8.1 起 gzip/deflate/br（含复合）自动解压——先升级；仍报错则为损坏数据（「解压失败」）或解压后超 50MB（「解压后请求体超过上限」）。zstd 等其余编码报 415，客户端关压缩或改用支持编码。v0.9.0 起 error.type 按真实错误区分（`invalid_request_error`=JSON 损坏，`unsupported_content_encoding` 仅 415）——排查时先看 type 再看 message |
+| 客户端报 400「请求体不是合法 JSON」 | 客户端是否压缩请求体（Content-Encoding） | gzip/deflate/br（含复合）自动解压；报错则为损坏数据（「解压失败」）或解压后超 50MB（「解压后请求体超过上限」）。zstd 等其余编码报 415，客户端关压缩或改用支持编码。error.type 按真实错误区分（`invalid_request_error`=JSON 损坏，`unsupported_content_encoding` 仅 415）——排查时先看 type 再看 message |
 
 ### 扩容与回滚
 

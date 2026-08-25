@@ -29,7 +29,7 @@ export function renderPrometheusMetrics(snapshot) {
     `router_fallbacks_total ${counters.fallback || 0}`,
   ]);
 
-  // v0.5.1: TTFT（首 token 时延）独立观测 + 流式完成/中断计数（流尾单次落账）
+  // 独立观测 + 流式完成/中断计数（流尾单次落账）
   const ttft = counters.ttft || { count: 0, sumMs: 0 };
   metric(lines, 'router_ttft_ms', 'summary', '首 token 时延（流式 TTFT，毫秒）', [
     `router_ttft_ms_count ${ttft.count}`,
@@ -41,7 +41,6 @@ export function renderPrometheusMetrics(snapshot) {
     `router_stream_total{outcome="aborted"} ${stream.aborted || 0}`,
   ]);
 
-  // v0.5.1: 预算预占-结算统计（估算落账 vs 实际 usage 冲正）
   metric(lines, 'router_budget_settle_total', 'counter', '预算结算计数（exact=实际 usage 冲正, estimated=无 usage 保留估算）', [
     `router_budget_settle_total{kind="exact"} ${budget.exactSettles || 0}`,
     `router_budget_settle_total{kind="estimated"} ${budget.estimatedSettles || 0}`,
@@ -59,48 +58,45 @@ export function renderPrometheusMetrics(snapshot) {
   metric(lines, 'router_task_total', 'counter', '任务类型分布', taskRows);
 
   const semantic = counters.semantic || {};
-  // v0.6.1 五审 P2：补全漏斗后段——escalated（L2→L3 升级数）/rejectedLowConfidence（低于采纳线
+  // /rejectedLowConfidence（低于采纳线
   // 被拒数）此前只在内存 counters 有、Prometheus 不导出，运营无法从监控判断调阈值后 L3 调用率变化
   const semanticRows = ['eligible', 'attempted', 'succeeded', 'disagreed', 'errors', 'applied', 'escalated', 'rejectedLowConfidence', 'rolloutHold']
     .map((stage) => `router_semantic_total{stage="${stage}"} ${semantic[stage] || 0}`);
   metric(lines, 'router_semantic_total', 'counter', '语义复核各阶段计数（escalated=L2升级L3，rejectedLowConfidence=低于采纳线被拒，rolloutHold=独立灰度未放量走规则层）', semanticRows);
-  // v0.7.2 八审 P2 / v0.7.3 九审勘误：分桶键来源分布。语义=「匿名请求占比」——internal
   // 表示既无 x-session-id 也无有效 key 指纹（走内部随机 ID）。本指标**不能**证明「探测
   // 实验组」：探测者可每发换一个 x-session-id（source 仍=session）。探测检测需另建
-  // per-key session 基数/换 session 频率统计（v0.8 候选）。现用途：监控匿名流量占比异常。
+  // per-key session 基数/换 session 频率统计 候选）。现用途：监控匿名流量占比异常。
   const bks = (counters.semantic && counters.semantic.bucketKeySource) || {};
   const bksRows = Object.keys(bks).length
     ? Object.entries(bks).map(([src, n]) => `router_semantic_bucket_key_source_total{source="${esc(src)}"} ${n}`)
     : ['router_semantic_bucket_key_source_total{source="session"} 0', 'router_semantic_bucket_key_source_total{source="fingerprint"} 0', 'router_semantic_bucket_key_source_total{source="internal"} 0'];
   metric(lines, 'router_semantic_bucket_key_source_total', 'counter', '语义灰度分桶键来源分布（internal=无 session 无 key 指纹的匿名请求占比；探测检测不由此指标承担）', bksRows);
 
-  // v0.6.1 五审 P2：cascade 分层量（small=小模型直采 / large=升级大模型 / small-degraded=降级）
   const cascadeRows = Object.entries(semantic.byCascadeLevel || {}).map(([level, n]) => `router_semantic_cascade_total{level="${esc(level)}"} ${n}`);
   if (cascadeRows.length > 0) metric(lines, 'router_semantic_cascade_total', 'counter', 'cascade 各层产出计数（small=直采，large=升级L3，small-degraded=降级）', cascadeRows);
 
-  // v0.8.0 Judge：异步评分器各阶段计数（sampled=抽样入选，quality_done=完成质量评分，
+  // Judge：异步评分器各阶段计数（sampled=抽样入选，quality_done=完成质量评分，
   // task_check_done=完成分类核对，skipped_* 与 error_* 见事件流 reason/stage）
   const judge = counters.judge || {};
   const judgeRows = ['sampled', 'qualityDone', 'taskCheckDone', 'errors', 'persistErrors'].map((k) => `router_judge_total{stage="${k}"} ${judge[k] || 0}`);
   metric(lines, 'router_judge_total', 'counter', 'Judge 异步 shadow 评分各阶段计数（不进在线决策闭环；sampled=抽样入选，errors 含解析失败，persistErrors=guard 状态持久化失败）', judgeRows);
   if (judge.tokens) metric(lines, 'router_judge_tokens_total', 'counter', 'Judge 调用累计 token（进程口径，自然日翻转；与每日上限对照请看 guard_* 系列）', [`router_judge_tokens_total ${judge.tokens}`]);
-  // 十四审 P2：gauge 必须恒输出 0/1/2——closed(0) 时 if 短路会让整条指标消失，
-  // Prometheus 端 absent() 无法区分「正常」与「judge 模块被移除」，状态回退也测不出。
+  // 时 if 短路会让整条指标消失，
+  // Prometheus 端 absent 无法区分「正常」与「judge 模块被移除」，状态回退也测不出。
   if (Number.isFinite(Number(judge.gaugeCircuit))) metric(lines, 'router_judge_circuit_state', 'gauge', 'Judge 熔断状态（0=closed 1=half-open 2=open；恒输出，closed 不是缺席）', [`router_judge_circuit_state ${Number(judge.gaugeCircuit)}`]);
-  // 十三审 P1-2：guard 持久化口径（重启不重置）——预算对账以这组为准
+  // ——预算对账以这组为准
   if (Number.isFinite(Number(judge.guardCalls))) {
     metric(lines, 'router_judge_guard_calls_today', 'gauge', 'Judge 当日已结算调用数（Guard 持久化口径，重启不重置；与 dailyMaxCalls 对照）', [`router_judge_guard_calls_today ${judge.guardCalls}`]);
     metric(lines, 'router_judge_guard_tokens_today', 'gauge', 'Judge 当日已结算 token（Guard 持久化口径，重启不重置；与 dailyMaxTokens 对照）', [`router_judge_guard_tokens_today ${judge.guardTokens}`]);
   }
 
-  // v0.7.0 六审步骤5：cascade 每层时延（sum/count 口径，均值=sum/count；P95 需按事件日志聚合）
   const latRows = Object.entries(semantic.cascadeLatency || {}).flatMap(([level, agg]) => [
     `router_semantic_cascade_latency_ms_sum{level="${esc(level)}"} ${agg.sumMs}`,
     `router_semantic_cascade_latency_ms_count{level="${esc(level)}"} ${agg.count}`,
   ]);
   if (latRows.length > 0) metric(lines, 'router_semantic_cascade_latency_ms', 'counter', 'cascade 各层时延累计（sum/count，ms）；观察期评估 L2/L3 的时延代价', latRows);
 
-  // v0.6.1 五审 P1-4：路由开销（L3 大模型分类调用）可观测——真实付费的隐藏成本首次进监控
+  // 可观测——真实付费的隐藏成本首次进监控
   const overhead = counters.routingOverhead || {};
   metric(lines, 'router_routing_overhead_calls_total', 'counter', '路由层大模型分类调用次数（L3 升级）', [
     `router_routing_overhead_calls_total ${overhead.calls || 0}`,
@@ -116,7 +112,7 @@ export function renderPrometheusMetrics(snapshot) {
   metric(lines, 'router_budget_estimated_spend_yuan', 'gauge', '当日估算花费（元，estimateOnly）', [
     `router_budget_estimated_spend_yuan ${Number(budget.estimatedSpendYuan || 0)}`,
   ]);
-  // v0.5.4 修四审：文档宣称的两指标此前虚名（metrics.mjs 从未输出）——「预算指标全零」无法区分
+  // 修——「预算指标全零」无法区分
   // 「没花钱」与「没记账」。落地真实观测：已结算消费（实际+估算结清）与在途预占数。
   metric(lines, 'router_budget_settled_yuan', 'gauge', '当日已结算消费（元）= 按实际 usage 结算 + 无 usage 估算结清（budget.enabled=false 时也持续记账）', [
     `router_budget_settled_yuan ${Number(budget.settledSpendYuan || 0)}`,
@@ -124,7 +120,6 @@ export function renderPrometheusMetrics(snapshot) {
   metric(lines, 'router_budget_pending_reserves', 'gauge', '在途预占数（已 reserve 未 settle 的请求数）', [
     `router_budget_pending_reserves ${Number(budget.pendingReserves || 0)}`,
   ]);
-  // v0.7.1 七审 P1-4：五元组分账 + 恒等式（answerActual + answerEstimated + overhead + legacy == total）
   metric(lines, 'router_budget_answer_actual_cost_yuan', 'gauge', '回答模型按真实 usage 结算（元）', [
     `router_budget_answer_actual_cost_yuan ${Number(budget.answerActualCostYuan || 0)}`,
   ]);

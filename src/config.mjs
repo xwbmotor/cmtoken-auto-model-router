@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 export const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-// 单一版本源：软件版本统一取 package.json 的 semver（0.x.x），不再维护独立的整数配置修订号。
+//单一版本源：软件版本统一取 package.json 的 semver（0.x.x），不再维护独立的整数配置修订号。
 export const SOFTWARE_VERSION = (() => {
   try {
     return JSON.parse(readFileSync(resolve(projectRoot, 'package.json'), 'utf8')).version;
@@ -29,8 +29,8 @@ export function validateConfig(config) {
     if (!['self_hosted', 'ecosystem'].includes(model.ownership)) throw new Error(`模型 ${model.id} ownership 无效`);
     if (!model.quality || typeof model.quality.default !== 'number') throw new Error(`模型 ${model.id} 缺少 quality.default`);
     if (model.calibrationStatus !== undefined && !['pilot', 'unverified', 'verified'].includes(model.calibrationStatus)) throw new Error(`模型 ${model.id} calibrationStatus 无效（可选 pilot/unverified/verified）`);
-    // v0.5.4 修四审：calibrationStatus → reliabilityStatus 更名（「已验证」实际只验证 HTTP 可用性，
-    // 不是回答质量——原名让质量校准和可用性校准混为一谈）。旧字段兼容读取（calibrationStatus 仍生效）。
+    //修calibrationStatus → reliabilityStatus 更名（「已验证」实际只验证 HTTP 可用性，
+    //不是回答质量——原名让质量校准和可用性校准混为一谈）。旧字段兼容读取（calibrationStatus 仍生效）。
     if (model.reliabilityStatus !== undefined && !['pilot', 'unverified', 'verified'].includes(model.reliabilityStatus)) throw new Error(`模型 ${model.id} reliabilityStatus 无效（可选 pilot/unverified/verified）`);
     model.reliabilityStatus ??= model.calibrationStatus;
     if (model.benchmarkScores !== undefined && model.benchmarkScores !== null && (typeof model.benchmarkScores !== 'object' || Array.isArray(model.benchmarkScores))) throw new Error(`模型 ${model.id} benchmarkScores 必须是对象或 null`);
@@ -48,8 +48,8 @@ export function validateConfig(config) {
   }
   if (!config.routing || !['active', 'shadow'].includes(config.routing.mode)) throw new Error('routing.mode 必须是 active 或 shadow');
   if (config.routing.costTier != null && !['budget', 'balanced', 'quality', 'max', 'custom'].includes(config.routing.costTier)) throw new Error('routing.costTier 必须是 budget/balanced/quality/max/custom');
-  // 十四审：auto 对外模型名可配 + 模型发现列表口径。autoModelId 不得与池内模型 ID 冲突
-  // （否则 auto 名与真实模型重合，路由入口判定与显式点名不可区分）。
+  //auto 对外模型名可配 + 模型发现列表口径。autoModelId 不得与池内模型 ID 冲突
+  //（否则 auto 名与真实模型重合，路由入口判定与显式点名不可区分）。
   if (config.routing.autoModelId !== undefined) {
     if (typeof config.routing.autoModelId !== 'string' || !config.routing.autoModelId.trim()) throw new Error('routing.autoModelId 必须是非空字符串（auto 模型对外展示名，如「cmtoken-auto」）');
     if ((config.models || []).some((m) => m.id === config.routing.autoModelId)) throw new Error(`routing.autoModelId（${config.routing.autoModelId}）不得与池内模型 ID 冲突`);
@@ -57,11 +57,11 @@ export function validateConfig(config) {
   if (config.routing.exposeModelList !== undefined && !['auto-only', 'all'].includes(config.routing.exposeModelList)) throw new Error('routing.exposeModelList 必须是 auto-only（默认，仅暴露 auto 入口）或 all（含池内模型）');
   const bounded = [['qualityFloor', 0, 1], ['qualityWeight', 0, 3], ['costWeight', 0, 1], ['latencyWeight', 0, 1], ['selfHostedBonus', 0, 1], ['activeTrafficPercent', 0, 100], ['complexQualityMargin', 0, 0.3], ['providerCostWeight', 0, 1], ['subtaskSmoothK', 1, 1000], ['subtaskMinSamples', 0, 1000], ['subtaskMaxAdjust', 0, 1], ['sessionStickinessMaxGap', 0, 1]];
   for (const [name, min, max] of bounded) {
-    if (config.routing[name] === undefined) continue; // 未配置视为默认值（如 providerCostWeight 缺省=0），向后兼容旧配置
+    if (config.routing[name] === undefined) continue; //未配置视为默认值（如 providerCostWeight 缺省=0），向后兼容旧配置
     const value = Number(config.routing[name]);
     if (!Number.isFinite(value) || value < min || value > max) throw new Error(`routing.${name} 必须在 ${min} 到 ${max} 之间`);
   }
-  // v0.5.2：相对质量损失上限（对象形式 simple/balanced/complex 各 0~1；数字形式=统一值）
+  //相对质量损失上限（对象形式 simple/balanced/complex 各 0~1；数字形式=统一值）
   if (config.routing.relQualityCap !== undefined) {
     const rqc = config.routing.relQualityCap;
     const asNum = (v) => Number(v);
@@ -78,7 +78,7 @@ export function validateConfig(config) {
       throw new Error('routing.relQualityCap 必须是数字或 { simple, balanced, complex } 对象');
     }
   }
-  // v0.5.2：taskPreferences 校验（model 必须在池内、tolerance 0~1）
+  //taskPreferences 校验（model 必须在池内、tolerance 0~1）
   if (config.routing.taskPreferences) {
     const ids = new Set(config.models.map((m) => m.id));
     for (const [task, pref] of Object.entries(config.routing.taskPreferences)) {
@@ -114,9 +114,9 @@ export function validateConfig(config) {
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) throw new Error('semanticRouter.confidenceThreshold 必须在 0 到 1 之间');
     if (config.semanticRouter.minConfidence !== undefined) {
       const minConf = Number(config.semanticRouter.minConfidence);
-      if (!Number.isFinite(minConf) || minConf < 0 || minConf > 1) throw new Error('semanticRouter.minConfidence 必须在 0 到 1 之间（兼容字段：未配置新字段时的回退值，v0.6.0 起建议用 smallAcceptThreshold / finalAdoptionThreshold）');
+      if (!Number.isFinite(minConf) || minConf < 0 || minConf > 1) throw new Error('semanticRouter.minConfidence 必须在 0 到 1 之间（兼容字段：未配置新字段时的回退值，建议改用 smallAcceptThreshold / finalAdoptionThreshold）');
     }
-    // v0.6.0 三阈值拆分（四审：minConfidence 双语义）
+    //三阈值拆分（minConfidence 双语义）
     if (config.semanticRouter.smallAcceptThreshold !== undefined) {
       const v = Number(config.semanticRouter.smallAcceptThreshold);
       if (!Number.isFinite(v) || v < 0 || v > 1) throw new Error('semanticRouter.smallAcceptThreshold 必须在 0 到 1 之间（cascade 第一级：小模型置信度 ≥ 此值直接采纳，否则升级大模型）');
@@ -125,18 +125,18 @@ export function validateConfig(config) {
       const v = Number(config.semanticRouter.finalAdoptionThreshold);
       if (!Number.isFinite(v) || v < 0 || v > 1) throw new Error('semanticRouter.finalAdoptionThreshold 必须在 0 到 1 之间（语义复核最终采纳线，低于此值退回规则层决策）');
     }
-    // v0.7.0 六审 P1：语义路由独立灰度比例（与 routing.activeTrafficPercent 是两个实验变量）
+    //语义路由独立灰度比例（与 routing.activeTrafficPercent 是两个实验变量）
     if (config.semanticRouter.activeTrafficPercent !== undefined) {
       const v = Number(config.semanticRouter.activeTrafficPercent);
       if (!Number.isFinite(v) || v < 0 || v > 100) throw new Error('semanticRouter.activeTrafficPercent 必须在 0 到 100 之间（语义分类独立灰度比例，按 requestId 稳定分桶）');
     }
   }
-  // v0.8.0 Judge：异步 shadow 评分器（十审边界：只离线评分，不进在线决策闭环）
-  // v0.8.1 十二审 P1-5：judge 是付费调用，事件流必须可审计——judge 开 + 决策日志关
-  // 的组合直接拒绝（judge 流启停虽已独立于 decisionLog.enabled，但决策行与评审事件的
-  // requestId 关联依赖决策日志；两者都关会导致评分调用无审计链）。
+  //Judge：异步 shadow 评分器（边界：只离线评分，不进在线决策闭环）
+  //judge 是付费调用，事件流必须可审计——judge 开 + 决策日志关
+  //的组合直接拒绝（judge 流启停虽已独立于 decisionLog.enabled，但决策行与评审事件的
+  //requestId 关联依赖决策日志；两者都关会导致评分调用无审计链）。
   if (config.judge?.enabled === true && config.decisionLog?.enabled === false) {
-    throw new Error('judge.enabled=true 时 decisionLog.enabled 不得为 false——评审事件需与决策行按 requestId 关联审计（十二审 P1）');
+    throw new Error('judge.enabled=true 时 decisionLog.enabled 不得为 false——评审事件需与决策行按 requestId 关联审计');
   }
   if (config.judge) {
     if (typeof config.judge.enabled !== 'boolean') throw new Error('judge.enabled 必须是布尔值');
@@ -215,8 +215,8 @@ export function validateConfig(config) {
   return config;
 }
 
-// 按定价归一化成本指数：加权单价 = (输入占比 × 输入价 + 输出占比 × 输出价)，归一化到 0~1（最贵的 = 1）。
-// 输入输出流量构成由 costModel.pricingMix 配置（如 10:1）。
+//按定价归一化成本指数：加权单价 = (输入占比 × 输入价 + 输出占比 × 输出价)，归一化到 0~1（最贵的 = 1）。
+//输入输出流量构成由 costModel.pricingMix 配置（如 10:1）。
 export function computeCostIndexFromPricing(models, costModel) {
   const mix = costModel?.pricingMix || { input: 10, output: 1 };
   const totalMix = Number(mix.input) + Number(mix.output);
@@ -232,9 +232,9 @@ export function computeCostIndexFromPricing(models, costModel) {
     costs.push({ id: model.id, unitCost: weighted });
   }
   if (costs.length < 2) return null;
-  // 归一化锚点：优先用 costModel.pricingAnchorYuan 固定基准（默认 4.811，
-  // = 历史最贵 MiniMax-M3 的加权单价，保持删模型/换池子时成本指数语义不漂移）；
-  // 未配置时回退池内最贵（旧行为，仅兼容）。
+  //归一化锚点：优先用 costModel.pricingAnchorYuan 固定基准（默认 4.811，
+  //= 历史最贵 MiniMax-M3 的加权单价，保持删模型/换池子时成本指数语义不漂移）；
+  //未配置时回退池内最贵（旧行为，仅兼容）。
   const anchor = Number(costModel?.pricingAnchorYuan) > 0 ? Number(costModel.pricingAnchorYuan)
     : Math.max(...costs.map((c) => c.unitCost));
   if (!(anchor > 0)) return null;
@@ -243,7 +243,7 @@ export function computeCostIndexFromPricing(models, costModel) {
   return result;
 }
 
-// 由部署资源估算相对成本指数：costIndex ∝ (设备数 × 单机卡数 × 卡型单价权重) / 吞吐，归一化到 0~1（最贵的 = 1）。
+//由部署资源估算相对成本指数：costIndex ∝ (设备数 × 单机卡数 × 卡型单价权重) / 吞吐，归一化到 0~1（最贵的 = 1）。
 export function computeCostIndex(models, costModel) {
   const cardPrice = costModel?.cardPrice || {};
   const costs = [];
@@ -263,9 +263,9 @@ export function computeCostIndex(models, costModel) {
   return result;
 }
 
-// 平台侧成本指数（成本双指标之二）：与用户侧结算价（pricing 口径 costIndex）分开，
-// 度量平台自有算力的资源消耗强度 = 单位吞吐占用的硬件资源（机数×卡数×卡价权重 / 单实例吞吐）。
-// 用户侧看豆价（每豆换多少 token），平台侧看卡（同样吞吐谁吃卡少）；两者背离正是调度要同时管的事。
+//平台侧成本指数（成本双指标之二）：与用户侧结算价（pricing 口径 costIndex）分开，
+//度量平台自有算力的资源消耗强度 = 单位吞吐占用的硬件资源（机数×卡数×卡价权重 / 单实例吞吐）。
+//用户侧看豆价（每豆换多少 token），平台侧看卡（同样吞吐谁吃卡少）；两者背离正是调度要同时管的事。
 export function computeCostIndexProvider(models, costModel) {
   const cardPrice = costModel?.cardPrice || {};
   const costs = [];
@@ -297,8 +297,8 @@ export async function loadConfig() {
         if (computed[model.id] != null) model.costIndex = computed[model.id];
       }
     }
-    // 平台侧成本指数独立于 costModel.source：无论用户侧走 pricing 还是 deployment 口径，
-    // 只要模型有部署数据就计算 provider 指数（权重 providerCostWeight=0 时不影响评分，仅展示）
+    //平台侧成本指数独立于 costModel.source：无论用户侧走 pricing 还是 deployment 口径，
+    //只要模型有部署数据就计算 provider 指数（权重 providerCostWeight=0 时不影响评分，仅展示）
     const providerIndex = computeCostIndexProvider(config.models, config.costModel);
     if (providerIndex) {
       for (const model of config.models) {
@@ -311,12 +311,12 @@ export async function loadConfig() {
 }
 
 let saveChain = Promise.resolve();
-let historyCounter = 0;  // history 备份文件名唯一性计数器（时间戳可能同毫秒碰撞）
+let historyCounter = 0;  //history 备份文件名唯一性计数器（时间戳可能同毫秒碰撞）
 
 export function saveConfig(config) {
-  // 串行化：并发 saveConfig 排队执行，避免写同一个 temp 文件互相覆盖
+  //串行化：并发 saveConfig 排队执行，避免写同一个 temp 文件互相覆盖
   const task = saveChain.then(() => persistConfig(config), () => persistConfig(config));
-  saveChain = task.catch(() => {});  // 单次失败不阻塞后续保存
+  saveChain = task.catch(() => {});  //单次失败不阻塞后续保存
   return task;
 }
 
@@ -335,7 +335,7 @@ async function persistConfig(config) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  // 唯一 temp 文件名（pid + 时间戳），避免并发 rename 冲突
+  //唯一 temp 文件名（pid + 时间戳），避免并发 rename 冲突
   const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(temp, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await rename(temp, path);

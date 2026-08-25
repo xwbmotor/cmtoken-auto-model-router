@@ -2,10 +2,10 @@
 // 语义档位（OpenRouter cost_tier 思路）：预算/均衡/质量/顶配——带内双向过滤，
 // 高档位同样排除过于便宜的模型（band 不是 ceiling）。null=未启用档位（兼容旧配置）。
 const COST_TIERS = {
-  budget:  { label: '省钱', min: 0,    max: 0.2 },
-  balanced:{ label: '均衡', min: 0,    max: 0.5 },
+  budget: { label: '省钱', min: 0, max: 0.2 },
+  balanced:{ label: '均衡', min: 0, max: 0.5 },
   quality: { label: '质量', min: 0.15, max: 1 },
-  max:     { label: '顶配', min: 0.2,  max: 1 }
+  max: { label: '顶配', min: 0.2, max: 1 }
 };
 export function costTierBand(config) {
   const tier = config.routing?.costTier;
@@ -16,7 +16,6 @@ export function costTierBand(config) {
 // 市场信号：决策日志聚合的活信号（份额/点名/失败率），样本不足自动休眠、幅度有界
 import { adjustFor as marketAdjustFor } from './market-signal-runtime.mjs';
 
-// 十四审 P1/P2：auto 模型对外名可配（单一真源 config.routing.autoModelId，默认 "auto"）。
 // 硬切改名（如「cmtoken-auto」）后：/v1/models 展示该名、请求判定按该名走 auto 路由；
 // 旧名 "auto" 退化为普通字符串——若与池内模型 ID 不重合则按「模型不存在」400。
 // 全链路判定必须经 isAutoRequest，不得散落 === 'auto' 字面量。
@@ -104,10 +103,9 @@ function resolveTaskPatterns(taskRules) {
 const TRIVIAL_FACT_PATTERN = /^(请问)?(今天|现在|当前)?(是)?(星期几|周几|几号|日期是什么|几点了)[？?。\s]*$/i;
 const MULTI_OBJECTIVE_PATTERN = /成本|费用|质量|效果|时延|延迟|效率|性能|可用性|稳定性|框架|开源|兼容|协议|部署|安全|并发|扩展性/gi;
 
-// —— v0.6.0 规则层置信度证据模型（四审：关键词命中恒 0.86 不科学）——
+// —— 规则层置信度证据模型——
 // 置信度反映证据强度而非命中即高。三个下调因素让边缘案例（否定句/元讨论/多任务冲突）
 // 落到 confidenceThreshold(默认0.7) 以下进入语义复核，正常强命中保持 0.86 不复核。
-// v0.6.1 五审 P2 修正：否定证据不再全文匹配即扣——「不要解释，直接写 Python 函数」「禁止
 // 递归，写循环版本」本身是明确 coding 请求，全局否定词会误伤（复核预算浪费 + 时延增加）。
 // 局部化规则：只有当否定词与任务动词在同一短语（被否定的动作紧跟其后）时才算「否定包裹」。
 // 近邻窗 ±12 字符内出现任务动作词 = 否定与任务绑定；否则否定针对的是别的东西（说明/解释等）。
@@ -115,7 +113,7 @@ const NEGATION_PATTERN = /不要|不用|无需|禁止|避免|并非|而不是|�
 const META_QUESTION_PATTERN = /什么是|通俗.{0,6}(语言|方式|词语|地)?(解释|讲解|介绍|说明)|科普/i;
 const META_SUMMARIZE_PATTERN = /(总结|概括|翻译|改写|解释|讲解|评审意见)(一下|下)?[^。？！]{0,10}(这段|上述|下面|以上|该段|这份)/i;
 
-// 否定局部化（v0.6.1 五审 P2）：否定词到其后第一个分句边界（或 +10 字符）构成「否定作用域」。
+// 否定局部化 ：否定词到其后第一个分句边界（或 +10 字符）构成「否定作用域」。
 // 「否定包裹任务」= 胜出任务正则的【全部】命中都落在否定作用域内——被否定的关键词撑不起任务
 // 标签（「不要写代码」的 代码 被否定）；只要存在肯定命中（「不要解释，直接写函数」的 函数 在
 // 作用域外）任务成立不扣分（「禁止递归，写循环版本」否定的是实现方式而非任务本身）。
@@ -157,7 +155,6 @@ export function requestText(body) {
   return (body.messages || []).map((m) => flattenContent(m.content)).join('\n');
 }
 
-// v0.6.1 五审 P2：语义分类器专用文本口径（L2/L3 与 L1 统一）。
 // requestText 含 system+assistant+全部历史——成本估算需要它（token 计费按全部输入），但语义
 // 分类不能用它：system 提示「你是编程助手」、assistant 历史里的代码都会把分类器拽向 coding。
 // 口径：以最后一条 user 消息为主，补充有限的前置 user 上下文（最近 2 条），排除 system/assistant。
@@ -168,12 +165,12 @@ export function classifierText(body, contextTurns = 2) {
   return tail.map((m) => flattenContent(m.content)).join('\n');
 }
 
-// 任务分类用的文本：v0.7.0 六审 P2 起分两个口径——
+// 任务分类用的文本： 
 // ① taskText（语义口径）：与 L2/L3 的 classifierText 一致（user 为主、排除 system/assistant）。
-//    L1 的 task 正则/否定包裹/trivial 判定用这个：assistant 历史里的大段代码会把「接着问个
-//    普通问题」的请求拽向 coding，与 L2/L3 判定不一致 → 人为放大层间分歧率。
+// L1 的 task 正则/否定包裹/trivial 判定用这个：assistant 历史里的大段代码会把「接着问个
+// 普通问题」的请求拽向 coding，与 L2/L3 判定不一致 → 人为放大层间分歧率。
 // ② requestText（规模口径）：全部消息。复杂度信号的 length/turns/structure 计量按请求真实
-//    规模算（用户把长代码贴回来要求改写，工作量确实是 coding 级）。
+// 规模算（用户把长代码贴回来要求改写，工作量确实是 coding 级）。
 function taskText(body) {
   return classifierText(body);
 }
@@ -185,7 +182,7 @@ export function estimateInputTokens(text) {
 
 export function analyzeRequest(body, config) {
   const text = taskText(body);
-  // v0.7.0 六审 P2：规模口径——复杂度信号（length/structure/objectives/clauses）按请求全量文本
+  // 按请求全量文本
   // 计量（含 assistant 历史：用户贴回长代码要求改写，工作量确实按 coding 级算）；语义口径
   // （task 正则/否定/trivial）用上面的 user-only text，与 L2/L3 判定一致。
   const fullText = requestText(body);
@@ -194,7 +191,6 @@ export function analyzeRequest(body, config) {
   for (const [name, regex] of Object.entries(patterns)) {
     if (regex.test(text)) { task = name; break; }
   }
-  // v0.6.1 五审 P2：turns/trivial 只看 user 消息。原实现用全部消息数——常见 system+user 两条
   // 消息的「今天星期几」不再是 trivial（turns=2 > 1），置信度从 0.98 跌到 0.55 进复核，
   // 复现「简单问题难度/置信度不合理」。system 提示与 assistant 历史不是「用户追问」。
   const userTurns = Array.isArray(body.messages) ? body.messages.filter((m) => m.role === 'user').length : 0;
@@ -241,7 +237,7 @@ export function analyzeRequest(body, config) {
     const toolNames = (body.tools || []).map((t) => String(t?.function?.name || t?.name || '')).join(' ').toLowerCase();
     subTask = /search|web|检索|surf/.test(toolNames) ? 'web-search' : /devops|deploy|ops/.test(toolNames) ? 'devops' : 'workflow-execution';
   }
-  // —— v0.6.0 置信度证据模型：命中是证据但不是充分证据 ——
+  // —— 置信度证据模型：命中是证据但不是充分证据 ——
   // 基线：trivial 直接事实 0.98（模式锚定首尾，无歧义）；任务命中 0.86 基线；default 未命中 0.55。
   // 下调：①否定包裹——「不要写代码」不是 coding 请求（语义与关键词相反）；②元讨论/引用性提及
   // ——「什么是递归」是概念问答、「总结这段代码」的主任务是 summarize 而非命中词所属任务；
@@ -412,11 +408,10 @@ export function routeRequest(body, config, runtime = {}) {
     if (reasons.length) { rejected.push({ model: model.id, reasons }); continue; }
 
     // 质量分三级来源——30 小类实测（分层平滑）> 大类实测 > 默认 0.75：
-    // finalScore = sub*(n/(n+k)) + major*(k/(n+k))。v0.5.2 参数保守化（Codex 二审：k=8 时 n=5 小类
-    // 权重 38.5%，debugging 0.580(n=5) 把 0.955 拉到 0.811，5 条样本撼动大类结论过于激进）：
-    //   - k 默认 8→32：n=5 权重 13.5%、n=8 为 20%（同样 n 下小类话语权减半）
-    //   - subtaskMinSamples 默认 4：n<4 视为无小类证据，直接用大类分
-    //   - subtaskMaxAdjust 默认 0.06：小类对大类分的修正幅度封顶（±0.06），防小样本极端值击穿
+    // finalScore = sub*(n/(n+k)) + major*(k/(n+k))。 参数保守化：
+    // - k 默认 8→32：n=5 权重 13.5%、n=8 为 20%（同样 n 下小类话语权减半）
+    // - subtaskMinSamples 默认 4：n<4 视为无小类证据，直接用大类分
+    // - subtaskMaxAdjust 默认 0.06：小类对大类分的修正幅度封顶（±0.06），防小样本极端值击穿
     const subScore = model.benchmarkScores?.subtasks?.[analysis.subTask];
     const majorScore = Number(model.quality?.[analysis.task] ?? model.quality['default'] ?? 0.75);
     let quality = majorScore;
@@ -472,7 +467,7 @@ export function routeRequest(body, config, runtime = {}) {
   const ordered = [...pool, ...candidates.filter((x) => !pool.includes(x)).sort((a, b) => b.score - a.score)];
   // 任务偏好分流：指定模型与最优模型的分差 ≤ 容差时选指定模型（quality 不受损前提下的定向分流，
   // 如并发余量大的模型接 extraction/creative；预算压力拉高成本权重时分差扩大，自然回落最优模型）
-  // 任务偏好分流（v0.5.2 收紧）：目标必须在 qualified 池内（不可绕过相对质量闸门/绝对质量线），
+  // 任务偏好分流 收紧）：目标必须在 qualified 池内（不可绕过相对质量闸门/绝对质量线），
   // 且分差 >= 0 才参与容差判断（原实现 target 分数高于 best 时负分差天然满足「<= 容差」，
   // 超限 fallback 模型可被偏好直接提升到首位）。fallback 保留在 ordered 尾部只作兜底。
   const prefs = config.routing?.taskPreferences || {};
@@ -500,7 +495,6 @@ export function routeRequest(body, config, runtime = {}) {
     reasoningLevel = reasoningLevel === 'high' ? 'standard' : 'off';
   }
   return {
-    // 十四审：requestedModel 落客户端真实请求名（未指定=当前对外 auto 名），
     // 不再写死 'auto'——决策日志/市场信号按此归并 auto vs explicit。
     requestedModel: body.model || autoModelId(config), selectedModel, suggestedModel,
     shadow: !rolloutApplied, rollout: { activeTrafficPercent, trafficBucket: Number(trafficBucket.toFixed(2)), rolloutApplied }, analysis, candidates: candidates.sort((a, b) => b.score - a.score),

@@ -27,9 +27,9 @@ export function createShutdownManager({ server, timeoutMs = 20000, flush = async
 
   async function doShutdown() {
     server.close(() => {});
-    server.closeIdleConnections?.();   // 只关空闲 keep-alive 连接，不影响 in-flight
+    server.closeIdleConnections?.(); // 只关空闲 keep-alive 连接，不影响 in-flight
     await drain();
-    server.closeAllConnections?.();    // 排空（或强断）后清理所有连接
+    server.closeAllConnections?.(); // 排空（或强断）后清理所有连接
     try { await flush(); } catch (error) { log.error('shutdown_flush_failed', { err: error }); }
     log.info('shutdown_complete', { inflightRemaining: inflight.size });
   }

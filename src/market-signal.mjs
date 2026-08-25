@@ -1,13 +1,13 @@
 // 市场信号引擎（OpenRouter「wisdom of the market」的内网飞轮版）。
 // 内网没有跨租户市场，但决策日志就是「内部市场」：按任务类型聚合各模型的使用份额与满意度，
 // 作为静态跑分（先验）之外的小权重活信号（后验）。核心安全设计：
-//   1. 样本不足自动休眠（minSamplePerTask）——没有足够真实流量时信号为零，绝不瞎指挥；
-//   2. 调整幅度有界（maxAdjust，默认 ±0.05）——信号只能微调排序，不能颠覆先验跑分；
-//   3. 只在「同任务多家模型都被用过」时才有意义（单一模型 100% 份额不产生调整）。
+// 1. 样本不足自动休眠（minSamplePerTask）——没有足够真实流量时信号为零，绝不瞎指挥；
+// 2. 调整幅度有界（maxAdjust，默认 ±0.05）——信号只能微调排序，不能颠覆先验跑分；
+// 3. 只在「同任务多家模型都被用过」时才有意义（单一模型 100% 份额不产生调整）。
 // 信号构成（每任务×每模型）：
-//   share      使用份额（auto 路由给了它多少）——市场用脚投票的结果；
-//   explicit   被显式点名的次数——最强的真偏好（用户绕过 auto 也要用它）；
-//   failRate   失败率——负向信号，失败多则降权；
+// share 使用份额（auto 路由给了它多少）——市场用脚投票的结果；
+// explicit 被显式点名的次数——最强的真偏好（用户绕过 auto 也要用它）；
+// failRate 失败率——负向信号，失败多则降权；
 // 综合 marketScore = share 归一 + explicit 加权 - failRate 惩罚，映射到 [-maxAdjust, +maxAdjust]。
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -17,16 +17,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export class MarketSignal {
   constructor(options = {}) {
     this.projectRoot = options.projectRoot || process.cwd();
-    this.decisionLog = options.decisionLog;          // DecisionLog 实例（recent() 复用其读取逻辑）
-    this.windowDays = options.windowDays ?? 7;       // 滚动窗口（对齐 OpenRouter 7 天窗）
-    this.minSamplePerTask = options.minSamplePerTask ?? 8;  // 每任务最少样本（不足则该任务休眠）
-    this.maxAdjust = options.maxAdjust ?? 0.05;      // 单模型最大调整幅度（有界，防颠覆先验）
-    this.minShareGap = options.minShareGap ?? 0.15;  // 份额差小于此值视为无明显偏好（不调整）
-    this.signals = {};        // { [task]: { [modelId]: { n, fails, explicit, share, adjust } } }
-    this.coverage = {};       // { [task]: { total, active } } 每任务样本量与是否激活
+    this.decisionLog = options.decisionLog; // DecisionLog 实例（recent 复用其读取逻辑）
+    this.windowDays = options.windowDays ?? 7; // 滚动窗口（对齐 OpenRouter 7 天窗）
+    this.minSamplePerTask = options.minSamplePerTask ?? 8; // 每任务最少样本（不足则该任务休眠）
+    this.maxAdjust = options.maxAdjust ?? 0.05; // 单模型最大调整幅度（有界，防颠覆先验）
+    this.minShareGap = options.minShareGap ?? 0.15; // 份额差小于此值视为无明显偏好（不调整）
+    this.signals = {}; // { [task]: { [modelId]: { n, fails, explicit, share, adjust } } }
+    this.coverage = {}; // { [task]: { total, active } } 每任务样本量与是否激活
     this.loadedAt = 0;
     this.refreshMs = options.refreshMs ?? 5 * 60 * 1000; // 内存缓存 5 分钟
-    this.autoModelId = 'auto'; // 十四审缺省：未调 updateConfig 时（如单测直接构造）按旧缺省名归并
+    this.autoModelId = 'auto'; // 按旧缺省名归并
   }
 
   updateConfig(config) {
@@ -36,7 +36,7 @@ export class MarketSignal {
     if (cfg.minSamplePerTask != null) this.minSamplePerTask = Number(cfg.minSamplePerTask);
     if (cfg.maxAdjust != null) this.maxAdjust = Number(cfg.maxAdjust);
     this.enabled = cfg.enabled !== false; // 默认开（样本不足自然休眠，无副作用）
-    // 十四审：auto 对外名可配（如「cmtoken-auto」）。requestedModel 判定按当前配置名归并——
+    // requestedModel 判定按当前配置名归并——
     // 硬切改名后的新日志落新名；旧日志（requestedModel='auto'）在该名与池内模型不重合时
     // 会被视为 explicit——按窗口期滚动淘汰，不需要迁移数据。
     this.autoModelId = (config.routing?.autoModelId && String(config.routing.autoModelId).trim()) || 'auto';
@@ -57,7 +57,7 @@ export class MarketSignal {
       const task = d.analysis?.task;
       const model = outcome.model || d.selectedModel;
       if (!task || !model || task === 'explicit') continue; // 点名请求不进份额（但进 explicit 计数）
-      if (d.requestedModel && d.requestedModel !== this.autoModelId) continue; // 点名请求单独计 explicit（十四审：按当前配置的 auto 名归并）
+      if (d.requestedModel && d.requestedModel !== this.autoModelId) continue; // 点名请求单独计 explicit
       const slot = byTask[task] ||= { total: 0, models: {} };
       slot.total += 1;
       const m = slot.models[model] ||= { n: 0, fails: 0, explicit: 0 };
@@ -70,7 +70,7 @@ export class MarketSignal {
       if (!Number.isFinite(at) || at < since) continue;
       const d = row.decision || {};
       if (!d.requestedModel || d.requestedModel === this.autoModelId) continue;
-      // 点名请求在服务层 task 被记为 'explicit'，真实任务存于 decision.explicitTask（v0.5.1 起补记）；
+      // 点名请求在服务层 task 被记为 'explicit'，真实任务存于 decision.explicitTask 起补记）；
       // 旧日志无该字段时跳过（宁缺毋滥）——否则 explicitBoost 恒为 0
       const task = d.explicitTask || (d.analysis?.task !== 'explicit' ? d.analysis?.task : null);
       if (!task || !byTask[task]) continue;
@@ -97,7 +97,7 @@ export class MarketSignal {
         // 负向保留失败率降权。share 仍统计展示，不参与 adjust。
         let adjust = 0;
         const explicitBoost = Math.min(0.02, m.explicit * 0.005); // 每次点名 +0.005，封顶 0.02
-        if (failRate >= 0.3) adjust = -this.maxAdjust;                       // 失败率 ≥30%：最大降权
+        if (failRate >= 0.3) adjust = -this.maxAdjust; // 失败率 ≥30%：最大降权
         else if (failRate >= 0.1) adjust = -this.maxAdjust * (failRate / 0.3); // 线性降权区
         taskSignals[model] = { n: m.n, fails: m.fails, explicit: m.explicit,
           share: Number((share * 100).toFixed(1)), adjust: Number(adjust.toFixed(4)),
@@ -120,7 +120,7 @@ export class MarketSignal {
 
   // 评分调整量（router 热路径调用；未激活/未启用/无数据一律 0）
   adjustFor(task, modelId) {
-    if (this.enabled === false) return 0;  // 仅显式关闭才休眠；未调用 updateConfig 时默认启用
+    if (this.enabled === false) return 0; // 仅显式关闭才休眠；未调用 updateConfig 时默认启用
     this.ensureFresh();
     const s = this.signals[task]?.[modelId];
     if (!s) return 0;
