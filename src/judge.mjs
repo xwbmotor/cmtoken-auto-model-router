@@ -274,7 +274,6 @@ export class JudgeGuard {
     this._rollover();
     if (this.circuit === 'open') {
       if (this.now() - this.openedAt < this.cooldownMs) return { ok: false, reason: 'circuit_open' };
-      this.circuit = 'half-open'; this.probeBusy = true; // 冷却期满：转半开并占用唯一探针名额
     } else if (this.circuit === 'half-open' && this.probeBusy) {
       return { ok: false, reason: 'circuit_open' }; // 半开仅放一个探针，其余按熔断拦截
     }
@@ -283,19 +282,32 @@ export class JudgeGuard {
     if (this.calls + this.reserved.size >= this.dailyMaxCalls) return { ok: false, reason: 'daily_calls_exhausted' };
     // 在途预估 + 本次预估一起对账：并发调用尚未结算时也要占住 token 预算（防穿透）
     if (this.tokens + inflightTokens + (Number(estTokens) || 0) > this.dailyMaxTokens) return { ok: false, reason: 'daily_tokens_exhausted' };
+    // 十三审 P1-1：预算检查通过后才做状态迁移——迁移失败会留下悬空 probeBusy，永久卡死。
+    // isProbe 绑定 reservation：release/settle 的所有出口据此恢复状态机。
+    const isProbe = this.circuit === 'open'; // 冷却期满待探（下面立刻转 half-open）
+    if (isProbe) { this.circuit = 'half-open'; this.probeBusy = true; }
     const handle = (this.seq += 1);
-    this.reserved.set(handle, { estTokens: Number(estTokens) || 0 });
+    this.reserved.set(handle, { estTokens: Number(estTokens) || 0, isProbe });
     return { ok: true, handle };
   }
-  // 未发起上游调用时退还预占（不计数、不动熔断）
-  release(handle) { return this.reserved.delete(handle); }
+  // 未发起上游调用时退还预占（不计数、不动熔断）。
+  // 十三审 P1-1：探针预占被 release（如缺 api key）必须回滚 half-open——否则 probeBusy 悬空，
+  // 后续所有 reserve 都被「半开单探针」拦下，跨日也无法恢复（预占失败同理，见 reserve）。
+  release(handle) {
+    const r = this.reserved.get(handle);
+    if (!r) return false;
+    this.reserved.delete(handle);
+    if (r.isProbe) { this.probeBusy = false; this.circuit = 'open'; } // 探针退回，冷却计时保留，下轮再试
+    return true;
+  }
   settle(handle, { tokens = 0, ok = true } = {}) {
-    if (!this.reserved.has(handle)) return false; // 幂等：未知/重复 handle 直接拒绝
+    const r = this.reserved.get(handle);
+    if (!r) return false; // 幂等：未知/重复 handle 直接拒绝
     this.reserved.delete(handle);
     this._rollover();
     this.calls += 1;
     this.tokens += Math.max(0, Number(tokens) || 0);
-    if (this.circuit === 'half-open') this.probeBusy = false; // 探针结束（成败都释放名额）
+    if (r.isProbe) this.probeBusy = false; // 探针结束（成败都释放名额）
     if (ok) {
       this.consecutiveFailures = 0;
       this.circuit = 'closed'; this.openedAt = null;
@@ -335,8 +347,11 @@ export class JudgeGuard {
   snapshot() {
     this._rollover();
     let inflightTokens = 0;
-    for (const r of this.reserved.values()) inflightTokens += r.estTokens;
-    return { day: this.day, calls: this.calls, tokens: this.tokens, inflight: this.reserved.size, inflightTokens, circuit: this.circuit, consecutiveFailures: this.consecutiveFailures, dailyMaxCalls: this.dailyMaxCalls, dailyMaxTokens: this.dailyMaxTokens };
+    let probeReserved = false;
+    for (const r of this.reserved.values()) { inflightTokens += r.estTokens; if (r.isProbe) probeReserved = true; }
+    // 十三审 P1-1 不变量：probeBusy=true ⇒ 恰好存在一个 isProbe 预占（悬空即状态机 bug，测试断言）
+    const invariantOk = !this.probeBusy || (probeReserved && this.circuit === 'half-open');
+    return { day: this.day, calls: this.calls, tokens: this.tokens, inflight: this.reserved.size, inflightTokens, circuit: this.circuit, probeBusy: this.probeBusy, invariantOk, openedAt: this.openedAt, consecutiveFailures: this.consecutiveFailures, dailyMaxCalls: this.dailyMaxCalls, dailyMaxTokens: this.dailyMaxTokens };
   }
 }
 

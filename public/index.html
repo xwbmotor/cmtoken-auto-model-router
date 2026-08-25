@@ -142,7 +142,7 @@
           <label><span class="lbl">单次超时 ms <span class="help" data-help="护栏三：单次评审调用的超时（AbortController 强断）。默认 60s；评审走大模型可放宽，但过长会占后台任务槽影响关停排空。">?</span></span><input id="judgeTimeoutMs" type="number" min="5000" step="1000" value="60000"><small>超时计失败，进熔断计数。</small></label>
           <label><span class="lbl">熔断阈值 <span class="help" data-help="护栏四：连续失败达到该次数即熔断（circuit open），冷却期后半开试探一次——成功恢复、失败再开。评审上游故障时不无限重试烧钱。">?</span></span><input id="judgeCircuitThreshold" type="number" min="1" step="1" value="5"><small>连续失败即熔断，冷却后半开。</small></label>
           <label><span class="lbl">分类核对 <span class="help" data-help="独立于质量评分的第二项评审：核对路由层当时判的 task 大类（coding/reasoning/creative/extraction/agent/default 六类）是否与请求相符（task_agree）。v0.8.1 起判定契约与路由枚举完全一致（此前 rubric 细类编码表错位的问题已修）；显式指定模型的请求跳过核对（无路由判定可核）。subTask 细类仅作参考不参与判定。与质量分分开落事件、不混总分——分类准确率与回答质量是两个正交指标。开启后每次评审多一次调用，预算翻倍注意。">?</span></span><input id="judgeTaskCheckEnabled" type="checkbox"><small>核对路由 task 判定（独立调用）。</small></label>
-          <label><span class="lbl">今日用量 <span class="help" data-help="今日评审统计（UTC 自然日翻转重置）：抽样数/完成数/失败数/消耗 token/熔断状态。v0.8.1 起预算/熔断状态持久化到 data/judge-guard-state.json——重启不再清零（预占-结算制：抽样即预占，完成按实际 token 结算冲正）。">?</span></span><span id="judgeToday" class="pill muted">连接后显示</span><small>来自 /admin/api/metrics 的 judge 节。</small></label>
+          <label><span class="lbl">今日用量 <span class="help" data-help="双口径（v0.8.3 起）：「今日 N 抽样 · N 评分 · N 失败」是进程计数（重启清零）；「预算 used/max · 余 N 次 · 熔断态」来自 Guard 持久化状态（data/judge-guard-state.json，重启不重置）——预算与熔断以此为准，与执行闸一致。预占-结算制：抽样即预占，完成按实际 token 冲正。">?</span></span><span id="judgeToday" class="pill muted">连接后显示</span><small>来自 /admin/api/metrics 的 judge 节。</small></label>
         </div>
       </div>
       <div class="policy-section">

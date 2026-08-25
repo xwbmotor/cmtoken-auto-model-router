@@ -81,10 +81,15 @@ export function renderPrometheusMetrics(snapshot) {
   // v0.8.0 Judge：异步评分器各阶段计数（sampled=抽样入选，quality_done=完成质量评分，
   // task_check_done=完成分类核对，skipped_* 与 error_* 见事件流 reason/stage）
   const judge = counters.judge || {};
-  const judgeRows = ['sampled', 'qualityDone', 'taskCheckDone', 'errors'].map((k) => `router_judge_total{stage="${k}"} ${judge[k] || 0}`);
-  metric(lines, 'router_judge_total', 'counter', 'Judge 异步 shadow 评分各阶段计数（不进在线决策闭环；sampled=抽样入选，errors 含解析失败）', judgeRows);
-  if (judge.tokens) metric(lines, 'router_judge_tokens_total', 'counter', 'Judge 调用累计 token（成本护栏口径，与每日上限对照）', [`router_judge_tokens_total ${judge.tokens}`]);
+  const judgeRows = ['sampled', 'qualityDone', 'taskCheckDone', 'errors', 'persistErrors'].map((k) => `router_judge_total{stage="${k}"} ${judge[k] || 0}`);
+  metric(lines, 'router_judge_total', 'counter', 'Judge 异步 shadow 评分各阶段计数（不进在线决策闭环；sampled=抽样入选，errors 含解析失败，persistErrors=guard 状态持久化失败）', judgeRows);
+  if (judge.tokens) metric(lines, 'router_judge_tokens_total', 'counter', 'Judge 调用累计 token（进程口径，自然日翻转；与每日上限对照请看 guard_* 系列）', [`router_judge_tokens_total ${judge.tokens}`]);
   if (judge.gaugeCircuit) metric(lines, 'router_judge_circuit_state', 'gauge', 'Judge 熔断状态（0=closed 1=half-open 2=open）', [`router_judge_circuit_state ${judge.gaugeCircuit}`]);
+  // 十三审 P1-2：guard 持久化口径（重启不重置）——预算对账以这组为准
+  if (Number.isFinite(Number(judge.guardCalls))) {
+    metric(lines, 'router_judge_guard_calls_today', 'gauge', 'Judge 当日已结算调用数（Guard 持久化口径，重启不重置；与 dailyMaxCalls 对照）', [`router_judge_guard_calls_today ${judge.guardCalls}`]);
+    metric(lines, 'router_judge_guard_tokens_today', 'gauge', 'Judge 当日已结算 token（Guard 持久化口径，重启不重置；与 dailyMaxTokens 对照）', [`router_judge_guard_tokens_today ${judge.guardTokens}`]);
+  }
 
   // v0.7.0 六审步骤5：cascade 每层时延（sum/count 口径，均值=sum/count；P95 需按事件日志聚合）
   const latRows = Object.entries(semantic.cascadeLatency || {}).flatMap(([level, agg]) => [

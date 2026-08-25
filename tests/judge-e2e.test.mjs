@@ -4,9 +4,9 @@
 // 验证：①enabled+100% → judge-reviews-*.jsonl 落 quality 事件（rubric hash/judgeModel/
 // 四维评分/taskCheck/sessionFingerprint 指纹、原始 sid 不落）②samplePercent=0 → 零事件
 // ③judge 上游挂 → error 事件 + 主请求 200 不受影响 ④disabled → 零事件零 judge 调用。
-import test from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, writeFile, readdir } from 'node:fs/promises';
+import { readFile, mkdtemp, writeFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -71,6 +71,13 @@ function mockUpstream({ judgeBehavior = 'good' } = {}) {
 
 const baseConfig = JSON.parse(await readFile(new URL('../config/router.json', import.meta.url), 'utf8'));
 
+// —— 十三审 P2 守卫：测试不得修改项目 data/ 目录 ——
+// judge e2e 曾把 guard 状态写进真实 data/judge-guard-state.json（calls=32/tokens=2800），
+// 本地启用 judge 会「继承」测试用量。所有用例结束后断言该文件未被动过。
+const projectDataGuard = join(process.cwd(), 'data', 'judge-guard-state.json');
+let guardBefore = null;
+try { guardBefore = (await stat(projectDataGuard)).mtimeMs; } catch { /* 不存在=好 */ }
+
 async function startRouter({ env }) {
   const held = await holdPort();
   const port = held.port;
@@ -121,7 +128,9 @@ const SECRET = 'judge-e2e-bucket-secret-0123456789abcdef';
 async function setupCase({ judgeOver, judgeBehavior = 'good' }) {
   const workDir = await mkdtemp(join(tmpdir(), 'amr-judge-'));
   const cfg = JSON.parse(JSON.stringify(baseConfig));
-  cfg.judge = { ...cfg.judge, timeoutMs: 10000, ...judgeOver };
+  // 十三审 P2：guardStatePath 必须指进 workDir——否则启用 judge 的 e2e 会把测试用量写进
+  // 项目真实 data/judge-guard-state.json，本地后续启用 judge 会「继承」这份测试预算消耗。
+  cfg.judge = { ...cfg.judge, timeoutMs: 10000, guardStatePath: join(workDir, 'judge-guard-state.json'), ...judgeOver };
   cfg.decisionLog = { ...cfg.decisionLog, dirPath: workDir };
   await writeFile(join(workDir, 'router.json'), JSON.stringify(cfg));
   const { upstream, seen } = mockUpstream({ judgeBehavior });
@@ -162,7 +171,7 @@ test('e2e judge 100% 抽样：quality+taskCheck 事件落盘、指纹脱敏、ju
     assert.ok(judgeCall.body.includes('这是流式业务回答内容'), 'judge 输入应含 SSE delta.content 拼接的纯正文');
     assert.ok(!judgeCall.body.includes('[DONE]'), 'judge 输入不得含 [DONE] 协议行');
     assert.ok(!judgeCall.body.includes('completion_tokens'), 'judge 输入不得含 usage 信封字段');
-  } finally { child.kill(); upstream.close(); }
+  } finally { child.kill(); upstream.close(); await rm(workDir, { recursive: true, force: true }); }
 });
 
 test('e2e samplePercent=0：零事件、零 judge 上游调用（业务回答照常）', async () => {
@@ -174,7 +183,7 @@ test('e2e samplePercent=0：零事件、零 judge 上游调用（业务回答照
     const events = await readJudgeEvents(workDir);
     assert.equal(events.length, 0, '0% 抽样不得有任何 judge 事件');
     assert.ok(!seen.some((s) => s.body.includes(JUDGE_MARK)), '0% 不得调 judge 上游');
-  } finally { child.kill(); upstream.close(); }
+  } finally { child.kill(); upstream.close(); await rm(workDir, { recursive: true, force: true }); }
 });
 
 test('e2e judge 上游 500：error 事件落盘、主请求 200、无进程异常', async () => {
@@ -187,7 +196,7 @@ test('e2e judge 上游 500：error 事件落盘、主请求 200、无进程异�
     assert.ok(err, '应有 error 事件');
     assert.equal(err.stage, 'quality');
     assert.match(err.error, /500/);
-  } finally { child.kill(); upstream.close(); }
+  } finally { child.kill(); upstream.close(); await rm(workDir, { recursive: true, force: true }); }
 });
 
 test('e2e judge disabled：开关关闭零事件、零 judge 调用', async () => {
@@ -198,5 +207,13 @@ test('e2e judge disabled：开关关闭零事件、零 judge 调用', async () =
     const events = await readJudgeEvents(workDir);
     assert.equal(events.length, 0, 'disabled 时不得有任何 judge 事件');
     assert.ok(!seen.some((s) => s.body.includes(JUDGE_MARK)), 'disabled 不得调 judge 上游');
-  } finally { child.kill(); upstream.close(); }
+  } finally { child.kill(); upstream.close(); await rm(workDir, { recursive: true, force: true }); }
+});
+
+// 十三审 P2：①项目 data/judge-guard-state.json 全程未被动（guardStatePath 已指 workDir）
+// ②guard 状态确实落在 workDir（证明 e2e 的 judge 管线真的过了预占闸并结算）。
+after(async () => {
+  let afterMs = null;
+  try { afterMs = (await stat(projectDataGuard)).mtimeMs; } catch { /* 仍不存在=好 */ }
+  assert.equal(afterMs, guardBefore, '测试不得修改项目 data/judge-guard-state.json（guardStatePath 必须指向 workDir）');
 });

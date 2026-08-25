@@ -153,6 +153,66 @@ test('JudgeGuard：连续失败熔断 → 冷却后半开单探针（失败再�
   assert.equal(g.snapshot().consecutiveFailures, 0);
 });
 
+// —— 十三审 P1-1：探针状态机补测——预算失败/释放不得永久卡死 half-open ——
+test('十三审 P1-1：半开探针遇预算耗尽——probeBusy 必须回滚，不得永久 circuit_open', () => {
+  let t = 1000000;
+  const g = new JudgeGuard({ dailyMaxCalls: 10, dailyMaxTokens: 1000, circuitThreshold: 2, cooldownMs: 1000, now: () => t });
+  // 先灌满 token 预算（此时 circuit=closed，正常路径）
+  const filler = g.reserve({ estTokens: 950 });
+  assert.equal(filler.ok, true);
+  // 再制造熔断：release filler 后走两败
+  g.release(filler.handle);
+  g.settle(g.reserve({ estTokens: 20 }).handle, { tokens: 900, ok: false }); // 实际结算 900 → tokens=900
+  g.settle(g.reserve({ estTokens: 20 }).handle, { tokens: 0, ok: false }); // 二连败 → open
+  assert.equal(g.snapshot().circuit, 'open');
+  t += 1001; // 过冷却
+  // 探针请求：tokens 900（已结算）+ 0（在途）+ 800（预估）> 1000 → 预算拦
+  const probe = g.reserve({ estTokens: 800 });
+  assert.equal(probe.reason, 'daily_tokens_exhausted');
+  // 修复前：reserve 已把 circuit 切 half-open + probeBusy=true，预算失败不回滚 → 永久卡死。
+  // 修复后：预算检查在状态迁移之前，迁移没发生。
+  assert.equal(g.snapshot().circuit, 'open', '预算失败的探针不得切 half-open（旧 bug：切了不回滚）');
+  assert.ok(g.snapshot().invariantOk, '不变量：probeBusy 悬空即状态机 bug');
+  t += 86400000; // 跨日（预算归零——旧 bug 下依然卡死，修复后应能探针）
+  const probe2 = g.reserve({ estTokens: 800 });
+  assert.equal(probe2.ok, true, '跨日预算归零后探针应能发起（旧 bug：永久 circuit_open）');
+  assert.equal(g.snapshot().circuit, 'half-open');
+  g.settle(probe2.handle, { tokens: 700, ok: true });
+  assert.equal(g.snapshot().circuit, 'closed', '探针成功关闭熔断');
+});
+
+test('十三审 P1-1：半开探针被 release（如缺 api key）——必须回滚 half-open 回 open', () => {
+  let t = 1000000;
+  const g = new JudgeGuard({ circuitThreshold: 2, cooldownMs: 1000, now: () => t });
+  g.settle(g.reserve().handle, { ok: false });
+  g.settle(g.reserve().handle, { ok: false }); // open
+  t += 1001;
+  const probe = g.reserve();
+  assert.equal(probe.ok, true);
+  assert.equal(g.snapshot().circuit, 'half-open');
+  g.release(probe.handle); // 未发起上游调用（缺 key 路径）
+  // 修复前：release 只删 map，probeBusy 悬空 → 后续全部 circuit_open，跨日也不恢复。
+  assert.equal(g.snapshot().circuit, 'open', '探针被 release 应回 open（冷却计时保留）');
+  assert.ok(g.snapshot().invariantOk, 'release 后不变量必须成立');
+  const next = g.reserve();
+  assert.equal(next.ok, true, '回滚后下一个 reserve 可再当探针');
+  g.settle(next.handle, { ok: true });
+  assert.equal(g.snapshot().circuit, 'closed');
+});
+
+test('十三审 P1-1：跨日预算归零——卡死态（若有）必须能恢复探针', () => {
+  let t = Date.UTC(2026, 7, 25, 1);
+  const g = new JudgeGuard({ dailyMaxCalls: 2, dailyMaxTokens: 500, circuitThreshold: 2, cooldownMs: 1000, now: () => t });
+  g.settle(g.reserve({ estTokens: 200 }).handle, { tokens: 200, ok: false });
+  g.settle(g.reserve({ estTokens: 200 }).handle, { tokens: 200, ok: false }); // 预算满 + open
+  t += 86400000 + 1001; // 跨日 + 过冷却
+  const probe = g.reserve({ estTokens: 400 });
+  assert.equal(probe.ok, true, '跨日归零 + 过冷却：探针应放行');
+  g.settle(probe.handle, { tokens: 300, ok: true });
+  assert.equal(g.snapshot().circuit, 'closed');
+  assert.ok(g.snapshot().invariantOk);
+});
+
 test('JudgeGuard：persist/restore——重启恢复当日用量与熔断态，跨日归零', () => {
   const states = [];
   let t = Date.UTC(2026, 7, 25, 1);

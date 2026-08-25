@@ -21,7 +21,22 @@ import { once } from 'node:events';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
-const PORT = 8799;
+// 十三审 P2：固定端口 8799 在 Windows 上会被「排除端口范围/残留占用」打成 EACCES/ECONNREFUSED，
+// 测试自身起不来却报成业务 fetch failed——改为随机端口（hold-then-release 拿号，child 立刻绑定）。
+const portPool = (() => {
+  const taken = new Set();
+  return {
+    async take() {
+      const net = await import('node:net');
+      for (;;) {
+        const holder = net.createServer();
+        const port = await new Promise((r, e) => { holder.once('error', e); holder.listen(0, '127.0.0.1', () => r(holder.address().port)); });
+        await new Promise((r) => holder.close(r));
+        if (!taken.has(port)) { taken.add(port); return port; }
+      }
+    },
+  };
+})();
 let tmpDir;
 
 // 从真实 config/router.json 派生测试配置（只覆盖端口/上游/日志目录/语义路由四处）——
@@ -102,12 +117,22 @@ async function startRouter(env, port, expectFail) {
     env: { ...process.env, ROUTER_KEY_MODE: 'passthrough', AMR_TEST_SHUTDOWN_IPC: '1', ...env, PORT: String(port), CONFIG_PATH: env.CONFIG_PATH },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc']
   });
+  let childLog = '';
+  child.stdout.on('data', (c) => { childLog += c; childLog = childLog.slice(-8000); });
+  child.stderr.on('data', (c) => { childLog += c; childLog = childLog.slice(-8000); });
   if (!expectFail) {
-    // 等 ready：轮询 /health
+    // 等 ready：轮询 /health；20s 未 ready 立即失败并附子进程输出尾部——
+    // 不再把「起不来的 server」交给业务 fetch 报 ECONNREFUSED（十三审 P2：误导性 fetch failed）
     const t0 = Date.now();
+    let ready = false;
     while (Date.now() - t0 < 20000) {
-      try { const r = await fetch(`http://127.0.0.1:${port}/health`); if (r.ok) break; } catch {}
+      try { const r = await fetch(`http://127.0.0.1:${port}/health`); if (r.ok) { ready = true; break; } } catch {}
       await new Promise(r => setTimeout(r, 200));
+    }
+    if (!ready) {
+      child.kill();
+      const tail = childLog.split(/\r?\n/).slice(-30).join('\n');
+      throw new Error(`router 20s 未 ready（port=${port}）——子进程输出尾部：\n${tail || '(无输出)'}`);
     }
   }
   return child;
@@ -130,18 +155,18 @@ test('SIGTERM 排空：主请求返回后的在途 shadow 复核不丢，进程�
   // 1. mock MaaS：分类调用延迟 1200ms（就绪握手后才开始）
   const { child: mock, port: mockPort } = await startMockMaas(1200);
   try {
-    // 2. router 子进程：shadow 模式 + 指向 mock
+    // 2. router 子进程：shadow 模式 + 指向 mock（端口先取号再写 config）
+    const port1 = await portPool.take();
     const dataDir = join(tmpDir, 'd1');
     const configFile = join(tmpDir, 'c1.json');
     writeFileSync(configFile, JSON.stringify(buildTestConfig({
-      port: PORT, upstream: `http://127.0.0.1:${mockPort}`, dataDir,
+      port: port1, upstream: `http://127.0.0.1:${mockPort}`, dataDir,
       semanticRouter: { enabled: true, mode: 'shadow', provider: 'cascade' }
     })));
-
-    const child = await startRouter({ CONFIG_PATH: configFile, UPSTREAM_BASE_URL: `http://127.0.0.1:${mockPort}` }, PORT);
+    const child = await startRouter({ CONFIG_PATH: configFile, UPSTREAM_BASE_URL: `http://127.0.0.1:${mockPort}` }, port1);
     try {
       // 3. 触发 shadow 复核的低置信长文本（L1<0.7 且 ≥12 字）
-      const r = await fetch(`http://127.0.0.1:${PORT}/v1/chat/completions`, {
+      const r = await fetch(`http://127.0.0.1:${port1}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: 'Bearer test-key' },
         body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: '帮我把这段话翻译成英文再总结一下要点' }] })
@@ -171,18 +196,19 @@ test('SIGTERM 8s 上限：卡死后台任务按上限放弃，退出耗时落在
   // mock 只服务主请求（分类调用不会发出——卡死任务由测试钩子注入，不依赖 mock 时序）
   const { child: mock, port: mockPort } = await startMockMaas(50);
   try {
+    const port2 = await portPool.take();
     const dataDir = join(tmpDir, 'd2');
     const configFile = join(tmpDir, 'c2.json');
     writeFileSync(configFile, JSON.stringify(buildTestConfig({
-      port: PORT + 2, upstream: `http://127.0.0.1:${mockPort}`, dataDir,
+      port: port2, upstream: `http://127.0.0.1:${mockPort}`, dataDir,
       semanticRouter: { enabled: true, mode: 'shadow', provider: 'cascade' }
     })));
 
     // AMR_TEST_STUCK_SEMANTIC_TASK=1：server 启动即注册一个永不 resolve 的语义后台任务
     // （与 shadow 复核同一 trackSemanticTask 注册表）——Promise.race 的 8s 上限是唯一出路。
-    const child = await startRouter({ CONFIG_PATH: configFile, UPSTREAM_BASE_URL: `http://127.0.0.1:${mockPort}`, AMR_TEST_STUCK_SEMANTIC_TASK: '1' }, PORT + 2);
+    const child = await startRouter({ CONFIG_PATH: configFile, UPSTREAM_BASE_URL: `http://127.0.0.1:${mockPort}`, AMR_TEST_STUCK_SEMANTIC_TASK: '1' }, port2);
     try {
-      const r = await fetch(`http://127.0.0.1:${PORT + 2}/v1/chat/completions`, {
+      const r = await fetch(`http://127.0.0.1:${port2}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: 'Bearer test-key' },
         body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: '帮我把这段话翻译成英文再总结一下要点' }] })
@@ -207,14 +233,15 @@ test('SIGTERM 8s 上限：卡死后台任务按上限放弃，退出耗时落在
 }, { timeout: 90000 });
 
 test('active 无 SEMANTIC_BUCKET_SECRET：启动即拒绝', async () => {
+  const port3 = await portPool.take();
   const configFile = join(tmpDir, 'c3.json');
   const dataDir = join(tmpDir, 'd3');
   writeFileSync(configFile, JSON.stringify(buildTestConfig({
-    port: PORT + 4, upstream: 'http://127.0.0.1:1', dataDir,
+    port: port3, upstream: 'http://127.0.0.1:1', dataDir,
     semanticRouter: { enabled: true, mode: 'active', provider: 'cascade', activeTrafficPercent: 5 }
   })));
   const child = spawn(process.execPath, [join(root, 'src/server.mjs')], {
-    env: { ...process.env, SEMANTIC_BUCKET_SECRET: '', CONFIG_PATH: configFile, PORT: String(PORT + 4) },
+    env: { ...process.env, SEMANTIC_BUCKET_SECRET: '', CONFIG_PATH: configFile, PORT: String(port3) },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let err = '';
@@ -225,14 +252,15 @@ test('active 无 SEMANTIC_BUCKET_SECRET：启动即拒绝', async () => {
 }, { timeout: 30000 });
 
 test('active secret 过短（<32 字节）：启动即拒绝（九审 P2 强度下限）', async () => {
+  const port4 = await portPool.take();
   const configFile = join(tmpDir, 'c4.json');
   const dataDir = join(tmpDir, 'd4');
   writeFileSync(configFile, JSON.stringify(buildTestConfig({
-    port: PORT + 5, upstream: 'http://127.0.0.1:1', dataDir,
+    port: port4, upstream: 'http://127.0.0.1:1', dataDir,
     semanticRouter: { enabled: true, mode: 'active', provider: 'cascade', activeTrafficPercent: 5 }
   })));
   const child = spawn(process.execPath, [join(root, 'src/server.mjs')], {
-    env: { ...process.env, SEMANTIC_BUCKET_SECRET: 'short-secret', CONFIG_PATH: configFile, PORT: String(PORT + 5) },
+    env: { ...process.env, SEMANTIC_BUCKET_SECRET: 'short-secret', CONFIG_PATH: configFile, PORT: String(port4) },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let err = '';

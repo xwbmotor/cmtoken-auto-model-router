@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { loadConfig, projectRoot, saveConfig, validateConfig } from './config.mjs';
@@ -44,7 +44,9 @@ const semanticLog = await DecisionLog.create(projectRoot, { decisionLog: { ...(c
 const judgeLog = await DecisionLog.create(projectRoot, { decisionLog: { ...(config.decisionLog || {}), enabled: Boolean(config.judge?.enabled), filePrefix: 'judge-reviews' } });
 // v0.8.1 十二审 P1-2：JudgeGuard 状态持久化——重启恢复当日用量与熔断态，预算不再被重启重置。
 const judgeGuardStatePath = resolve(projectRoot, config.judge?.guardStatePath || './data/judge-guard-state.json');
-const judgeGuard = new JudgeGuard({ ...(config.judge || {}), persist: (s) => { try { mkdirSync(dirname(judgeGuardStatePath), { recursive: true }); writeFileSync(judgeGuardStatePath, JSON.stringify(s)); } catch { /* 状态文件写失败不阻断评分 */ } } });
+// 十三审 P2：原子持久化——临时文件+rename（writeFileSync 直写进程中断会留截断 JSON，
+// 下次启动静默按空状态恢复=预算被重置）；persist 失败计数进 judgeCounters（不再无声吞掉）。
+const judgeGuard = new JudgeGuard({ ...(config.judge || {}), persist: (s) => { try { mkdirSync(dirname(judgeGuardStatePath), { recursive: true }); const tmp = `${judgeGuardStatePath}.${process.pid}.${Date.now()}.tmp`; writeFileSync(tmp, JSON.stringify(s)); renameSync(tmp, judgeGuardStatePath); } catch { judgeBump('persistErrors'); } } });
 if (existsSync(judgeGuardStatePath)) {
   try { judgeGuard.restore(JSON.parse(readFileSync(judgeGuardStatePath, 'utf8'))); } catch { /* 损坏状态按空起步 */ }
   logger.info('judge_guard_restored', { day: judgeGuard.snapshot().day, calls: judgeGuard.snapshot().calls, tokens: judgeGuard.snapshot().tokens, circuit: judgeGuard.snapshot().circuit });
@@ -52,7 +54,7 @@ if (existsSync(judgeGuardStatePath)) {
 // v0.8.0：judge 指标（进程级；/metrics 暴露。sampled 在入选时+1，完成/错误在管线内+1）
 // v0.8.1 十二审 P2：judgeCounters 增加自然日翻转（与 JudgeGuard 同口径 UTC 日），管理页
 // 「今日用量」不再显示进程累计——重启清零但运行期间口径正确，且 guard 状态有磁盘账。
-const judgeCounters = { day: null, sampled: 0, qualityDone: 0, taskCheckDone: 0, errors: 0, tokens: 0, gaugeCircuit: 0 };
+const judgeCounters = { day: null, sampled: 0, qualityDone: 0, taskCheckDone: 0, errors: 0, tokens: 0, gaugeCircuit: 0, persistErrors: 0 };
 function judgeBump(k, n = 1) {
   const today = new Date().toISOString().slice(0, 10);
   if (judgeCounters.day !== today) { judgeCounters.day = today; judgeCounters.sampled = 0; judgeCounters.qualityDone = 0; judgeCounters.taskCheckDone = 0; judgeCounters.errors = 0; judgeCounters.tokens = 0; }
@@ -919,6 +921,18 @@ const semanticBucketSecret = process.env.SEMANTIC_BUCKET_SECRET ? Buffer.from(pr
 // 重复字符也能过校验。防预计算依赖「用随机生成命令产出」的运维纪律，代码只拦明显弱值。
 // urlsafe-base64(32B)=43 字符、hex(32B)=64 字符、base64(32B)=44 字符，32 字节
 // 下限覆盖三种主流生成方式；过短即拒绝启动（fail fast 优于带弱 secret 上线）。
+// 十三审 P2：judge.guardStatePath 启动时固定（judgeGuardStatePath 是模块级 const）——热更/重载
+// 改该字段不会切换实际持久化文件，静默接受会制造「配置说 A 文件、状态写 B 文件」的分裂。
+// 拒改；要换路径=改配置后重启。
+function assertJudgeGuardStatePathStable(nextJudge) {
+  const nextPath = nextJudge?.guardStatePath;
+  const currentPath = config.judge?.guardStatePath;
+  const nextResolved = nextPath == null ? resolve(projectRoot, './data/judge-guard-state.json') : resolve(projectRoot, nextPath);
+  if (nextResolved !== judgeGuardStatePath) {
+    throw new Error(`judge.guardStatePath 不可热更（当前=${judgeGuardStatePath}，请求=${nextResolved}）——改路径请更新配置后重启服务`);
+  }
+  void currentPath;
+}
 function assertSemanticBucketSecretForMode(mode) {
   if (mode !== 'active') return;
   const secret = process.env.SEMANTIC_BUCKET_SECRET;
@@ -1375,7 +1389,7 @@ const server = http.createServer(async (req, res) => {
       return errorJson(res, 401, 'Metrics Token 无效', 'authentication_error');
     }
     const disk = await decisionLog.diskUsage();
-    const body = renderPrometheusMetrics({ counters: { ...counters, judge: judgeCounters }, health, budget: budgetTracker.snapshot(), decisionLog: { ...decisionLog.snapshot(), diskUsage: disk }, config, sessions: sessions.size, draining: shutdownManager.draining, inflight: shutdownManager.inflightCount() });
+    const body = renderPrometheusMetrics({ counters: { ...counters, judge: { ...judgeCounters, gaugeCircuit: judgeGuard.snapshot().circuit === 'open' ? 2 : (judgeGuard.snapshot().circuit === 'half-open' ? 1 : 0), guardCalls: judgeGuard.snapshot().calls, guardTokens: judgeGuard.snapshot().tokens } }, health, budget: budgetTracker.snapshot(), decisionLog: { ...decisionLog.snapshot(), diskUsage: disk }, config, sessions: sessions.size, draining: shutdownManager.draining, inflight: shutdownManager.inflightCount() });
     res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
     return res.end(body);
   }
@@ -1511,6 +1525,7 @@ const server = http.createServer(async (req, res) => {
       const next = await readJson(req);
       // v0.7.2 八审 P1：热切 active 前置校验——缺 secret 拒绝落盘（返回 4xx 让运营改 .env 后重启）
       assertSemanticBucketSecretForMode(next?.semanticRouter?.mode);
+      assertJudgeGuardStatePathStable(next?.judge);
       config = await saveConfig(next); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); judgeLogUpdate(); judgeGuard.updateLimits(config.judge || {}); return json(res, 200, config);
     }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
@@ -1679,7 +1694,9 @@ function subCategoryOf(task, subTask) {
   }
   if (req.method === 'GET' && url.pathname === '/admin/api/metrics') {
     const visibleRecent = recentKeyFilter ? recent.filter((x) => (x.keyFingerprint || '') === recentKeyFilter) : recent;
-    return json(res, 200, { counters, judge: judgeRuntime.enabled ? { ...judgeCounters } : null, health, recent: visibleRecent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: sessions.size });
+    // 十三审 P1-2：judge 节带 guard 持久化快照——管理页显示的预算用量/熔断状态必须与
+    // 真正执行闸一致（进程 counters 重启清零，guard 从磁盘恢复；两者并列展示，不互相覆盖）。
+    return json(res, 200, { counters, judge: judgeRuntime.enabled ? { ...judgeCounters, gaugeCircuit: judgeGuard.snapshot().circuit === 'open' ? 2 : (judgeGuard.snapshot().circuit === 'half-open' ? 1 : 0), guard: judgeGuard.snapshot() } : null, health, recent: visibleRecent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: sessions.size });
   }
   // 分类器标准评测：spawn Python 脚本跑 heldout 集，输出三方（gold/小模型/规则层）准确率与混淆矩阵。
   // 回答"换分类器后准了多少"——换端点前后各点一次即可对比。评测只读模型文件，不影响线上。
@@ -1791,6 +1808,7 @@ function subCategoryOf(task, subTask) {
     try {
       const next = await loadConfig();
       assertSemanticBucketSecretForMode(next.semanticRouter?.mode);
+      assertJudgeGuardStatePathStable(next?.judge);
       config = next; budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); judgeLogUpdate(); judgeGuard.updateLimits(config.judge || {}); return json(res, 200, { ok: true, version: config.version });
     }
     catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }

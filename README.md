@@ -49,7 +49,7 @@
 - **九审收口（v0.7.3）**：①`/admin/api/reload` 与启动/热切同校验 secret（先 load 临时 config→校验→替换，reload 不再是绕过口）②`bucketKey` 落盘为 HMAC 短指纹（`sid:<12hex>`）——原始 session ID/key 指纹不进日志③active 要求 secret ≥32 字节（弱值拒启动）④发布报告由 `test:release` 自动生成（commit SHA/dirty/config SHA256/退出码，`reports/`）⑤8s 关停上限的行为级断言（注入卡死任务，退出耗时∈[7.5s,10s]）⑥发版纪律：tag 必须打在 compose image bump 之后。
 - **十审收口（v0.7.4）**：①`test:release` 发布证据链门禁——clean HEAD+exact tag 才 validForRelease，报告不提交回 tag（自引用修复）②决策/复核日志 `request.sessionFingerprint`（`sidfp:<16hex>` HMAC）替代原 `sessionId` 落盘——原始 x-session-id 不进任何日志③指纹 16 hex（64bit）④reload 三场景回归测试⑤secret 校验口径：32 字节=长度下限≠熵。
 - **v0.8.0 Judge 异步质量评审**：抽样 1~5% 已完成请求异步打分（四维评分+分类核对，不进在线路由）；四重护栏（每日调用/token 预算、单次超时、连续失败熔断）；独立事件流 judge-reviews-*.jsonl；管理页 Judge 卡片；默认关闭，shadow 起步。
-- **v0.8.2 十二审收口**：评分输入改纯正文提取（信封/SSE 字节不再进评分）；预算改预占-结算制（并发不穿透，状态持久化重启不清零）；分类核对契约与路由枚举对齐；judge 流启停独立于决策日志（judge 开+决策日志关被拒）；redactPatterns 脱敏；UTC 日翻转；release 镜像证据门禁。
+- **v0.8.3 十二审收口**：评分输入改纯正文提取（信封/SSE 字节不再进评分）；预算改预占-结算制（并发不穿透，状态持久化重启不清零）；分类核对契约与路由枚举对齐；judge 流启停独立于决策日志（judge 开+决策日志关被拒）；redactPatterns 脱敏；UTC 日翻转；release 镜像证据门禁。
 
 
 
