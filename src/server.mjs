@@ -1205,13 +1205,13 @@ function proposeDominanceReason(cfg) {
 
 function updateHealth(model, ok, latencyMs) {
 
-  const state = health[model] ||= { circuitState: 'closed', probeInFlight: false, consecutiveFailures: 0, successes: 0, failures: 0, ewmaLatencyMs: 0, circuitOpenUntil: 0 };
+  const state = health[model] ||= { circuitState: 'closed', probeInFlight: false, consecutiveFailures: 0, successes: 0, failures: 0, ewmaLatencyMs: 0, circuitOpenUntil: 0, lastSuccessAt: 0, downSince: 0, halfOpenFailStreak: 0 };
 
   state.ewmaLatencyMs = state.ewmaLatencyMs ? Math.round(state.ewmaLatencyMs * 0.8 + latencyMs * 0.2) : latencyMs;
 
   if (ok) {
 
-    state.circuitState = 'closed'; state.probeInFlight = false; state.consecutiveFailures = 0; state.successes += 1; state.circuitOpenUntil = 0;
+    state.circuitState = 'closed'; state.probeInFlight = false; state.consecutiveFailures = 0; state.successes += 1; state.circuitOpenUntil = 0; state.lastSuccessAt = Date.now(); state.downSince = 0; state.halfOpenFailStreak = 0;
 
   } else {
 
@@ -1220,6 +1220,8 @@ function updateHealth(model, ok, latencyMs) {
     state.probeInFlight = false;
 
     state.consecutiveFailures += 1; state.failures += 1;
+    if (!state.downSince) state.downSince = Date.now();
+    if (wasProbe) state.halfOpenFailStreak = (state.halfOpenFailStreak || 0) + 1;
 
     if (wasProbe || state.consecutiveFailures >= config.routing.circuitBreakerFailures) {
 
@@ -1638,8 +1640,9 @@ const CHECKUP_CASES = [
 function checkCase(check, text) {
   if (!check) return null; // 无断言=人工判断题，记完成即可
   const t = String(text || '');
-  if (check.contains && !t.includes(check.contains)) return false;
-  if (check.containsAny && !check.containsAny.some((k) => t.includes(k))) return false;
+  // 断言大小写无关（SQL 的 GROUP BY/Group by 都算对——大小写敏感会误判标准输出）
+  if (check.contains && !t.toLowerCase().includes(check.contains.toLowerCase())) return false;
+  if (check.containsAny && !check.containsAny.some((k) => t.toLowerCase().includes(k.toLowerCase()))) return false;
   if (check.json) {
     try {
       const cleaned = t.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
@@ -1669,7 +1672,7 @@ async function callUpstreamChat(modelId, prompt, maxTokens = 300) {
 function startEvalJob(body) {
   const type = body?.type;
   const modelId = String(body?.modelId || '').trim();
-  if (!['checkup', 'full'].includes(type)) throw new Error('type 必须是 checkup（体检）或 full（完整评测）');
+  if (!['checkup', 'full'].includes(type)) throw new Error('type 必须是 checkup（体检冒烟）或 full（56 题稳定性巡检——就绪率+时延，不含质量评分）');
   const model = (config.models || []).find((m) => m.id === modelId);
   if (!model) throw new Error(`模型 ${modelId} 不在注册表中（请先注册）`);
   // 并发上限：同时只跑一个评测任务，防止打爆上游
@@ -1700,18 +1703,16 @@ async function runEvalJob(job) {
   job.status = job.error ? 'failed' : 'done';
   job.finishedAt = new Date().toISOString();
   if (job.type === 'checkup') {
-    // 体检产出：成功率、断言通过率、平均/P95 时延——自动回填 P95 时延（若有 5+ 样本）
+    // v0.10.2：体检=6 题连通性冒烟——不再自动改内存 config（样本量不支持），只出建议时延，
+    // 运营确认后在「模型参数」页手工采纳并安全发布。断言数如实呈现（不叫质量百分比）。
     const lat = job.results.filter((r) => r.latencyMs).map((r) => r.latencyMs).sort((a, b) => a - b);
-    if (lat.length >= 3) {
-      const p95 = lat[Math.min(lat.length - 1, Math.floor(lat.length * 0.95))];
-      const m = config.models.find((x) => x.id === job.modelId);
-      if (m) { m.avgLatencyMs = Math.round(lat.reduce((a, b) => a + b, 0) / lat.length); job.autoApplied = true; }
-    }
     job.summary = {
       successRate: job.results.filter((r) => r.ok).length / job.total,
-      assertPassRate: job.results.filter((r) => r.pass === true).length / Math.max(1, job.results.filter((r) => r.pass !== null).length),
-      avgLatencyMs: lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null,
-      p95LatencyMs: lat.length ? lat[Math.min(lat.length - 1, Math.floor(lat.length * 0.95))] : null,
+      assertPassed: job.results.filter((r) => r.pass === true).length,
+      assertTotal: job.results.filter((r) => r.pass !== null).length,
+      suggestedAvgLatencyMs: lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null,
+      minLatencyMs: lat[0] ?? null, maxLatencyMs: lat[lat.length - 1] ?? null,
+      note: '6 题冒烟=连通性+简单断言；样本量不支持分位数/质量结论',
     };
   }
 }
@@ -2911,21 +2912,26 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, r);
     } catch (error) { return errorJson(res, 502, `上游模型列表获取失败：${error.message}`, 'discover_models_error'); }
   }
-  // ── P3 下线检测：熔断打开或连续失败超阈值 → 建议关闭（不自动关，管理员拍板）
+  // ── P3 下线检测（v0.10.2 重做）：独立于熔断的状态模型——
+  // 熔断 3 次失败即隔离、冷却仅 30s：常规调用停止后 consecutiveFailures 涨不动、
+  // circuitOpenUntil 永远 <1h，旧条件（≥20 次失败/熔断≥1h）在正常机制下不可达。
+  // 改用 downSince（首次失败时刻）+ 半开探针连败：
+  //   持续不可用 ≥30min，或 半开探针连败 ≥3 次且持续 ≥10min。
   if (req.method === 'GET' && url.pathname === '/admin/api/model-offline-alerts') {
     const alerts = [];
     for (const m of config.models || []) {
       if (!m.enabled) continue;
       const h = health[m.id];
-      if (!h) continue;
-      const circuitHours = h.circuitOpenUntil > Date.now() ? Math.round((h.circuitOpenUntil - Date.now()) / 3600000 * 10) / 10 : 0;
-      const deadFailures = h.consecutiveFailures >= 20;
-      const longDown = circuitHours >= 1;
-      if (deadFailures || longDown) {
+      if (!h || !h.downSince) continue;
+      const downMin = (Date.now() - h.downSince) / 60000;
+      const probeStreak = h.halfOpenFailStreak || 0;
+      const longDown = downMin >= 30;
+      const probeDead = probeStreak >= 3 && downMin >= 10;
+      if (longDown || probeDead) {
         alerts.push({ modelId: m.id, displayName: m.displayName || m.id, ownership: m.ownership,
-          consecutiveFailures: h.consecutiveFailures, circuitOpenHoursLeft: circuitHours,
-          consecutiveFailuresDetail: h.failures || 0, successes: h.successes || 0,
-          suggestion: deadFailures ? '连续失败 ≥20 次，疑似模型已下线' : '熔断持续 ≥1 小时，疑似上游不可用' });
+          downMinutes: Math.round(downMin), halfOpenFailStreak: probeStreak,
+          totalFailures: h.failures || 0, lastSuccessAt: h.lastSuccessAt ? new Date(h.lastSuccessAt).toISOString() : null,
+          suggestion: longDown ? `持续不可用 ${Math.round(downMin)} 分钟，疑似模型已下线` : `熔断半开探针连败 ${probeStreak} 次，疑似上游持续故障` });
       }
     }
     return json(res, 200, { alerts, checkedAt: new Date().toISOString() });

@@ -8,7 +8,7 @@
 # - strict：取消注释 ROUTER_ACCESS_KEY + MAAS_API_KEY，客户端持 ROUTER_ACCESS_KEY。
 services:
   auto-model-router:
-    image: cmt-auto-model-router:0.9.7
+    image: cmt-auto-model-router:0.10.2
     container_name: auto-model-router
     restart: unless-stopped
     hostname: auto-model-router
@@ -36,7 +36,7 @@ services:
       METRICS_TOKEN: ${METRICS_TOKEN:?METRICS_TOKEN is required}   # /metrics 抓取 token（v0.5.2 起生产必填，启动校验兜底）
       # strict 模式才需要（passthrough 下可省）：
       # ROUTER_ACCESS_KEY: ${ROUTER_ACCESS_KEY}
-      # MAAS_API_KEY: ${MAAS_API_KEY}
+      MAAS_API_KEY: ${MAAS_API_KEY:-}   # 管理台发现/巡检用服务端 key（passthrough 业务流量仍走客户端 key 透传）
     volumes:
       - /opt/amr/config:/app/config        # router.json + history/（配置发布历史）
       - /opt/amr/data:/app/data            # decision log + budget ledger + 训练数据
@@ -53,7 +53,7 @@ services:
       retries: 3
 
   classifier:
-    image: cmt-amr-classifier:0.9.7
+    image: cmt-amr-classifier:0.9.7  # classifier 无代码变更，锁 0.9.7（升级时同步改）
     container_name: amr-classifier
     restart: unless-stopped
     hostname: classifier

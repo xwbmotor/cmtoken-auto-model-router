@@ -60,7 +60,12 @@ const images = {
   routerLabelsRevision: collect(() => execSync(`docker inspect --format "{{ index .Config.Labels \\"org.opencontainers.image.revision\\" }}" cmt-auto-model-router:${pkg.version}`, { encoding: 'utf8' }).trim() || null),
 };
 gate.imageEvidence = Boolean(images.routerImageId) && Boolean(images.routerLabelsRevision) && images.routerLabelsRevision === git.commit;
-const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence;
+// v0.10.2 门禁：compose 镜像版本必须与 package.json 一致（防 tag 复现出旧版本）+ 巡检题库存在
+const composeText = collect(() => readFileSync(join(cwd, 'docker-compose.prod.yml'), 'utf8'));
+const composeTag = collect(() => (/image:\s*cmt-auto-model-router:([^\s#]+)/.exec(composeText) || [])[1]);
+gate.composeVersionMatches = composeTag === pkg.version;
+gate.evalGateCasesPresent = existsSync(join(cwd, 'config/eval-gate.json'));
+const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence && gate.composeVersionMatches && gate.evalGateCasesPresent;
 if (!validForRelease && !allowDirty) {
   console.error('[test:release] 发布证据链门禁未过：' + JSON.stringify({ ...gate, tag: git.tag, tagExpected, dirtyCount: git.dirty.length }));
   console.error('  正式发布流程：代码+compose 同 commit → docker build --build-arg GIT_REVISION=<HEAD> → git tag v{ver} → 干净 worktree 跑 npm run test:release。');

@@ -338,7 +338,7 @@ function bindPolicy() {
   if (styleRadio) styleRadio.checked = true;
   updateRangeLabels();
 }
-function renderModels() { $('models').innerHTML = config.models.map((m, i) => `<tr data-index="${i}"><td><input class="enabled" type="checkbox" ${m.enabled ? 'checked' : ''}></td><td><strong>${m.displayName || m.id}</strong><br><small>${m.id}</small></td><td><span class="tag ${m.ownership === 'self_hosted' ? 'self' : 'eco'}">${m.ownership === 'self_hosted' ? '自建' : '生态'}</span></td><td><input class="quality" type="number" min="0" max="1" step=".01" value="${m.quality.default}"></td><td><input class="cost" type="number" min="0" step=".01" value="${m.costIndex}"></td><td class="provider-cost">—</td><td><input class="latency" type="number" min="0" step=".01" value="${m.latencyIndex}"></td><td><input class="input-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.input ?? ''}"></td><td><input class="cached-price" type="number" min="0" step=".01" placeholder="无折扣" value="${m.pricingYuanPerMillionTokens?.inputCached ?? ''}"></td><td><input class="output-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.output ?? ''}"></td><td><input class="p95" type="number" min="0" step="1" placeholder="待观测" value="${m.performance?.totalP95Ms ?? ''}"></td><td><span class="pill ${(m.reliabilityStatus || m.calibrationStatus) === 'verified' ? 'good' : 'muted'}">${(m.reliabilityStatus || m.calibrationStatus) === 'verified' ? '可靠' : (m.reliabilityStatus || m.calibrationStatus) === 'pilot' ? 'Pilot' : '待观测'}</span></td><td><button class="btn-mini" data-act="checkup">体检</button><button class="btn-mini" data-act="full">评测</button></td><td class="health">—</td></tr>`).join(''); }
+function renderModels() { $('models').innerHTML = config.models.map((m, i) => `<tr data-index="${i}"><td><input class="enabled" type="checkbox" ${m.enabled ? 'checked' : ''}></td><td><strong>${m.displayName || m.id}</strong><br><small>${m.id}</small></td><td><span class="tag ${m.ownership === 'self_hosted' ? 'self' : m.ownership === 'unknown' ? 'unknown' : 'eco'}">${m.ownership === 'self_hosted' ? '自建' : m.ownership === 'unknown' ? '归属待定' : '生态'}</span></td><td><input class="quality" type="number" min="0" max="1" step=".01" value="${m.quality.default}"></td><td><input class="cost" type="number" min="0" step=".01" value="${m.costIndex}"></td><td class="provider-cost">—</td><td><input class="latency" type="number" min="0" step=".01" value="${m.latencyIndex}"></td><td><input class="input-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.input ?? ''}"></td><td><input class="cached-price" type="number" min="0" step=".01" placeholder="无折扣" value="${m.pricingYuanPerMillionTokens?.inputCached ?? ''}"></td><td><input class="output-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.output ?? ''}"></td><td><input class="p95" type="number" min="0" step="1" placeholder="待观测" value="${m.performance?.totalP95Ms ?? ''}"></td><td><span class="pill ${(m.reliabilityStatus || m.calibrationStatus) === 'verified' ? 'good' : 'muted'}">${(m.reliabilityStatus || m.calibrationStatus) === 'verified' ? '可靠' : (m.reliabilityStatus || m.calibrationStatus) === 'pilot' ? 'Pilot' : '待观测'}</span></td><td><button class="btn-mini" data-act="checkup">体检</button><button class="btn-mini" data-act="full">巡检</button></td><td class="health">—</td></tr>`).join(''); }
 //算力消耗指数列（成本双指标之一）：来自 deployment 数据 (机×卡×卡价)/tps，独立于用户侧豆价 costIndex
 function providerIndexClient(m) { const d = m.deployment; if (!d || !d.machines || !d.tps) return null; const cw = Number((config.costModel?.cardPrice || {})[d.deviceType] || 1); const unit = Number(d.machines) * (Number(d.cardsPerMachine) || 1) * cw / Number(d.tps); return { unit }; }
 function renderProviderColumn() { const units = config.models.map(providerIndexClient).map((x) => x?.unit).filter(Number.isFinite); const anchor = units.length ? Math.max(...units) : null; document.querySelectorAll('#models tr').forEach((row, i) => { const m = config.models[i]; const cell = row.querySelector('.provider-cost'); if (!cell) return; const p = providerIndexClient(m); cell.textContent = (p && anchor) ? Math.min(1, p.unit / anchor).toFixed(3) : '—'; }); }
@@ -719,7 +719,9 @@ function updateSelfBonusHint() {
   if (!hint) return;
   if (!$id('preferSelf')?.checked) { hint.textContent = '（未勾选上方开关时不生效）'; return; }
   if (v === 0) { hint.textContent = '0 = 不加分，自建与生态完全同权竞争'; return; }
-  hint.textContent = `加分 ${v.toFixed(2)} ≈ 自建模型质量分低 ${v.toFixed(2)} 或用户成本指数贵 ${v.toFixed(2)} 时仍优先选择自建`;
+  const qw = Number(document.getElementById('qualityWeight')?.value || 1);
+  const cw = Number(document.getElementById('costWeight')?.value || 1);
+  hint.textContent = `加分 ${v.toFixed(2)} ≈ 可容忍：质量分低 ${(v / qw).toFixed(2)}，或成本指数贵 ${(v / cw).toFixed(2)}（按当前权重 质量×${qw}/成本×${cw} 换算）`;
 }
 if ($id('selfBonus')) $id('selfBonus').addEventListener('input', updateSelfBonusHint);
 if ($id('preferSelf')) $id('preferSelf').addEventListener('change', updateSelfBonusHint);
@@ -751,7 +753,7 @@ async function openDiscover() {
     const olds = d.models.filter(m => m.registered);
     body.innerHTML =
       '<p class="hint">上游共 ' + d.total + ' 个模型，其中 ' + d.newCount + ' 个未注册。勾选后点「注册所选」——新模型默认<b>不启用、校准状态 pilot</b>，不会进入调度池。</p>' +
-      news.map(m => '<label class="discover-row"><input type="checkbox" class="disc-new" value="' + m.id + '"><strong>' + m.id + '</strong><span class="pill muted">新</span></label>').join('') +
+      news.map(m => '<label class="discover-row"><input type="checkbox" class="disc-new" value="' + escHtml(m.id) + '"><strong>' + escHtml(m.id) + '</strong><span class="pill muted">新</span></label>').join('') +
       (olds.length ? '<p class="hint" style="margin-top:8px">已注册（不可重复注册）：' + olds.map(m => m.id).join('、') + '</p>' : '') +
       (news.length ? '<button id="registerSelected" class="primary" style="margin-top:12px">注册所选</button>' : '<p>没有发现新模型。</p>');
     const reg = $id('registerSelected');
@@ -764,7 +766,7 @@ function registerDiscovered() {
   let added = 0;
   for (const id of picked) {
     if (config.models.some(m => m.id === id)) continue;
-    config.models.push({ id, displayName: id, ownership: 'self_hosted', enabled: false, calibrationStatus: 'pilot', reliabilityStatus: 'unverified',
+    config.models.push({ id, displayName: id, ownership: 'unknown', enabled: false, calibrationStatus: 'pilot', reliabilityStatus: 'unverified',
       quality: { default: 0.80, simple: 0.85, coding: 0.75, reasoning: 0.78, creative: 0.82, extraction: 0.85 },
       costIndex: 0.5, latencyIndex: 0.5, pricingYuanPerMillionTokens: { input: null, inputCached: null, output: null },
       performance: { totalP95Ms: null, ttftP50Ms: null, tokensPerSecond: null }, capabilities: { chat: true, stream: true },
@@ -773,7 +775,7 @@ function registerDiscovered() {
   }
   renderModels(); renderProviderColumn(); renderDeployment(); syncDirty();
   $id('discoverModal').style.display = 'none';
-  toast('已注册 ' + added + ' 个模型（未启用）——录入定价/质量分后「安全发布」，再跑「体检」');
+  toast('已注册 ' + added + ' 个模型（未启用、归属待定）——发布前须先在表格把归属改为 自建/生态（unknown 不参与自建加分），录入定价/质量分后「安全发布」');
 }
 $id('discoverModels')?.addEventListener('click', openDiscover);
 $id('discoverClose')?.addEventListener('click', () => $id('discoverModal').style.display = 'none');
@@ -782,12 +784,12 @@ let evalTimer = null;
 async function startEval(type, modelId) {
   if (!confirm(type === 'checkup'
     ? '对 ' + modelId + ' 跑快速体检？（8 题冒烟，约 1-2 分钟，真实调用上游）'
-    : '对 ' + modelId + ' 跑完整评测？（56 题 eval-gate，约 30-60 分钟、消耗上百次调用，跑完自动回填质量分）')) return;
+    : '对 ' + modelId + ' 跑 56 题稳定性巡检？（就绪率+时延分布，约 10-60 分钟；不含质量评分——质量分以带裁判的 eval:gate 为准）')) return;
   try {
     const r = await fetch('/admin/api/eval-jobs', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ type, modelId }) });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error?.message || r.status);
-    $id('evalTitle').textContent = (type === 'checkup' ? '快速体检 · ' : '完整评测 · ') + modelId;
+    $id('evalTitle').textContent = (type === 'checkup' ? '快速体检 · ' : '稳定性巡检 · ') + modelId;
     $id('evalModal').style.display = 'flex';
     pollEval(d.id);
   } catch (e) { toast('任务启动失败：' + e.message, true); }
@@ -803,8 +805,8 @@ function pollEval(id) {
       let html = '<div class="progress-wrap"><div class="progress-bar" style="width:' + pct + '%"></div></div><p>' + j.done + '/' + j.total + '（' + pct + '%）失败 ' + j.failed + '</p>';
       if (j.status === 'done') {
         clearInterval(evalTimer);
-        if (j.summary) html += '<table><tr><th>成功率</th><th>断言通过率</th><th>平均时延</th><th>P95</th></tr><tr><td>' + (j.summary.successRate * 100).toFixed(0) + '%</td><td>' + (j.summary.assertPassRate * 100).toFixed(0) + '%</td><td>' + (j.summary.avgLatencyMs ?? '—') + 'ms</td><td>' + (j.summary.p95LatencyMs ?? '—') + 'ms</td></tr></table>';
-        if (j.autoApplied) html += '<p class="hint">✅ 平均时延已自动回填到模型参数（记得「安全发布」生效）</p>';
+        if (j.summary) html += '<table><tr><th>就绪率</th><th>断言通过</th><th>建议平均时延</th><th>时延区间</th></tr><tr><td>' + (j.summary.successRate * 100).toFixed(0) + '%</td><td>' + (j.summary.assertPassed ?? '—') + '/' + (j.summary.assertTotal ?? '—') + '</td><td>' + (j.summary.suggestedAvgLatencyMs ?? '—') + 'ms</td><td>' + (j.summary.minLatencyMs ?? '—') + '~' + (j.summary.maxLatencyMs ?? '—') + 'ms</td></tr></table><p class=\'hint\'>6 题冒烟样本量小——结果仅作连通性参考，不构成质量结论；建议时延需人工确认后手工采纳。';
+        // v0.10.2：不再自动回填（样本量不支持），建议值人工确认后手工录入
         html += '<button class="primary" onclick="document.getElementById(\'evalModal\').style.display=\'none\';location.reload()">完成并刷新</button>';
       } else if (j.status === 'failed') {
         clearInterval(evalTimer);

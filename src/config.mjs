@@ -26,7 +26,7 @@ export function validateConfig(config) {
     if (!model.id || typeof model.id !== 'string') throw new Error('每个模型都需要字符串 id');
     if (ids.has(model.id)) throw new Error(`模型 id 重复: ${model.id}`);
     ids.add(model.id);
-    if (!['self_hosted', 'ecosystem'].includes(model.ownership)) throw new Error(`模型 ${model.id} ownership 无效`);
+    if (!['self_hosted', 'ecosystem', 'unknown'].includes(model.ownership)) throw new Error(`模型 ${model.id} ownership 无效（unknown=发现注册后待运营确认，不参与自建加分与路由）`);
     if (!model.quality || typeof model.quality.default !== 'number') throw new Error(`模型 ${model.id} 缺少 quality.default`);
     if (model.calibrationStatus !== undefined && !['pilot', 'unverified', 'verified'].includes(model.calibrationStatus)) throw new Error(`模型 ${model.id} calibrationStatus 无效（可选 pilot/unverified/verified）`);
     //修calibrationStatus → reliabilityStatus 更名（「已验证」实际只验证 HTTP 可用性，
