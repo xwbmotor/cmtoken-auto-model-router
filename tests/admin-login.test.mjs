@@ -88,3 +88,47 @@ test('e2e 管理端登录会话：登录页门禁+cookie 会话+Bearer 兼容+�
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+// ════════ v0.10.0 新增端点 ════════
+// 黑盒 e2e：起临时服务打 v0.10.0 三个新端点（不 import server 内部——import 即启动全服务）
+test('e2e v0.10.0 端点：下线提醒/发现/评测任务的鉴权与基本语义', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'amr-v010-'));
+  let child;
+  try {
+    const cfg = JSON.parse((await import('node:fs')).readFileSync(new URL('../config/router.json', import.meta.url), 'utf8'));
+    cfg.decisionLog = { ...(cfg.decisionLog || {}), enabled: false };
+    (await import('node:fs')).writeFileSync(join(dir, 'router.json'), JSON.stringify(cfg));
+    const port = await freePort();
+    child = spawn(process.execPath, ['src/server.mjs'], {
+      env: { ...process.env, AMR_CONFIG_DIR: dir, PORT: String(port), ADMIN_TOKEN: 'adm-secret',
+             MAAS_BASE_URL: '', MAAS_API_KEY: '', UPSTREAM_BASE_URL: '', UPSTREAM_API_KEY: '' },
+      stdio: 'ignore',
+    });
+    assert.ok(await waitHealth(port), '服务未就绪');
+    const H = { authorization: 'Bearer adm-secret' };
+    // 1) 无鉴权 → 401
+    let r = await fetch(`http://127.0.0.1:${port}/admin/api/model-offline-alerts`);
+    assert.strictEqual(r.status, 401);
+    // 2) 下线提醒：正常态 alerts=[]（无熔断模型）
+    r = await fetch(`http://127.0.0.1:${port}/admin/api/model-offline-alerts`, { headers: H });
+    assert.strictEqual(r.status, 200);
+    const { alerts } = await r.json();
+    assert.ok(Array.isArray(alerts));
+    // 3) 发现端点：无上游配置 → 502 discover_models_error（不崩）
+    r = await fetch(`http://127.0.0.1:${port}/admin/api/discover-models`, { headers: H });
+    assert.strictEqual(r.status, 502);
+    const d = await r.json();
+    assert.strictEqual(d.error?.type, 'discover_models_error');
+    // 4) 评测任务：非法 type → 400；不存在模型 → 400；查不存在任务 → 404
+    r = await fetch(`http://127.0.0.1:${port}/admin/api/eval-jobs`, { method: 'POST', headers: { ...H, 'content-type': 'application/json' }, body: JSON.stringify({ type: 'xxx' }) });
+    assert.strictEqual(r.status, 400);
+    r = await fetch(`http://127.0.0.1:${port}/admin/api/eval-jobs`, { method: 'POST', headers: { ...H, 'content-type': 'application/json' }, body: JSON.stringify({ type: 'checkup', modelId: 'no-such-model' }) });
+    assert.strictEqual(r.status, 400);
+    r = await fetch(`http://127.0.0.1:${port}/admin/api/eval-jobs?id=job_nope`, { headers: H });
+    assert.strictEqual(r.status, 404);
+  } finally {
+    if (child) child.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

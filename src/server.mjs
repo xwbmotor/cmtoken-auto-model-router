@@ -1591,6 +1591,145 @@ async function probeUpstream() {
 
 }
 
+// ── P1 模型发现：代理上游 /v1/models（独立 30s 缓存；MaaS 返回 code:100200 包 data 数组，标准 OpenAI 返回 data 或裸数组）
+let discoverCache = { at: 0, result: null };
+async function fetchUpstreamModels() {
+  const now = Date.now();
+  if (discoverCache.result && now - discoverCache.at < 30000) return discoverCache.result;
+  const base = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl)?.replace(/\/$/, '');
+  const key = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
+  if (!base || !key) throw new Error('上游未配置（UPSTREAM_BASE_URL / MAAS_API_KEY）');
+  const res = await fetch(`${base}/models`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error(`上游返回 HTTP ${res.status}`);
+  const payload = await res.json();
+  const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : [];
+  const registered = new Set((config.models || []).map((m) => m.id));
+  const models = list.map((m) => ({ id: m.id, registered: registered.has(m.id), ownedBy: m.owned_by || null }));
+  const result = { total: models.length, newCount: models.filter((m) => !m.registered).length, models };
+  discoverCache = { at: now, result };
+  return result;
+}
+
+// ── P2 评测任务运行器：体检（8题冒烟）/ 完整评测（eval-gate 题集）。单进程内存队列，重启即失。
+const evalJobs = new Map();
+const EVAL_JOB_TTL_MS = 2 * 3600 * 1000;
+
+function getEvalJob(id) {
+  const j = id ? evalJobs.get(id) : null;
+  if (!j) return null;
+  sweepEvalJobs();
+  return evalJobs.get(id) || null;
+}
+function sweepEvalJobs() {
+  const now = Date.now();
+  for (const [id, j] of evalJobs) if (j.finishedAt && now - j.finishedAt > EVAL_JOB_TTL_MS) evalJobs.delete(id);
+}
+
+// 体检题集：benchmark.mjs 同源 8 题（简单/抽取/分类/编码×2/推理×2/创作），断言可机判
+const CHECKUP_CASES = [
+  { id: 'simple-qa', task: 'simple', prompt: '只回答一个数字：17 加 28 等于多少？', check: { contains: '45' } },
+  { id: 'extract-json', task: 'extraction', prompt: '从这句话抽取姓名和城市。只输出 JSON，键名必须严格为 name 和 city：张晓明目前居住在广州。', check: { json: { name: '张晓明', city: '广州' } } },
+  { id: 'classification', task: 'extraction', prompt: '将"申请退款，商品破损"分类为售前、售后或咨询。只输出分类名称。', check: { contains: '售后' } },
+  { id: 'sql', task: 'coding', prompt: '写一条 PostgreSQL 查询：统计 orders 表每个 user_id 最近30天的订单金额总和，只返回 SQL。', check: { contains: 'group by' } },
+  { id: 'reasoning', task: 'reasoning', prompt: '有三只箱子，标签分别是苹果、橘子、混合，但所有标签都贴错。最少取几个水果能确定全部箱子？只回答数字和一句理由。', check: { containsAny: ['1个', '一个', '1 个'] } },
+  { id: 'creative', task: 'creative', prompt: '为企业内部 AI 助手写三条简洁中文宣传语，每条不超过18字。' },
+];
+
+function checkCase(check, text) {
+  if (!check) return null; // 无断言=人工判断题，记完成即可
+  const t = String(text || '');
+  if (check.contains && !t.includes(check.contains)) return false;
+  if (check.containsAny && !check.containsAny.some((k) => t.includes(k))) return false;
+  if (check.json) {
+    try {
+      const cleaned = t.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+      const obj = JSON.parse(cleaned);
+      for (const [k, v] of Object.entries(check.json)) if (String(obj[k]) !== v) return false;
+    } catch { return false; }
+  }
+  return true;
+}
+
+async function callUpstreamChat(modelId, prompt, maxTokens = 300) {
+  const base = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl)?.replace(/\/$/, '');
+  const key = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
+  const t0 = Date.now();
+  const res = await fetch(`${base}/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: modelId, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens, stream: false }),
+    signal: AbortSignal.timeout(60000),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload?.error?.message || `HTTP ${res.status}`);
+  const text = payload?.choices?.[0]?.message?.content || '';
+  return { text, latencyMs: Date.now() - t0, usage: payload?.usage || null };
+}
+
+function startEvalJob(body) {
+  const type = body?.type;
+  const modelId = String(body?.modelId || '').trim();
+  if (!['checkup', 'full'].includes(type)) throw new Error('type 必须是 checkup（体检）或 full（完整评测）');
+  const model = (config.models || []).find((m) => m.id === modelId);
+  if (!model) throw new Error(`模型 ${modelId} 不在注册表中（请先注册）`);
+  // 并发上限：同时只跑一个评测任务，防止打爆上游
+  for (const j of evalJobs.values()) if (!j.finishedAt) throw new Error(`已有任务在跑（${j.id} ${j.type}），请等它完成`);
+  const id = `job_${Date.now().toString(36)}`;
+  const job = { id, type, modelId, startedAt: new Date().toISOString(), finishedAt: null, status: 'running',
+    total: type === 'checkup' ? CHECKUP_CASES.length : 56, done: 0, failed: 0, results: [], autoApplied: false, error: null };
+  evalJobs.set(id, job);
+  runEvalJob(job).catch((e) => { job.error = String(e?.message || e); job.status = 'failed'; job.finishedAt = new Date().toISOString(); });
+  return job;
+}
+
+async function runEvalJob(job) {
+  const cases = job.type === 'checkup' ? CHECKUP_CASES : await loadEvalGateCases();
+  job.total = cases.length;
+  for (const c of cases) {
+    try {
+      const r = await callUpstreamChat(job.modelId, c.prompt, c.maxTokens || 300);
+      const pass = checkCase(c.check, r.text);
+      job.results.push({ id: c.id, task: c.task || null, ok: r.text.length > 0, pass, latencyMs: r.latencyMs, chars: r.text.length, excerpt: r.text.slice(0, 120) });
+      if (pass === false) job.failed += 1;
+    } catch (error) {
+      job.results.push({ id: c.id, task: c.task || null, ok: false, pass: null, error: String(error?.message || error) });
+      job.failed += 1;
+    }
+    job.done += 1;
+  }
+  job.status = job.error ? 'failed' : 'done';
+  job.finishedAt = new Date().toISOString();
+  if (job.type === 'checkup') {
+    // 体检产出：成功率、断言通过率、平均/P95 时延——自动回填 P95 时延（若有 5+ 样本）
+    const lat = job.results.filter((r) => r.latencyMs).map((r) => r.latencyMs).sort((a, b) => a - b);
+    if (lat.length >= 3) {
+      const p95 = lat[Math.min(lat.length - 1, Math.floor(lat.length * 0.95))];
+      const m = config.models.find((x) => x.id === job.modelId);
+      if (m) { m.avgLatencyMs = Math.round(lat.reduce((a, b) => a + b, 0) / lat.length); job.autoApplied = true; }
+    }
+    job.summary = {
+      successRate: job.results.filter((r) => r.ok).length / job.total,
+      assertPassRate: job.results.filter((r) => r.pass === true).length / Math.max(1, job.results.filter((r) => r.pass !== null).length),
+      avgLatencyMs: lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null,
+      p95LatencyMs: lat.length ? lat[Math.min(lat.length - 1, Math.floor(lat.length * 0.95))] : null,
+    };
+  }
+}
+
+// eval-gate 题集：从 data/eval-gate 题库加载（56 题）；不存在则报错提示先准备题库
+async function loadEvalGateCases() {
+  const { readFile } = await import('node:fs/promises');
+  const { resolve } = await import('node:path');
+  for (const cand of ['data/eval-gate/cases.json', 'data/eval-gate.json', 'eval-gate.cases.json']) {
+    try {
+      const raw = await readFile(resolve(projectRoot, cand), 'utf8');
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr) && arr.length) return arr.map((c) => ({ id: c.id, task: c.task, prompt: c.prompt, check: c.check || null, maxTokens: c.maxTokens }));
+    } catch {}
+  }
+  throw new Error('未找到 eval-gate 题库（data/eval-gate/cases.json）。完整评测需先准备题库；体检不依赖题库。');
+}
+
 function semanticOptions(clientAuthHeader = null) {
 
 
@@ -2767,6 +2906,48 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/admin/api/config') return json(res, 200, config);
+  // ── P1 模型发现：代理上游 GET /v1/models（30s 缓存），勾选注册用。key 永不出服务端。
+  if (req.method === 'GET' && url.pathname === '/admin/api/discover-models') {
+    try {
+      const r = await fetchUpstreamModels();
+      return json(res, 200, r);
+    } catch (error) { return errorJson(res, 502, `上游模型列表获取失败：${error.message}`, 'discover_models_error'); }
+  }
+  // ── P3 下线检测：熔断打开或连续失败超阈值 → 建议关闭（不自动关，管理员拍板）
+  if (req.method === 'GET' && url.pathname === '/admin/api/model-offline-alerts') {
+    const alerts = [];
+    for (const m of config.models || []) {
+      if (!m.enabled) continue;
+      const h = health[m.id];
+      if (!h) continue;
+      const circuitHours = h.circuitOpenUntil > Date.now() ? Math.round((h.circuitOpenUntil - Date.now()) / 3600000 * 10) / 10 : 0;
+      const deadFailures = h.consecutiveFailures >= 20;
+      const longDown = circuitHours >= 1;
+      if (deadFailures || longDown) {
+        alerts.push({ modelId: m.id, displayName: m.displayName || m.id, ownership: m.ownership,
+          consecutiveFailures: h.consecutiveFailures, circuitOpenHoursLeft: circuitHours,
+          consecutiveFailuresDetail: h.failures || 0, successes: h.successes || 0,
+          suggestion: deadFailures ? '连续失败 ≥20 次，疑似模型已下线' : '熔断持续 ≥1 小时，疑似上游不可用' });
+      }
+    }
+    return json(res, 200, { alerts, checkedAt: new Date().toISOString() });
+  }
+  // ── P2 评测任务：POST 起任务 / GET 查进度
+  if (url.pathname === '/admin/api/eval-jobs') {
+    if (req.method === 'POST') {
+      try {
+        const body = await readJson(req);
+        const job = startEvalJob(body);
+        return json(res, 202, job);
+      } catch (error) { return errorJson(res, 400, error.message, error.code || 'eval_job_error'); }
+    }
+    if (req.method === 'GET') {
+      const id = url.searchParams.get('id');
+      const job = getEvalJob(id);
+      if (!job) return errorJson(res, 404, '任务不存在或已过期', 'eval_job_not_found');
+      return json(res, 200, job);
+    }
+  }
   // PUT 更新/清除；key 永不回传、不入 config
   if (req.method === 'GET' && url.pathname === '/admin/api/judge/secret') {
     return json(res, 200, { ...judgeSecretStore.masked(), source: 'admin-config', note: 'key 已落 data/judge-secret.json（git-ignored）；GET 永不回明文' });

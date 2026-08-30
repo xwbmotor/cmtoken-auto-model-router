@@ -2,6 +2,20 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.10.0] - 2026-08-30
+
+- 模型管理流水线（运营向）：
+  - 上游模型发现：管理台「从上游发现模型」按钮，代理调 MaaS `GET /v1/models`（30s 缓存），勾选即注册——新模型默认不启用、校准状态 pilot，不进调度池；
+  - 在线测评：每模型「体检」（8 题冒烟，~1-2 分钟，成功率/断言通过率/时延，自动回填 avgLatencyMs）与「完整评测」（56 题 eval-gate 题库，进度条实时可查，单任务串行防打爆上游）；
+  - 下线提醒：熔断持续 ≥1h 或连续失败 ≥20 次的启用中模型在管理台横幅提示建议关闭（只提醒不自动关，管理员拍板）；
+  - 自建加权直观化：selfHostedBonus 滑条移至 preferSelfHosted 开关旁，实时换算提示（加分值≈可容忍的质量分差/成本指数差）。
+- 新端点：`GET /admin/api/discover-models`、`POST|GET /admin/api/eval-jobs`、`GET /admin/api/model-offline-alerts`（均需管理员鉴权）。
+
+## [0.9.8] - 2026-08-30
+
+- Judge rubric v2.1 头尾兼顾截断：评审输入预算内 70% 保末段（agent 长对话的任务上下文在末尾，原掐头截断导致 correctness/completeness 不可核验率 83%/71%）；
+- 新增 `scripts/blind-review-export.sh` 盲审样本导出（judge 事件+决策日志原文关联 → xlsx，人工列黄色/judge 对照列灰色）。
+
 ## [0.9.7] - 2026-08-25
 
 ### 校准
