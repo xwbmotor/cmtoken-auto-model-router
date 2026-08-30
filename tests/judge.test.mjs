@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import {
-  shouldSampleJudge, buildJudgeMessages, buildTaskCheckMessages, parseJudgeJson,
+  shouldSampleJudge, buildJudgeMessages, buildTaskCheckMessages, parseJudgeJson, clipHeadTail,
   normalizeScore, normalizeDimension, normalizeVerdict, randomAbOrder,
   JudgeGuard, callJudgeModel, judgePromptHash, JUDGE_RUBRIC_VERSION,
   JUDGE_TASK_ENUM, normalizeSuggestedTask, looksLikeQualityVerdict, isValidTaskCheckVerdict,
@@ -372,4 +372,20 @@ test('buildJudgeMessages：redactors 作用于用户消息与回答正文', () =
   assert.ok(msgs[1].content.includes('[REDACTED]'));
   assert.ok(!msgs[1].content.includes('123456'));
   assert.ok(!msgs[1].content.includes('654321'));
+});
+
+test('clipHeadTail：头尾兼顾截断——长对话保留末段任务与开头背景', () => {
+  const long = 'HEAD'.repeat(1500) + 'mid'.repeat(3000) + '最后的任务：总结本次改动';
+  const clipped = clipHeadTail(long, 8000);
+  assert.ok(clipped.length <= 8020, '预算+省略标记');
+  assert.ok(clipped.includes('最后的任务'), '末段任务必须保留');
+  assert.ok(clipped.startsWith('HEAD'), '开头背景保留');
+  assert.ok(clipped.includes('[中间内容省略]'), '省略标记');
+  assert.strictEqual(clipHeadTail('short', 8000), 'short', '短文本原样');
+  // buildJudgeMessages 长对话冒烟：末段任务可见
+  const msgs = Array.from({ length: 300 }, (_, i) => ({ role: 'user', content: 'x'.repeat(100) + (i === 299 ? '终极问题' : '') }));
+  const built = buildJudgeMessages({ messages: msgs, answerText: '答案' });
+  assert.ok(built[1].content.includes('终极问题'), '评审输入含末段任务');
+  const tc = buildTaskCheckMessages({ messages: msgs, routeTask: 'agent', subTask: '', predictedTier: 'complex' });
+  assert.ok(tc[1].content.includes('终极问题'), '分类核对输入含末段任务');
 });

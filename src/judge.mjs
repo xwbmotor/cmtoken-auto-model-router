@@ -36,7 +36,7 @@ export function shouldSampleJudge(requestId, percent, secret, hmacImpl = createH
 }
 
 // —— rubric prompt（版本化；hash 随事件落盘供审计）——
-export const JUDGE_RUBRIC_VERSION = 'v2';
+export const JUDGE_RUBRIC_VERSION = 'v2.1';
 const RUBRIC_SINGLE = `你是模型回答质量评审（Judge）。对下面的【用户请求】与【模型回答】独立评分。
 严格按 rubric 输出 JSON（不要输出其他文字）：
 {"correctness":{"score":0-10|null,"verifiable":true|false,"reason":"≤40字"},
@@ -80,8 +80,18 @@ export function redactText(text, patterns) {
   return s;
 }
 
+// 头尾兼顾截断：长对话（尤其 agent 多轮）真正的提问在末尾，掐头会丢任务上下文——
+// judge 评审「不可核验」的主因。预算内优先保留末段（最新指令所在），余量给前段（背景）。
+export function clipHeadTail(text, budget = 8000) {
+  const t = String(text);
+  if (t.length <= budget) return t;
+  const tailBudget = Math.floor(budget * 0.7);
+  const headBudget = budget - tailBudget - 20;
+  return t.slice(0, headBudget) + '\n…[中间内容省略]…\n' + t.slice(t.length - tailBudget);
+}
+
 export function buildJudgeMessages({ messages, answerText, comparison = null, redactors = [] }) {
-  let user = messages?.map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`).join('\n').slice(0, 8000);
+  let user = clipHeadTail(messages?.map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`).join('\n') || '');
   user = redactText(user, redactors);
   if (!comparison) {
     return [
@@ -109,7 +119,7 @@ routeTask 大类编码表（与路由器枚举完全一致）：coding/reasoning
 subTask 仅为细类参考（如 sql/debugging/write 等），不参与对错判定。task_agree 必须是布尔值。`;
 
 export function buildTaskCheckMessages({ messages, routeTask, subTask, predictedTier, redactors = [] }) {
-  let user = messages?.map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`).join('\n').slice(0, 8000);
+  let user = clipHeadTail(messages?.map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`).join('\n') || '');
   user = redactText(user, redactors);
   return [
     { role: 'system', content: RUBRIC_TASKCHECK },
