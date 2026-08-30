@@ -2,6 +2,16 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.10.3] - 2026-08-30
+
+十七审收口（v0.10.2 遗留问题全量落实）：
+- P1 unknown fail-closed：config 校验拒绝 enabled=true && ownership=unknown；路由层 double-check（ownership_unconfirmed 拒因）；管理页归属列改下拉框（自建/生态/归属待定），选回 unknown 时自动取消启用勾选；
+- P1 下线误报修正：downSince 只在熔断首次打开时设置（首失败≠宕机）；告警要求 circuitState≠closed 且 lastFailureAt 10 分钟内有失败证据（无流量不是故障证据）；横幅改读新字段（downMinutes/halfOpenFailStreak）并 escHtml 转义；
+- P1 full 任务补 summary：就绪率/时延分布/分任务成功率(byTask)/错误类型分布(errorTypes)；
+- P1 回归测试：unknown 启用保护（config 校验）+ 路由排除（ownership_unconfirmed 进 rejected）；
+- P2 门禁增强：题库必须合法 JSON 且 56 题；classifier 镜像 tag 必须存在且本地有镜像证据（允许与 router 不同版本）；
+- P2 体检 confirm 文案 8题→6题；自建加分换算 0 权重语义（“权重为 0，不影响对比”）+ 权重滑条变动联动刷新换算提示。
+
 ## [0.10.2] - 2026-08-30
 
 十六审收口（外部评审意见全量落实）：

@@ -389,6 +389,8 @@ export function routeRequest(body, config, runtime = {}) {
   for (const model of config.models) {
     const reasons = [];
     if (!model.enabled) reasons.push('disabled');
+    // v0.10.3：归属未确认（unknown）的模型即使 enabled=true 也不参与路由——fail-closed
+    if (model.ownership === 'unknown') reasons.push('ownership_unconfirmed');
     // 套餐动态候选池：客户端 key 的 v1/models 可用集不含该模型 → 该租户无权调用（not_entitled）
     if (runtime.allowedModelIds && !runtime.allowedModelIds.has(model.id)) reasons.push('not_entitled');
     const circuit = health[model.id]?.circuitOpenUntil || 0;

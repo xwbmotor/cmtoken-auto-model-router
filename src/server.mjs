@@ -1220,7 +1220,7 @@ function updateHealth(model, ok, latencyMs) {
     state.probeInFlight = false;
 
     state.consecutiveFailures += 1; state.failures += 1;
-    if (!state.downSince) state.downSince = Date.now();
+    state.lastFailureAt = Date.now();
     if (wasProbe) state.halfOpenFailStreak = (state.halfOpenFailStreak || 0) + 1;
 
     if (wasProbe || state.consecutiveFailures >= config.routing.circuitBreakerFailures) {
@@ -1228,6 +1228,10 @@ function updateHealth(model, ok, latencyMs) {
       state.circuitState = 'open';
 
       state.circuitOpenUntil = Date.now() + config.routing.circuitBreakerCooldownMs;
+
+      // v0.10.3：downSince 只在熔断首次打开时设置（首失败≠宕机——偶发失败后无流量，
+      // 30 分钟后不应被误判为「持续不可用」；无流量不是故障证据）
+      if (!state.downSince) state.downSince = Date.now();
 
     }
 
@@ -1702,10 +1706,10 @@ async function runEvalJob(job) {
   }
   job.status = job.error ? 'failed' : 'done';
   job.finishedAt = new Date().toISOString();
+  const lat = job.results.filter((r) => r.latencyMs).map((r) => r.latencyMs).sort((a, b) => a - b);
   if (job.type === 'checkup') {
     // v0.10.2：体检=6 题连通性冒烟——不再自动改内存 config（样本量不支持），只出建议时延，
     // 运营确认后在「模型参数」页手工采纳并安全发布。断言数如实呈现（不叫质量百分比）。
-    const lat = job.results.filter((r) => r.latencyMs).map((r) => r.latencyMs).sort((a, b) => a - b);
     job.summary = {
       successRate: job.results.filter((r) => r.ok).length / job.total,
       assertPassed: job.results.filter((r) => r.pass === true).length,
@@ -1713,6 +1717,28 @@ async function runEvalJob(job) {
       suggestedAvgLatencyMs: lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null,
       minLatencyMs: lat[0] ?? null, maxLatencyMs: lat[lat.length - 1] ?? null,
       note: '6 题冒烟=连通性+简单断言；样本量不支持分位数/质量结论',
+    };
+  } else {
+    // v0.10.3：full（56 题稳定性巡检）汇总——页面承诺的就绪率+时延分布+分任务成功率+错误类型
+    const byTask = {};
+    for (const r of job.results) {
+      const t = r.task || '(无分类)';
+      byTask[t] ||= { total: 0, ready: 0 };
+      byTask[t].total += 1;
+      if (r.ok) byTask[t].ready += 1;
+    }
+    const errTypes = {};
+    for (const r of job.results) if (!r.ok && r.error) {
+      const key = String(r.error).slice(0, 60);
+      errTypes[key] = (errTypes[key] || 0) + 1;
+    }
+    job.summary = {
+      readyRate: job.results.filter((r) => r.ok).length / job.total,
+      avgLatencyMs: lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null,
+      minLatencyMs: lat[0] ?? null, maxLatencyMs: lat[lat.length - 1] ?? null,
+      byTask: Object.fromEntries(Object.entries(byTask).map(([t, v]) => [t, { ...v, rate: v.ready / v.total }])),
+      errorTypes: Object.keys(errTypes).length ? errTypes : null,
+      note: '56 题稳定性巡检=就绪率+时延分布；不含质量评分（质量分以带裁判的 eval:gate 为准）',
     };
   }
 }
@@ -2923,14 +2949,22 @@ const server = http.createServer(async (req, res) => {
       if (!m.enabled) continue;
       const h = health[m.id];
       if (!h || !h.downSince) continue;
+      // v0.10.3：只认非 closed 状态（closed=已恢复成功，downSince 将被清零；此处为双保险）
+      if (h.circuitState === 'closed') continue;
       const downMin = (Date.now() - h.downSince) / 60000;
       const probeStreak = h.halfOpenFailStreak || 0;
+      // 无流量不是故障证据：lastFailureAt 超过 10 分钟没有任何失败记录（也没有探针失败），
+      // 说明只是没人调用——不告警
+      const stale = !h.lastFailureAt || (Date.now() - h.lastFailureAt) > 600000;
+      if (stale) continue;
       const longDown = downMin >= 30;
       const probeDead = probeStreak >= 3 && downMin >= 10;
       if (longDown || probeDead) {
         alerts.push({ modelId: m.id, displayName: m.displayName || m.id, ownership: m.ownership,
           downMinutes: Math.round(downMin), halfOpenFailStreak: probeStreak,
           totalFailures: h.failures || 0, lastSuccessAt: h.lastSuccessAt ? new Date(h.lastSuccessAt).toISOString() : null,
+          lastFailureAt: h.lastFailureAt ? new Date(h.lastFailureAt).toISOString() : null,
+          circuitState: h.circuitState,
           suggestion: longDown ? `持续不可用 ${Math.round(downMin)} 分钟，疑似模型已下线` : `熔断半开探针连败 ${probeStreak} 次，疑似上游持续故障` });
       }
     }

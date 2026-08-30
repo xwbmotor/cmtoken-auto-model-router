@@ -132,3 +132,33 @@ test('e2e v0.10.0 端点：下线提醒/发现/评测任务的鉴权与基本语
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+// ════════ v0.10.3 回归覆盖 ════════
+test('config 校验：ownership=unknown 且 enabled=true 拒绝（fail-closed）', async () => {
+  const { validateConfig } = await import('../src/config.mjs');
+  const { readFileSync } = await import('node:fs');
+  const base = JSON.parse(readFileSync(new URL('../config/router.json', import.meta.url), 'utf8'));
+  // 用真实生产 config 为底——只动一个模型的 ownership，其余校验必然通过
+  const bad = structuredClone(base);
+  bad.models[0].ownership = 'unknown';
+  assert.throws(() => validateConfig(bad), /归属未确认.*不允许启用/);
+  const okCfg = structuredClone(base);
+  okCfg.models[0].ownership = 'unknown';
+  okCfg.models[0].enabled = false;
+  validateConfig(okCfg); // disabled 下 unknown 合法
+});
+
+test('路由排除：ownership=unknown 的模型不进候选（ownership_unconfirmed）', async () => {
+  const { routeRequest } = await import('../src/router.mjs');
+  const { readFileSync } = await import('node:fs');
+  const base = JSON.parse(readFileSync(new URL('../config/router.json', import.meta.url), 'utf8'));
+  const config = structuredClone(base);
+  config.models[0].ownership = 'unknown'; // 强制第一台 unknown 且 enabled
+  config.models[0].enabled = true;
+  const r = routeRequest({ messages: [{ role: 'user', content: '写个快排' }], max_tokens: 100 }, config, { now: Date.now(), health: {} });
+  const rejectedIds = (r.rejected || []).map((x) => x.model || x.modelId || x.id);
+  assert.ok(rejectedIds.includes(config.models[0].id), 'unknown 模型应进 rejected（ownership_unconfirmed）');
+  const allChosen = [...(r.candidates || []).map((c) => c.modelId), ...(r.pool || []).map((c) => c.modelId)];
+  assert.ok(!allChosen.includes(config.models[0].id), 'unknown 模型不得进入候选池');
+});

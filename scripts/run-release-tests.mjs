@@ -61,11 +61,21 @@ const images = {
 };
 gate.imageEvidence = Boolean(images.routerImageId) && Boolean(images.routerLabelsRevision) && images.routerLabelsRevision === git.commit;
 // v0.10.2 门禁：compose 镜像版本必须与 package.json 一致（防 tag 复现出旧版本）+ 巡检题库存在
+// v0.10.3 增强：题库必须合法 JSON 且 56 题；classifier 镜像 tag 必须显式存在（允许与 router 不同版本，但要有镜像证据）
 const composeText = collect(() => readFileSync(join(cwd, 'docker-compose.prod.yml'), 'utf8'));
 const composeTag = collect(() => (/image:\s*cmt-auto-model-router:([^\s#]+)/.exec(composeText) || [])[1]);
 gate.composeVersionMatches = composeTag === pkg.version;
-gate.evalGateCasesPresent = existsSync(join(cwd, 'config/eval-gate.json'));
-const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence && gate.composeVersionMatches && gate.evalGateCasesPresent;
+const evalCases = collect(() => {
+  const parsed = JSON.parse(readFileSync(join(cwd, 'config/eval-gate.json'), 'utf8'));
+  return Array.isArray(parsed?.cases) ? parsed.cases.length : -1;
+});
+gate.evalGateCasesPresent = evalCases === 56;
+if (!gate.evalGateCasesPresent) console.error(`[test:release] 题库校验失败：期望 56 题，实际 ${evalCases}`);
+const classifierTag = collect(() => (/image:\s*cmt-amr-classifier:([^\s#]+)/.exec(composeText) || [])[1]);
+gate.classifierTagPresent = Boolean(classifierTag);
+const classifierImageId = collect(() => classifierTag ? execSync(`docker images --no-trunc --format "{{.ID}}" cmt-amr-classifier:${classifierTag}`, { encoding: 'utf8' }).trim() || null : null);
+gate.classifierImageBuilt = Boolean(classifierImageId);
+const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence && gate.composeVersionMatches && gate.evalGateCasesPresent && gate.classifierTagPresent && gate.classifierImageBuilt;
 if (!validForRelease && !allowDirty) {
   console.error('[test:release] 发布证据链门禁未过：' + JSON.stringify({ ...gate, tag: git.tag, tagExpected, dirtyCount: git.dirty.length }));
   console.error('  正式发布流程：代码+compose 同 commit → docker build --build-arg GIT_REVISION=<HEAD> → git tag v{ver} → 干净 worktree 跑 npm run test:release。');
