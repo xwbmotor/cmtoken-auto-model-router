@@ -1716,18 +1716,16 @@ async function runEvalJob(job) {
   }
 }
 
-// eval-gate 题集：从 data/eval-gate 题库加载（56 题）；不存在则报错提示先准备题库
+// eval-gate 题集：读 config/eval-gate.json（与 scripts/eval-gate.mjs 同源 56 题）。
+// 题目带 rubric（裁判评分标准）无机判断言——在线完整评测产出：就绪率（非空返回）+ 时延分布 +
+// 分 task 成功率；质量分仍以 eval:gate 脚本（带裁判）为准，页面自动回填仅时延。
 async function loadEvalGateCases() {
   const { readFile } = await import('node:fs/promises');
   const { resolve } = await import('node:path');
-  for (const cand of ['data/eval-gate/cases.json', 'data/eval-gate.json', 'eval-gate.cases.json']) {
-    try {
-      const raw = await readFile(resolve(projectRoot, cand), 'utf8');
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr) && arr.length) return arr.map((c) => ({ id: c.id, task: c.task, prompt: c.prompt, check: c.check || null, maxTokens: c.maxTokens }));
-    } catch {}
-  }
-  throw new Error('未找到 eval-gate 题库（data/eval-gate/cases.json）。完整评测需先准备题库；体检不依赖题库。');
+  const raw = await readFile(resolve(projectRoot, 'config/eval-gate.json'), 'utf8');
+  const arr = JSON.parse(raw)?.cases;
+  if (!Array.isArray(arr) || !arr.length) throw new Error('config/eval-gate.json 缺少 cases 题库');
+  return arr.map((c) => ({ id: c.id, task: c.task, prompt: c.prompt, check: null, rubric: c.rubric || null, maxTokens: c.maxTokens || 1024 }));
 }
 
 function semanticOptions(clientAuthHeader = null) {

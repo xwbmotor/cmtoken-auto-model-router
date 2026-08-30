@@ -22,6 +22,8 @@ COPY --chown=node:node docs/ ./docs/
 COPY --chown=node:node package.json README.md ./
 # config 作为无挂载启动时的兜底；生产用 compose 卷覆盖
 COPY --chown=node:node config/router.json ./config/router.json
+# eval-gate 题库（管理台「完整评测」按钮的数据源，56 题）
+COPY --chown=node:node config/eval-gate.json ./config/eval-gate.json
 
 RUN mkdir -p /app/data /app/config/history && chown -R node:node /app/data /app/config
 USER node
