@@ -2,6 +2,15 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.11.2] - 2026-08-31
+
+二十一审收口（3×P1 + P2 前端契约）：
+- P1 XSS 剩余点收口：模拟 impact（before.model/row.model）、敏感度 nextFlip.from/to、基线 modelDistribution 模型名、Pareto 前沿、三处 e.message/j.error 进 innerHTML 全部 escHtml——发现→注册链在全页面不再可达；
+- P1 Judge token 记账：交错评测 settle 带真实 usage.total_tokens（dailyMaxTokens 不再可被连续评测绕过）；
+- P1 cancel 全类型生效：runEvalJob（checkup/full）执行循环补 cancelRequested 检查；
+- P2 前端 pairwise 契约：读 qualityDiff.mean + p.significant + 显示配对题数（此前恒显示「样本不足」）；judgeReadyRate/judgeSkip{budget,error,noRubric} 渲染——覆盖率过低明示「质量结论不可采信」；
+- P2 测试补强（eval-interleaved-3）：Judge 请求实际含原题正文与未截断全文答案（尾部标记断言）、越界分 100/verifiable:false 脏分过滤（judgeScore 恒 7）、低 dailyMaxTokens 预算真实耗尽进 judgeSkip.budget、checkup 运行中取消最终 cancelled。
+
 ## [0.11.1] - 2026-08-31
 
 二十审收口（P1×5 + P2×6 全量修复）：

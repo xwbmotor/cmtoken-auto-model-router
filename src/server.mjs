@@ -1752,7 +1752,8 @@ async function runInterleavedEval(job) {
         const norm = ['correctness', 'instruction_following', 'completeness', 'safety']
           .map((k) => normalizeDimension(dims[k]));
         const scores = norm.map((d) => d.score).filter((v) => typeof v === 'number');
-        judgeGuard.settle(rq.handle, { ok: true });
+        // v0.11.2 修正：settle 带真实 tokens（二十一审 P1-2——不带则 dailyMaxTokens 可被连续评测绕过）
+        judgeGuard.settle(rq.handle, { ok: true, tokens: jm.usage?.total_tokens || 0 });
         // 全维度缺失才不计分；部分缺失用可得维度均值（normalizeDimension 已把 verifiable:false 的脏分清掉）
         r.judgeScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
         if (r.judgeScore == null) { r.judgeError = 'no_scored_dim'; continue; }
@@ -1823,6 +1824,8 @@ async function runEvalJob(job) {
   const cases = job.type === 'checkup' ? CHECKUP_CASES : await loadEvalGateCases();
   job.total = cases.length;
   for (const c of cases) {
+    // v0.11.2：checkup/full 同样支持取消（二十一审 P1-3）
+    if (job.cancelRequested) { job.status = 'cancelled'; job.finishedAt = new Date().toISOString(); return; }
     try {
       const r = await callUpstreamChat(job.modelId, c.prompt, c.maxTokens || 300);
       const pass = checkCase(c.check, r.text);

@@ -519,7 +519,7 @@ function metricDeltaCost(current, proposed, lower = false) { const delta = propo
 function renderSimulation(result) {
   lastSimulation = result; const c = result.current, p = result.proposed, risk = result.changedRate >= .5 ? 'high' : result.changedRate >= .2 ? 'medium' : 'low';
   $('impactSummary').innerHTML = `<article class="impact ${risk}"><span>模型切换</span><strong>${result.changed}/${result.sampleCount}</strong><small>${percentValue(result.changedRate)} 代表任务改变</small></article><article><span>预计质量</span>${metricDelta(c.averageQuality,p.averageQuality)}</article>${(c.averageCostYuan!=null&&p.averageCostYuan!=null)?`<article><span>平均单次成本 <span class="help" data-help="按 12 个代表性任务（含系统提示词+多轮上下文+业务文档）的平均输入输出量、按厂商目录价5折结算价估算。DeepSeek V4 Flash 结算价输入 0.5 元/百万 token、输出 1 元/百万 token，因此单次多在 0.0001~0.012 元（1 厘~1 分）区间——这是真实结算价口径，不是市场价。">?</span></span>${metricDeltaCost(c.averageCostYuan,p.averageCostYuan,true)}</article>`:`<article><span>成本指数</span>${metricDelta(c.averageCostIndex,p.averageCostIndex,true)}</article>`}${(c.averageLatencyMs!=null&&p.averageLatencyMs!=null)?`<article><span>平均端到端时延 <span class="help" data-help="从发出请求到收完完整回答的总耗时（含模型思考时间），按代表性任务平均。">?</span></span>${metricDeltaMs(c.averageLatencyMs,p.averageLatencyMs,true)}</article>`:`<article><span>时延指数</span>${metricDelta(c.averageLatencyIndex,p.averageLatencyIndex,true)}</article>`}<article><span>自建比例</span><strong>${percentValue(p.selfHostedRate)}</strong><small>当前 ${percentValue(c.selfHostedRate)}</small></article>`;
-  $('impactRows').innerHTML = p.rows.map((row,i) => { const before=c.rows[i], changed=before.model!==row.model; const sc3 = subCategoryOf(row.task, row.subTask); return `<tr><td><strong>${row.label}</strong><br><small>${sc3[2]} ${sc3[0]} · ${sc3[3]}</small></td><td>${Math.round(row.complexity*100)} · ${tierCN(row.tier)}</td><td>${before.model}</td><td>${row.model}</td><td><span class="pill ${changed?'bad':'good'}">${changed?'切换':'不变'}</span></td></tr>`; }).join('');
+  $('impactRows').innerHTML = p.rows.map((row,i) => { const before=c.rows[i], changed=before.model!==row.model; const sc3 = subCategoryOf(row.task, row.subTask); return `<tr><td><strong>${row.label}</strong><br><small>${sc3[2]} ${sc3[0]} · ${sc3[3]}</small></td><td>${Math.round(row.complexity*100)} · ${tierCN(row.tier)}</td><td>${escHtml(before.model)}</td><td>${escHtml(row.model)}</td><td><span class="pill ${changed?'bad':'good'}">${changed?'切换':'不变'}</span></td></tr>`; }).join('');
   renderSensitivity(result.sensitivity);
   renderNoAutoCompare(result);
 }
@@ -553,7 +553,7 @@ function renderSensitivity(s) {
     if (axis.nextFlip) {
       const dir = axis.nextFlip.at > axis.currentValue ? '再拉高' : '再拉低';
       const gap = Math.abs(axis.nextFlip.at - axis.currentValue);
-      return `<article class="sens-card"><div class="sens-head"><b>${axis.label}</b><span class="pill ${gap <= .1 ? 'warn' : 'muted'}">${dir}到 ${fmt(axis.nextFlip.at)} 触发切换</span></div><p>调整幅度 <b>${gap.toFixed(2)}</b> 后，${axis.nextFlip.count} 个代表任务从「${axis.nextFlip.from}」切换到「${axis.nextFlip.to}」。当前值附近 ${(axis.flips || []).length ? `首个翻转点 ${fmt(axis.flips[0].at)}` : '尚无翻转'}。</p></article>`;
+      return `<article class="sens-card"><div class="sens-head"><b>${axis.label}</b><span class="pill ${gap <= .1 ? 'warn' : 'muted'}">${dir}到 ${fmt(axis.nextFlip.at)} 触发切换</span></div><p>调整幅度 <b>${gap.toFixed(2)}</b> 后，${axis.nextFlip.count} 个代表任务从「${escHtml(axis.nextFlip.from)}」切换到「${escHtml(axis.nextFlip.to)}」。当前值附近 ${(axis.flips || []).length ? `首个翻转点 ${fmt(axis.flips[0].at)}` : '尚无翻转'}。</p></article>`;
     }
     const why = axis.dominated ? `<p class="sens-why">${axis.dominated}</p>` : '<p class="sens-why">拉满整条滑条都不会改变当前选择——现有配置下最优模型很稳定。</p>';
     return `<article class="sens-card">${head}${why}</article>`;
@@ -669,7 +669,7 @@ function renderBaselines() {
   const b = lastSimulation.proposed.baselines;
   const cur = lastSimulation.proposed;
   const row = (name, data) => `<article><span>${name}</span><strong>质量 ${data.averageQuality?.toFixed(3) ?? '—'}</strong><small>成本 ${data.averageCostIndex?.toFixed(3) ?? '—'} · 时延 ${data.averageLatencyIndex?.toFixed(3) ?? '—'}</small><small class="muted">${Object.entries(data.modelDistribution || {}).map(([m, n]) => `${m}×${n}`).join(' ')}</small></article>`;
-  box.innerHTML = `<article><span>当前路由</span><strong>质量 ${cur.averageQuality?.toFixed(3) ?? '—'}</strong><small>成本 ${cur.averageCostIndex?.toFixed(3) ?? '—'} · 时延 ${cur.averageLatencyIndex?.toFixed(3) ?? '—'}</small><small class="muted">应落在两个基线之间</small></article>` + row(b.zeroRouter?.label || '随机基线', b.zeroRouter || {}) + row(b.oracle?.label || '静态先验最优', b.oracle || {}) + `<p class="hint">Pareto 前沿：${(lastSimulation.proposed.paretoFrontier || []).join('、') || '—'}。当前路由质量低于随机基线时，说明任务区分度不足或评分权重失衡，应先调分类/权重而不是加模型。</p>`;
+  box.innerHTML = `<article><span>当前路由</span><strong>质量 ${cur.averageQuality?.toFixed(3) ?? '—'}</strong><small>成本 ${cur.averageCostIndex?.toFixed(3) ?? '—'} · 时延 ${cur.averageLatencyIndex?.toFixed(3) ?? '—'}</small><small class="muted">应落在两个基线之间</small></article>` + row(b.zeroRouter?.label || '随机基线', b.zeroRouter || {}) + row(b.oracle?.label || '静态先验最优', b.oracle || {}) + `<p class="hint">Pareto 前沿：${(lastSimulation.proposed.paretoFrontier || []).map((s) => escHtml(String(s))).join('、') || '—'}。当前路由质量低于随机基线时，说明任务区分度不足或评分权重失衡，应先调分类/权重而不是加模型。</p>`;
 }
 
 //—— 组件体检：分类器标准评测 ——
@@ -764,7 +764,7 @@ async function openDiscover() {
       (news.length ? '<button id="registerSelected" class="primary" style="margin-top:12px">注册所选</button>' : '<p>没有发现新模型。</p>');
     const reg = $id('registerSelected');
     if (reg) reg.onclick = registerDiscovered;
-  } catch (e) { body.innerHTML = '<p style="color:#c33">获取失败：' + e.message + '</p>'; }
+  } catch (e) { body.innerHTML = '<p style="color:#c33">获取失败：' + escHtml(String(e.message)) + '</p>'; }
 }
 function registerDiscovered() {
   const picked = [...document.querySelectorAll('.disc-new:checked')].map(c => c.value);
@@ -837,11 +837,16 @@ function pollEval(id) {
               (v.quality && v.quality.mean != null ? v.quality.mean.toFixed(2) + (v.quality.lo != null ? ' [' + v.quality.lo.toFixed(2) + ', ' + v.quality.hi.toFixed(2) + ']' : '（样本不足）') : '—') + '</td><td>' +
               (v.latencyMs && v.latencyMs.mean != null ? Math.round(v.latencyMs.mean) + 'ms' + (v.latencyMs.lo != null ? ' [' + Math.round(v.latencyMs.lo) + ', ' + Math.round(v.latencyMs.hi) + ']' : '') : '—') + '</td></tr>').join('');
             html += '<table><tr><th>模型</th><th>就绪</th><th>质量分（95% CI）</th><th>时延（95% CI）</th></tr>' + rows + '</table>';
+            if (s.judgeReadyRate != null) {
+              const sk = s.judgeSkip || {};
+              html += '<p class="hint">Judge 覆盖率 ' + (s.judgeReadyRate * 100).toFixed(0) + '%' +
+                (sk.budget || sk.error || sk.noRubric ? '（跳过：预算 ' + (sk.budget || 0) + ' · 失败 ' + (sk.error || 0) + ' · 无评分标准 ' + (sk.noRubric || 0) + '）' : '') + '——覆盖率过低时质量结论不可采信。</p>';
+            }
             if (Array.isArray(s.pairwise) && s.pairwise.length) {
               html += '<h4>两两对比（质量分差，正=A 好）</h4><ul>' + s.pairwise.map((p) =>
-                '<li>' + escHtml(p.a) + ' vs ' + escHtml(p.b) + '：' +
-                (p.qualityDiff && p.qualityDiff.diff != null
-                  ? p.qualityDiff.diff.toFixed(2) + ' [' + p.qualityDiff.lo.toFixed(2) + ', ' + p.qualityDiff.hi.toFixed(2) + '] ' + (p.qualityDiff.significant ? '<b>显著</b>' : '（不显著）')
+                '<li>' + escHtml(p.a) + ' vs ' + escHtml(p.b) + '（配对 ' + (p.pairedN ?? 0) + ' 题）：' +
+                (p.qualityDiff && p.qualityDiff.mean != null
+                  ? (p.qualityDiff.mean > 0 ? '+' : '') + p.qualityDiff.mean.toFixed(2) + (p.qualityDiff.lo != null ? ' [' + p.qualityDiff.lo.toFixed(2) + ', ' + p.qualityDiff.hi.toFixed(2) + ']' : '（样本不足）') + ' ' + (p.significant ? '<b>显著</b>' : '（不显著）')
                   : '样本不足') + '</li>').join('') + '</ul>';
             }
             if (!s.judgeConfigured) html += '<p class="hint">Judge 未配置——质量列不可用（仅时延统计）。配置 Judge 端点后重跑。</p>';
@@ -862,10 +867,10 @@ function pollEval(id) {
         html += '<button class="primary" onclick="document.getElementById(\'evalModal\').style.display=\'none\';location.reload()">完成并刷新</button>';
       } else if (j.status === 'failed') {
         clearInterval(evalTimer);
-        html += '<p style="color:#c33">失败：' + (j.error || '未知错误') + '</p>';
+        html += '<p style="color:#c33">失败：' + escHtml(String(j.error || '未知错误')) + '</p>';
       }
       $id('evalBody').innerHTML = html;
-    } catch (e) { clearInterval(evalTimer); $id('evalBody').innerHTML = '<p style="color:#c33">' + e.message + '</p>'; }
+    } catch (e) { clearInterval(evalTimer); $id('evalBody').innerHTML = '<p style="color:#c33">' + escHtml(String(e.message)) + '</p>'; }
   }, 2000);
 }
 $id('evalClose')?.addEventListener('click', () => { clearInterval(evalTimer); $id('evalModal').style.display = 'none'; });
