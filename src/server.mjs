@@ -41,6 +41,7 @@ import { createRateLimiter } from './rate-limiter.mjs';
 
 import { shouldPromoteVerified } from './calibration.mjs';
 import { newHealthState, updateHealthState, offlineAlertDue } from './health.mjs';
+import { bootstrap, bootstrapDiff } from './bootstrap.mjs';
 
 import { MarketSignal } from './market-signal.mjs';
 
@@ -1646,7 +1647,22 @@ async function callUpstreamChat(modelId, prompt, maxTokens = 300) {
 function startEvalJob(body) {
   const type = body?.type;
   const modelId = String(body?.modelId || '').trim();
-  if (!['checkup', 'full'].includes(type)) throw new Error('type 必须是 checkup（体检冒烟）或 full（56 题稳定性巡检——就绪率+时延，不含质量评分）');
+  if (!['checkup', 'full', 'interleaved'].includes(type)) throw new Error('type 必须是 checkup（体检冒烟）、full（56 题稳定性巡检）或 interleaved（交错评测——多模型同窗口轮转+Judge 评分+置信区间，仅出建议值）');
+  if (type === 'interleaved') {
+    const ids = Array.isArray(body?.modelIds) ? body.modelIds.map(String) : [];
+    if (ids.length < 2) throw new Error('interleaved 至少要 2 个模型（modelIds 数组）');
+    if (ids.length > 4) throw new Error('interleaved 最多 4 个模型（预算保护）');
+    const unknown = ids.filter((id) => !(config.models || []).some((m) => m.id === id));
+    if (unknown.length) throw new Error(`模型不在注册表：${unknown.join('、')}`);
+    for (const j of evalJobs.values()) if (!j.finishedAt) throw new Error(`已有任务在跑（${j.id} ${j.type}），请等它完成`);
+    const id = `job_${Date.now().toString(36)}`;
+    const job = { id, type, modelIds: ids, startedAt: new Date().toISOString(), finishedAt: null, status: 'running',
+      total: null, done: 0, failed: 0, results: [], autoApplied: false, error: null,
+      judge: { configured: Boolean((judgeSecretStore.get()?.apiKey || process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY)), model: (config.judge || {}).model || 'glm-5.3', rubricVersion: null } };
+    evalJobs.set(id, job);
+    runInterleavedEval(job).catch((e) => { job.error = String(e?.message || e); job.status = 'failed'; job.finishedAt = new Date().toISOString(); });
+    return job;
+  }
   const model = (config.models || []).find((m) => m.id === modelId);
   if (!model) throw new Error(`模型 ${modelId} 不在注册表中（请先注册）`);
   // 并发上限：同时只跑一个评测任务，防止打爆上游
@@ -1658,6 +1674,108 @@ function startEvalJob(body) {
   runEvalJob(job).catch((e) => { job.error = String(e?.message || e); job.status = 'failed'; job.finishedAt = new Date().toISOString(); });
   return job;
 }
+
+// ══ v0.11.0 交错评测：多模型同窗口轮转 + Judge 评分 + bootstrap CI。仅出建议值，不改任何模型参数。 ══
+// 设计（对齐十九审口径）：
+//  · 同一题集对 N 个模型交错执行（A,B,A,B…），预热题（每模型前 warmup=2 题）不计分——消除冷启动偏差；
+//  · 每题 Judge 按 rubric 四维打分（复用 buildJudgeMessages/callJudgeModel/parseJudgeJson）；
+//  · 汇总：每模型质量分 CI（mean correctness+instruction+completeness+safety）/4）、时延 CI、两两显著性；
+//  · Judge 未配置或预算不足时如实降级（只出时延统计，quality 维度标 unavailable）。
+async function runInterleavedEval(job) {
+  const jc = config.judge || {};
+  const judgeSecret = judgeSecretStore.get();
+  // v0.11.0：JUDGE_BASE_URL/JUDGE_API_KEY 显式指定评审通道（生产：Judge 常与业务上游分离；测试：指向 mock）
+  const jBase = (process.env.JUDGE_BASE_URL || judgeSecret?.baseUrl || process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl || '').replace(/\/$/, '');
+  const jKey = process.env.JUDGE_API_KEY || judgeSecret?.apiKey || process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
+  const jModel = jc.model || 'glm-5.3';
+  const judgeReady = Boolean(jBase && jKey);
+  job.judge.configured = judgeReady;
+  job.judge.model = jModel;
+  job.judge.rubricVersion = JUDGE_RUBRIC_VERSION;
+
+  const bank = await loadEvalGateCases();
+  const WARMUP = 2; // 每模型预热题数（不计分）
+  const scored = bank.slice(WARMUP);
+  const totalCalls = bank.length * job.modelIds.length;
+  job.total = totalCalls;
+
+  // 逐题交错：题 → 每模型依次作答（同窗口内完成，负荷条件可比）
+  for (const c of bank) {
+    const isWarmup = bank.indexOf(c) < WARMUP;
+    for (const mid of job.modelIds) {
+      try {
+        const r = await callUpstreamChat(mid, c.prompt, c.maxTokens || 512);
+        const ok = r.text.length > 0;
+        job.results.push({ caseId: c.id, task: c.task || null, model: mid, warmup: isWarmup, ok,
+          answer: r.text.slice(0, 2000), latencyMs: r.latencyMs,
+          rubric: c.rubric, judgeScore: null, judgeError: null });
+        if (!ok && !isWarmup) job.failed += 1;
+      } catch (error) {
+        job.results.push({ caseId: c.id, task: c.task || null, model: mid, warmup: isWarmup, ok: false,
+          answer: '', latencyMs: null, rubric: c.rubric, judgeScore: null,
+          judgeError: null, error: String(error?.message || error).slice(0, 120), errorType: classifyEvalError(String(error?.message || error)) });
+        if (!isWarmup) job.failed += 1;
+      }
+      job.done += 1;
+    }
+  }
+
+  // Judge 评分：仅非预热且 ok 的作答
+  if (judgeReady) {
+    const common = { model: jModel, baseUrl: jBase, apiKey: jKey, timeoutMs: Number(jc.timeoutMs) || 60000, fetchImpl: fetch, maxOutputTokens: 1024 };
+    for (const r of job.results) {
+      if (r.warmup || !r.ok || !r.rubric) continue;
+      try {
+        const jm = await callJudgeModel({ ...common,
+          messages: buildJudgeMessages({ messages: [{ role: 'user', content: c_prompt(r) }], answerText: r.answer }) });
+        if (!jm.ok) { r.judgeError = jm.error; continue; }
+        const parsed = parseJudgeJson(jm.text);
+        const dims = parsed && typeof parsed === 'object' ? parsed : null;
+        if (!dims) { r.judgeError = 'unparseable'; continue; }
+        const scores = ['correctness', 'instruction_following', 'completeness', 'safety']
+          .map((k) => (dims[k] && typeof dims[k] === 'object' ? Number(dims[k].score) : NaN))
+          .filter((v) => Number.isFinite(v));
+        // 可核验维度缺失时用其余维度均值（Judge rubric 语义：verifiable=false 不打分≠低分）
+        r.judgeScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+        if (r.judgeScore == null) r.judgeError = 'no_scored_dim';
+      } catch (e) { r.judgeError = String(e?.message || e).slice(0, 100); }
+    }
+  }
+
+  // 汇总（bootstrap CI，seed 固定可复现）
+  const perModel = {};
+  for (const mid of job.modelIds) {
+    const rows = job.results.filter((r) => r.model === mid && !r.warmup);
+    const lat = rows.filter((r) => r.latencyMs && r.ok).map((r) => r.latencyMs);
+    const qs = rows.map((r) => r.judgeScore).filter((v) => typeof v === 'number' && Number.isFinite(v));
+    const ready = rows.filter((r) => r.ok).length;
+    perModel[mid] = {
+      ready: `${ready}/${rows.length}`,
+      readyRate: rows.length ? ready / rows.length : null,
+      quality: qs.length >= 3 ? bootstrap(qs, { seed: 42 }) : { mean: qs.length ? qs.reduce((a, b) => a + b, 0) / qs.length : null, lo: null, hi: null, n: qs.length, note: '样本<3 不出 CI' },
+      latencyMs: lat.length >= 3 ? bootstrap(lat, { seed: 43 }) : { mean: lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null, lo: null, hi: null, n: lat.length, note: '样本<3 不出 CI' },
+    };
+  }
+  const pairwise = [];
+  for (let i = 0; i < job.modelIds.length; i++) for (let j = i + 1; j < job.modelIds.length; j++) {
+    const A = job.modelIds[i], B = job.modelIds[j];
+    const qa = job.results.filter((r) => r.model === A && !r.warmup).map((r) => r.judgeScore).filter((v) => typeof v === 'number');
+    const qb = job.results.filter((r) => r.model === B && !r.warmup).map((r) => r.judgeScore).filter((v) => typeof v === 'number');
+    pairwise.push({ a: A, b: B, qualityDiff: bootstrapDiff(qa, qb, { seed: 44 }) });
+  }
+  job.summary = {
+    kind: 'interleaved',
+    models: perModel,
+    pairwise,
+    judgeConfigured: judgeReady,
+    note: '交错评测=同窗口轮转+Judge 四维评分+bootstrap 95% CI。结果仅为建议值：不自动改质量分/时延参数，采纳需管理员在「模型参数」页确认后发布。',
+
+  };
+  job.status = 'done';
+  job.finishedAt = new Date().toISOString();
+}
+// 题面构造（含 rubric 上下文，Judge 评分更稳）
+function c_prompt(r) { return `[任务要求]\n${r.rubric || ''}\n[题目]\n请根据任务要求完成。（评测题 #${r.caseId}）`; }
 
 // v0.10.5：评测错误统一分类（与十九审建议对齐：empty_response/timeout/http_401/http_429/http_5xx/invalid_payload/other）
 function classifyEvalError(msg) {

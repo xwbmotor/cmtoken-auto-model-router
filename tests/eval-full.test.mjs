@@ -58,7 +58,7 @@ test('e2e full 巡检：mock 上游混合成功/空正文/500 → summary 就绪
   try {
     const { readFileSync } = await import('node:fs');
     const cfg = JSON.parse(readFileSync(new URL('../config/router.json', import.meta.url), 'utf8'));
-    cfg.decisionLog = { ...(cfg.decisionLog || {}), enabled: false };
+    cfg.decisionLog = { ...cfg.decisionLog, enabled: false, dirPath: cfg.decisionLog?.dirPath || './data/decisions' };
     writeFileSync(join(dir, 'router.json'), JSON.stringify(cfg));
     // 缩小题库 5 题：3 正常（两种 task）+1 空正文+1 500
     const bank = { cases: [

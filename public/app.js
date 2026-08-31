@@ -784,9 +784,26 @@ function registerDiscovered() {
   toast('已注册 ' + added + ' 个模型（未启用、归属待定）——发布前须先在表格把归属改为 自建/生态（unknown 不参与自建加分），录入定价/质量分后「安全发布」');
 }
 $id('discoverModels')?.addEventListener('click', openDiscover);
+$id('interleavedEval')?.addEventListener('click', startInterleaved);
 $id('discoverClose')?.addEventListener('click', () => $id('discoverModal').style.display = 'none');
 
 let evalTimer = null;
+// v0.11.0 交错评测：多模型同窗口轮转+Judge 评分+置信区间（仅建议值）
+async function startInterleaved() {
+  const enabled = config.models.filter((m) => m.enabled || m.ownership !== 'unknown');
+  const ids = enabled.map((m) => m.id);
+  if (ids.length < 2) { toast('交错评测至少需要 2 个可用模型（当前 ' + ids.length + ' 个）', true); return; }
+  const pick = ids.slice(0, 4).join('、');
+  if (!confirm('对以下模型跑交错评测？\n' + pick + '\n\n56 题×每模型轮转执行（预热 2 题不计分）+ Judge 四维评分 + bootstrap 95% 置信区间。\n真实调用上游与 Judge——预计 30-90 分钟。\n结果仅为建议值：不会自动改质量分/时延参数，采纳需在「模型参数」页确认后发布。')) return;
+  try {
+    const r = await fetch('/admin/api/eval-jobs', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ type: 'interleaved', modelIds: ids.slice(0, 4) }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || r.status);
+    $id('evalTitle').textContent = '交错评测 · ' + d.modelIds.join(' vs ');
+    $id('evalModal').style.display = 'flex';
+    pollEval(d.id);
+  } catch (e) { toast('任务启动失败：' + e.message, true); }
+}
 async function startEval(type, modelId) {
   if (!confirm(type === 'checkup'
     ? '对 ' + modelId + ' 跑快速体检？（6 题冒烟，约 1-2 分钟，真实调用上游——就绪率+断言，不构成质量结论）'
@@ -812,7 +829,24 @@ function pollEval(id) {
       if (j.status === 'done') {
         clearInterval(evalTimer);
         if (j.summary) {
-          if (j.type === 'full') {
+          if (j.type === 'interleaved') {
+            // v0.11.0：交错评测汇总——每模型质量/时延 CI + 两两显著性
+            const s = j.summary;
+            let rows = Object.entries(s.models || {}).map(([mid, v]) =>
+              '<tr><td>' + escHtml(mid) + '</td><td>' + (v.ready || '—') + '</td><td>' +
+              (v.quality && v.quality.mean != null ? v.quality.mean.toFixed(2) + (v.quality.lo != null ? ' [' + v.quality.lo.toFixed(2) + ', ' + v.quality.hi.toFixed(2) + ']' : '（样本不足）') : '—') + '</td><td>' +
+              (v.latencyMs && v.latencyMs.mean != null ? Math.round(v.latencyMs.mean) + 'ms' + (v.latencyMs.lo != null ? ' [' + Math.round(v.latencyMs.lo) + ', ' + Math.round(v.latencyMs.hi) + ']' : '') : '—') + '</td></tr>').join('');
+            html += '<table><tr><th>模型</th><th>就绪</th><th>质量分（95% CI）</th><th>时延（95% CI）</th></tr>' + rows + '</table>';
+            if (Array.isArray(s.pairwise) && s.pairwise.length) {
+              html += '<h4>两两对比（质量分差，正=A 好）</h4><ul>' + s.pairwise.map((p) =>
+                '<li>' + escHtml(p.a) + ' vs ' + escHtml(p.b) + '：' +
+                (p.qualityDiff && p.qualityDiff.diff != null
+                  ? p.qualityDiff.diff.toFixed(2) + ' [' + p.qualityDiff.lo.toFixed(2) + ', ' + p.qualityDiff.hi.toFixed(2) + '] ' + (p.qualityDiff.significant ? '<b>显著</b>' : '（不显著）')
+                  : '样本不足') + '</li>').join('') + '</ul>';
+            }
+            if (!s.judgeConfigured) html += '<p class="hint">Judge 未配置——质量列不可用（仅时延统计）。配置 Judge 端点后重跑。</p>';
+            html += '<p class="hint">结果仅为建议值：不自动改质量分/时延参数，采纳需在「模型参数」页确认后发布。</p>';
+          } else if (j.type === 'full') {
             // 56 题稳定性巡检：就绪率+时延+分任务+错误分布
             let rows = Object.entries(j.summary.byTask || {}).map(([t, v]) => '<tr><td>' + escHtml(t) + '</td><td>' + v.ready + '/' + v.total + '</td><td>' + (v.rate * 100).toFixed(0) + '%</td></tr>').join('');
             html += '<table><tr><th>就绪率</th><th>平均时延</th><th>时延区间</th></tr><tr><td>' + (j.summary.readyRate * 100).toFixed(0) + '%</td><td>' + (j.summary.avgLatencyMs ?? '—') + 'ms</td><td>' + (j.summary.minLatencyMs ?? '—') + '~' + (j.summary.maxLatencyMs ?? '—') + 'ms</td></tr></table>';

@@ -2,6 +2,17 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.11.0] - 2026-08-31
+
+交错评测（十六~十九审规划的能力正式落地）：
+- 新增 src/bootstrap.mjs：无依赖 bootstrap 置信区间（bootstrap/bootstrapDiff，Mulberry32 固定 seed 可复现；同 seed 同区间，报告可复核）；
+- 新增评测任务类型 interleaved：2-4 模型同窗口轮转执行 56 题（每模型前 2 题预热不计分），Judge 按 rubric 四维评分（复用 callJudgeModel/parseJudgeJson，rubric v2.1）；
+- 汇总：每模型质量分 95% CI + 时延 95% CI + 两两质量差显著性（CI 不含 0 = 显著）；样本 <3 不出 CI（如实标注）；
+- 仅建议值：不自动改质量分/时延参数——采纳需管理员在「模型参数」页确认后发布（与 v0.10.2 以来的口径一致）；
+- Judge 通道支持 JUDGE_BASE_URL/JUDGE_API_KEY 独立配置（评审与业务上游分离）；Judge 未配置时如实降级（仅时延统计，质量列标不可用）；
+- 管理页新增「交错评测」入口：模型汇总表（质量/时延 CI）+ 两两对比 + 显著性标注 + 建议值提示；
+- 新增 tests/bootstrap.test.mjs（4 测试：可复现/边界/显著性/median）与 tests/eval-interleaved.test.mjs（黑盒：mock 上游+mock Judge 全链路，断言交错顺序/预热排除/CI 区分/仅建议值不改 config）。
+
 ## [0.10.5] - 2026-08-31
 
 十九审收口（v0.10.4 收敛后封板版）：
