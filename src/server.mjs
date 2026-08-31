@@ -1575,14 +1575,15 @@ async function fetchUpstreamModels() {
   if (discoverCache.result && now - discoverCache.at < 30000) return discoverCache.result;
   const base = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl)?.replace(/\/$/, '');
   const key = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
-  if (!base || !key) throw new Error('上游未配置（UPSTREAM_BASE_URL / MAAS_API_KEY）');
+  if (!base || !key) throw new Error(`上游未配置：端点 ${base || '未填'}、密钥 ${key ? '已配' : '未配'}——请在服务端 .env 配 UPSTREAM_BASE_URL 与 UPSTREAM_API_KEY 后重试`);
   const res = await fetch(`${base}/models`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`上游返回 HTTP ${res.status}`);
   const payload = await res.json();
   const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : [];
   const registered = new Set((config.models || []).map((m) => m.id));
   const models = list.map((m) => ({ id: m.id, registered: registered.has(m.id), ownedBy: m.owned_by || null }));
-  const result = { total: models.length, newCount: models.filter((m) => !m.registered).length, models };
+  const result = { total: models.length, newCount: models.filter((m) => !m.registered).length, models,
+    upstream: { baseUrl: base || null, keyMasked: key ? key.slice(0, 6) + '…' + key.slice(-4) : null } }; // v0.11.7：弹层端点可见性（key 只遮蔽显示，永不出明文）
   discoverCache = { at: now, result };
   return result;
 }

@@ -716,21 +716,41 @@ async function refreshOfflineAlerts() {
 async function openDiscover() {
   const modal = $id('discoverModal'); const body = $id('discoverBody');
   modal.style.display = 'flex';
-  body.textContent = '正在从上游拉取模型列表…';
+  body.innerHTML = '<p class="hint">正在从上游拉取模型列表…</p><div style="margin-top:14px"><button id="discoverRetry" class="secondary btn-mini">重试</button> <button id="discoverCancel2" class="secondary btn-mini">关闭</button></div>';
+  $id('discoverRetry').onclick = () => openDiscover();
+  $id('discoverCancel2').onclick = () => { $id('discoverModal').style.display = 'none'; };
   try {
     const r = await fetch('/admin/api/discover-models', { headers: { authorization: `Bearer ${token}` } });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error?.message || r.status);
     const news = d.models.filter(m => !m.registered);
     const olds = d.models.filter(m => m.registered);
-    body.innerHTML =
-      '<p class="hint">上游共 ' + d.total + ' 个模型，其中 ' + d.newCount + ' 个未注册。勾选后点「注册所选」——新模型默认<b>不启用、校准状态 pilot</b>，不会进入调度池。</p>' +
-      news.map(m => '<label class="discover-row"><input type="checkbox" class="disc-new" value="' + escHtml(m.id) + '"><strong>' + escHtml(m.id) + '</strong><span class="pill muted">新</span></label>').join('') +
-      (olds.length ? '<p class="hint" style="margin-top:8px">已注册（不可重复注册）：' + olds.map(m => escHtml(m.id)).join('、') + '</p>' : '') +
-      (news.length ? '<button id="registerSelected" class="primary" style="margin-top:12px">注册所选</button>' : '<p>没有发现新模型。</p>');
-    const reg = $id('registerSelected');
-    if (reg) reg.onclick = registerDiscovered;
-  } catch (e) { body.innerHTML = '<p style="color:#c33">获取失败：' + escHtml(String(e.message)) + '</p>'; }
+    const ups = d.upstream || {};
+    const head = '<p class="hint" style="margin-bottom:10px">上游端点：<code>' + escHtml(ups.baseUrl || '未知') + '</code>' + (ups.keyMasked ? ' · 密钥 <code>' + escHtml(ups.keyMasked) + '</code>' : '') + '</p>';
+    const listHtml = news.length
+      ? '<p class="hint">勾选要纳入管理的模型。新纳入的模型<b>不会立即上线</b>：先在下方模型列表补归属、定价、质量分，确认后再手动启用。</p>' +
+        news.map(m => '<label class="discover-row"><input type="checkbox" class="disc-new" value="' + escHtml(m.id) + '"><strong>' + escHtml(m.id) + '</strong><span class="pill muted">新</span></label>').join('')
+      : '<p class="hint">没有发现新模型——上游的模型都已在本页列表中。</p>';
+    const oldsHtml = olds.length ? '<p class="hint" style="margin-top:8px">已在列表中（无需重复添加）：' + olds.map(m => escHtml(m.id)).join('、') + '</p>' : '';
+    const foot = '<div style="margin-top:14px;display:flex;gap:10px;align-items:center">' +
+      '<button id="discoverRefresh" class="secondary btn-mini">刷新列表</button>' +
+      '<span style="flex:1"></span>' +
+      (news.length ? '<button id="discoverCancel" class="secondary">取消</button><button id="registerSelected" class="primary" disabled>注册所选（0）</button>' : '<button id="discoverCancel" class="secondary">关闭</button>') +
+      '</div>';
+    body.innerHTML = head + listHtml + oldsHtml + foot;
+    const regBtn = $id('registerSelected');
+    const syncReg = () => { const n = document.querySelectorAll('.disc-new:checked').length; if (regBtn) { regBtn.textContent = '注册所选（' + n + '）'; regBtn.disabled = n === 0; } };
+    document.querySelectorAll('.disc-new').forEach((c) => c.addEventListener('change', syncReg));
+    $id('discoverRefresh').onclick = () => openDiscover();
+    $id('discoverCancel').onclick = () => { $id('discoverModal').style.display = 'none'; };
+    if (regBtn) regBtn.onclick = registerDiscovered;
+  } catch (e) {
+    body.innerHTML = '<p style="color:#c33;margin-bottom:10px">获取失败：' + escHtml(String(e.message)) + '</p>' +
+      '<p>请确认服务端已配置上游端点与密钥（.env 的 UPSTREAM_BASE_URL / UPSTREAM_API_KEY），或稍后重试。</p>' +
+      '<div style="margin-top:14px"><button id="discoverRetry" class="secondary btn-mini">重试</button> <button id="discoverCancel3" class="secondary btn-mini">关闭</button></div>';
+    $id('discoverRetry').onclick = () => openDiscover();
+    $id('discoverCancel3').onclick = () => { $id('discoverModal').style.display = 'none'; };
+  }
 }
 function registerDiscovered() {
   const picked = [...document.querySelectorAll('.disc-new:checked')].map(c => c.value);
