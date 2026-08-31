@@ -306,13 +306,19 @@ export class JudgeGuard {
     if (r.isProbe) { this.probeBusy = false; this.circuit = 'open'; } // 探针退回，冷却计时保留，下轮再试
     return true;
   }
-  settle(handle, { tokens = 0, ok = true } = {}) {
+  settle(handle, { tokens = null, ok = true } = {}) {
     const r = this.reserved.get(handle);
     if (!r) return false; // 幂等：未知/重复 handle 直接拒绝
     this.reserved.delete(handle);
     this._rollover();
     this.calls += 1;
-    this.tokens += Math.max(0, Number(tokens) || 0);
+    // v0.11.5（二十四审 P1-2）：token 记账 fail-closed 收进 Guard 统一执行——
+    // 只有「有限、非负的 number」才采信上游报告；null/undefined/字符串/布尔/NaN/负数
+    // （含 Number(null)='' false→0 的隐式转换陷阱）一律按本 reservation 的 estTokens 结算。
+    // 成功、解析失败、异常路径全覆盖；调用方不再各自硬编码 8000/2000。
+    const reported = typeof tokens === 'number' && Number.isFinite(tokens) && tokens >= 0 ? tokens : null;
+    const charged = reported != null ? reported : r.estTokens;
+    this.tokens += Math.max(0, Number(charged) || 0);
     if (r.isProbe) this.probeBusy = false; // 探针结束（成败都释放名额）
     if (ok) {
       this.consecutiveFailures = 0;

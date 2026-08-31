@@ -216,9 +216,9 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
 
       if (!parsed || !looksLikeQualityVerdict(parsed)) { judgeGuard.settle(rq.handle, { ok: false }); judgeBump('errors'); judgeLog.writeRaw({ at, v: 1, requestId, event: 'error', stage: 'quality_parse', latencyMs: q.latencyMs }); return; }
 
-      judgeGuard.settle(rq.handle, { tokens: Number.isFinite(Number(q.usage?.total_tokens)) && Number(q.usage?.total_tokens) >= 0 ? Number(q.usage?.total_tokens) : 8000, ok: true }); // v0.11.4 fail-closed：usage 缺失按预占 8000 结算（二十三审 P1-2）
+      judgeGuard.settle(rq.handle, { tokens: q.usage?.total_tokens, ok: true }); // v0.11.5：fail-closed 已内收 JudgeGuard.settle
 
-      judgeBump('qualityDone'); judgeBump('tokens', q.usage?.total_tokens || 0);
+      judgeBump('qualityDone'); if (typeof q.usage?.total_tokens === 'number') judgeBump('tokens', q.usage.total_tokens); // v0.11.5：metrics 只记真实报告值（缺失不记 0，防低估误导对账）
 
       const quality = {
 
@@ -272,11 +272,11 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
 
             if (tp && isValidTaskCheckVerdict(tp)) {
 
-              judgeGuard.settle(rt.handle, { tokens: Number.isFinite(Number(t.usage?.total_tokens)) && Number(t.usage?.total_tokens) >= 0 ? Number(t.usage?.total_tokens) : 2000, ok: true }); // v0.11.4 fail-closed（task-check 预占 2000）
+              judgeGuard.settle(rt.handle, { tokens: t.usage?.total_tokens, ok: true }); // v0.11.5：同上，Guard 内收
 
               judgeEvent.taskCheck = { agree: tp.task_agree === true, reason: String(tp.reason || '').slice(0, 80) || null, suggested: normalizeSuggestedTask(tp.suggested_task), latencyMs: t.latencyMs };
 
-              judgeBump('taskCheckDone'); judgeBump('tokens', t.usage?.total_tokens || 0);
+              judgeBump('taskCheckDone'); if (typeof t.usage?.total_tokens === 'number') judgeBump('tokens', t.usage.total_tokens);
 
             } else {
 
@@ -1710,6 +1710,7 @@ async function runInterleavedEval(job) {
     const N = job.modelIds.length;
     const order = job.modelIds.map((_, k) => job.modelIds[(ci + k) % N]); // 第 ci 题轮转起点
     for (const mid of order) {
+      if (job.cancelRequested) break; // v0.11.5（二十四审 P1-3）：题内每个模型调用前检查取消——不为已取消任务多付调用费
       callIndexByModel[mid] += 1;
       const modelWarmup = callIndexByModel[mid] <= WARMUP; // 每模型独立前 N 次调用=预热（不吞题）
       try {
@@ -1752,9 +1753,7 @@ async function runInterleavedEval(job) {
         const norm = ['correctness', 'instruction_following', 'completeness', 'safety']
           .map((k) => normalizeDimension(dims[k]));
         const scores = norm.map((d) => d.score).filter((v) => typeof v === 'number');
-        // v0.11.3 fail-closed：usage 缺失/非法时按预占 estTokens 结算（兼容端点不回 usage 也不能免费过 token 闸——二十二审 P1-2）
-        const usedTokens = Number(jm.usage?.total_tokens);
-        judgeGuard.settle(rq.handle, { ok: true, tokens: Number.isFinite(usedTokens) && usedTokens >= 0 ? usedTokens : 8000 });
+                judgeGuard.settle(rq.handle, { ok: true, tokens: jm.usage?.total_tokens }); // v0.11.5：fail-closed 已内收 JudgeGuard.settle（非有限非负 number 按 reservation estTokens 结算）
         // 全维度缺失才不计分；部分缺失用可得维度均值（normalizeDimension 已把 verifiable:false 的脏分清掉）
         r.judgeScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
         if (r.judgeScore == null) { r.judgeError = 'no_scored_dim'; continue; }
@@ -3255,6 +3254,7 @@ const server = http.createServer(async (req, res) => {
       const header = parseLine(lines[0]);
 
       const applied = []; const skipped = [];
+      
 
       const col = (name) => header.findIndex((h) => h.includes(name));
 
@@ -3319,6 +3319,20 @@ const server = http.createServer(async (req, res) => {
       if (!incoming || !incoming.length) return errorJson(res, 400, '导入文件需含 models 数组（见模板）', 'invalid_request_error');
 
       const applied = []; const skipped = [];
+      const bsImportIssues = []; // v0.11.4：导入键白名单拒绝记录（响应回显给运营）
+            // v0.11.5（二十四审 P1-1）：值类型化 schema——键合法值恶意同样拒绝；原型链保留名显式拒
+            const KEY_RE = /^[a-zA-Z0-9_.-]{1,64}$/;
+            const BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+            const SAFE_STR = (x, max = 200) => (typeof x === 'string' && x.length <= max ? x : null);
+            const SAFE_NUM = (x, lo, hi) => (typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi ? x : null);
+            // scores/evalGate：{ 指标名: 数值 }；subtasks：{ 子类名: {avg,n} }；双 meta：{ 字段名: 限长字符串 }（source/at/judge 等）
+            const VALUE_SCHEMA = {
+              scores: (v) => SAFE_NUM(v, 0, 100),
+              evalGate: (v) => SAFE_NUM(v, 0, 100),
+              subtasks: (v) => (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length <= 4 && SAFE_NUM(v.avg, 0, 100) != null && SAFE_NUM(v.n, 0, 1000000) != null ? { avg: v.avg, n: v.n } : null),
+              scoresMeta: (v) => SAFE_STR(v, 200), // 真实形态：{source:'榜单名', at:'日期'}——键=字段名、值=限长字符串
+              subtasksMeta: (v) => SAFE_STR(v, 200), // 真实形态：{at:'日期', judge:'裁判名'}——同上
+            };
 
       for (const item of incoming) {
 
@@ -3335,7 +3349,7 @@ const server = http.createServer(async (req, res) => {
         const cur = target.benchmarkScores ||= {};
 
         // 合并语义：浅合并各层；值为 null 表示删除该键（用于修正录错的数据）
-const bsImportIssues = []; // v0.11.4：导入键白名单拒绝记录（响应回显给运营）
+
 
         const mergeLayer = (layer, incoming) => {
 
@@ -3345,9 +3359,14 @@ const bsImportIssues = []; // v0.11.4：导入键白名单拒绝记录（响应�
 
           for (const [k, v] of Object.entries(incoming)) {
 
-            // v0.11.4：键白名单（安全标识符——防任意 HTML 进键→前端 title/文本注入；二十三审 P2）
-            if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(k)) { bsImportIssues.push(String(k).slice(0, 30) + ' 含非法字符，已跳过'); continue; }
-            if (v === null) delete dst[k]; else dst[k] = v;
+            // v0.11.4：键白名单 + v0.11.5 保留名拒绝（__proto__/constructor/prototype）
+            if (!KEY_RE.test(k) || BAD_KEYS.has(k)) { bsImportIssues.push(String(k).slice(0, 30) + ' 含非法字符或保留名，已跳过'); continue; }
+            // v0.11.5（二十四审 P1-1）：值 schema 校验——键合法值恶意同样拒绝；null=删除语义保留
+            if (v !== null) {
+              const validated = VALUE_SCHEMA[layer] ? VALUE_SCHEMA[layer](v) : v;
+              if (validated == null) { bsImportIssues.push(layer + '.' + k + ' 值类型/范围非法，已跳过'); continue; }
+              dst[k] = validated;
+            } else delete dst[k];
 
           }
 
@@ -3375,7 +3394,7 @@ const bsImportIssues = []; // v0.11.4：导入键白名单拒绝记录（响应�
 
       config = await saveConfig(config);
 
-      return json(res, 200, { ok: true, applied, skipped });
+      return json(res, 200, { ok: true, applied, skipped, issues: bsImportIssues.slice(0, 20) }); // v0.11.5：导入拒绝明细回显
 
     } catch (error) { return errorJson(res, 400, error.message, 'invalid_request_error'); }
 

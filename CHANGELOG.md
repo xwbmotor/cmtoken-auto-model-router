@@ -2,6 +2,15 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.11.5] - 2026-08-31
+
+二十四审收口（3×P1 + metrics 口径）：
+- P1-2（方案升级）Judge Guard fail-closed 内收 `JudgeGuard.settle()`：tokens 非有限非负 number（含 `Number(null)/''/false→0` 隐式陷阱）一律按本 reservation estTokens 结算——六条调用路径统一覆盖（生产质量评审/task-check/交错评测/解析失败/异常/幂等），删除三处调用方 8000/2000 硬编码；
+- P1-1 JSON 导入值类型化 schema：scores/evalGate=数值 [0,100]、subtasks={avg,n}、双 meta={at,judge,note} 限长；键白名单 + `__proto__/constructor/prototype` 保留名拒绝；非法项跳过并 issues 回显（top 20）；
+- P1-3 交错评测题内模型循环每次 `callUpstreamChat` 前检查 cancelRequested——取消后不再为剩余模型付费；
+- P2 metrics `judgeBump('tokens')` 只记真实报告值（缺失不记 0，防低估误导对账）；
+- 新增 tests/import-schema.test.mjs：导入 e2e（合法入/恶意值拒/保留名拒/issues 回显/落盘校验）+ Guard 七形态单元测试（number/null/undefined/字符串/false/负数/合法0 + ok:false 无 tokens 预占 + estTokens 因路径而异）。
+
 ## [0.11.4] - 2026-08-31
 
 二十三审收口（2×P1 + P2）：
