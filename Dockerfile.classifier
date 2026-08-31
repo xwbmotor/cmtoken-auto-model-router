@@ -7,9 +7,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# sklearn 1.9 + joblib：与 data/training/model/*.joblib 工件配套（清华镜像仅构建期使用）
+# sklearn/joblib/numpy/scipy：v0.10.5 起按 requirements-classifier.lock 精确锁定安装
+# （十九审：Dockerfile 此前未用锁文件，重建会重新解析版本、ABI 组合不可复现）
+COPY --chown=nobody:nogroup requirements-classifier.lock ./requirements-classifier.lock
 RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    "scikit-learn==1.9.0" "joblib" "numpy"
+    -r requirements-classifier.lock
 
 COPY --chown=nobody:nogroup scripts/classifier_common.py scripts/serve_classifier.py ./scripts/
 COPY --chown=nobody:nogroup data/training/model/ ./data/training/model/

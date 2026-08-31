@@ -25,11 +25,20 @@ test('连续 3 次失败开熔断并设 downSince；恢复成功清零', () => {
 
 test('下线告警：单失败+无流量 30 分钟后不告警（无流量≠宕机）', () => {
   const s = newHealthState();
-  updateHealthState(s, false, 100); // 单次失败
+  updateHealthState(s, false, 100); // 单次失败：未开熔断、downSince=0
   const later = Date.now() + 40 * 60000;
-  // 模拟时间流逝但 lastFailureAt 已远（>10min 无失败证据）
   s.lastFailureAt = Date.now() - 15 * 60000;
   assert.strictEqual(offlineAlertDue(s, later), false, '无近期失败证据不告警');
+});
+
+test('下线告警：已开熔断但失败证据过期（>10min 无新失败）不告警', () => {
+  const s = newHealthState();
+  updateHealthState(s, false, 100); updateHealthState(s, false, 100); updateHealthState(s, false, 100); // 开熔断
+  assert.strictEqual(s.circuitState, 'open');
+  assert.ok(s.downSince > 0);
+  s.downSince = Date.now() - 35 * 60000;    // 持续 35 分钟
+  s.lastFailureAt = Date.now() - 12 * 60000; // 但失败证据已过期（>10min 无新失败/探针）
+  assert.strictEqual(offlineAlertDue(s), false, '熔断打开但无近期失败证据（无流量≠宕机）不告警');
 });
 
 test('下线告警：熔断持续 30 分钟（有近期失败）触发', () => {

@@ -40,7 +40,7 @@ import { createShutdownManager, installCrashHandlers } from './shutdown.mjs';
 import { createRateLimiter } from './rate-limiter.mjs';
 
 import { shouldPromoteVerified } from './calibration.mjs';
-import { newHealthState, updateHealthState } from './health.mjs';
+import { newHealthState, updateHealthState, offlineAlertDue } from './health.mjs';
 
 import { MarketSignal } from './market-signal.mjs';
 
@@ -1659,6 +1659,18 @@ function startEvalJob(body) {
   return job;
 }
 
+// v0.10.5：评测错误统一分类（与十九审建议对齐：empty_response/timeout/http_401/http_429/http_5xx/invalid_payload/other）
+function classifyEvalError(msg) {
+  const s = String(msg);
+  if (/HTTP 401|HTTP 403/.test(s)) return 'http_401_403';
+  if (/HTTP 429/.test(s)) return 'http_429';
+  if (/HTTP 5\d\d/.test(s)) return 'http_5xx';
+  if (/HTTP 4\d\d/.test(s)) return 'http_4xx';
+  if (/timeout|TimeoutError|Timeout/.test(s)) return 'timeout';
+  if (/JSON|parse|invalid/i.test(s)) return 'invalid_payload';
+  return 'other';
+}
+
 async function runEvalJob(job) {
   const cases = job.type === 'checkup' ? CHECKUP_CASES : await loadEvalGateCases();
   job.total = cases.length;
@@ -1666,10 +1678,16 @@ async function runEvalJob(job) {
     try {
       const r = await callUpstreamChat(job.modelId, c.prompt, c.maxTokens || 300);
       const pass = checkCase(c.check, r.text);
-      job.results.push({ id: c.id, task: c.task || null, ok: r.text.length > 0, pass, latencyMs: r.latencyMs, chars: r.text.length, excerpt: r.text.slice(0, 120) });
-      if (pass === false) job.failed += 1;
+      // v0.10.5：空正文也是失败——errorType=empty_response，计入 failed 与 errorTypes（不再漏记账）
+      const ok = r.text.length > 0;
+      const errorType = ok ? null : 'empty_response';
+      job.results.push({ id: c.id, task: c.task || null, ok, pass, latencyMs: r.latencyMs, chars: r.text.length, excerpt: r.text.slice(0, 120), errorType });
+      // v0.10.5：failed 统一口径 = !ok 或断言失败（空响应此前被漏计）
+      if (!ok || pass === false) job.failed += 1;
     } catch (error) {
-      job.results.push({ id: c.id, task: c.task || null, ok: false, pass: null, error: String(error?.message || error) });
+      const msg = String(error?.message || error);
+      const errorType = classifyEvalError(msg);
+      job.results.push({ id: c.id, task: c.task || null, ok: false, pass: null, error: msg, errorType });
       job.failed += 1;
     }
     job.done += 1;
@@ -1698,8 +1716,8 @@ async function runEvalJob(job) {
       if (r.ok) byTask[t].ready += 1;
     }
     const errTypes = {};
-    for (const r of job.results) if (!r.ok && r.error) {
-      const key = String(r.error).slice(0, 60);
+    for (const r of job.results) if (!r.ok) {
+      const key = r.errorType || 'other';
       errTypes[key] = (errTypes[key] || 0) + 1;
     }
     job.summary = {
@@ -1719,7 +1737,11 @@ async function runEvalJob(job) {
 async function loadEvalGateCases() {
   const { readFile } = await import('node:fs/promises');
   const { resolve } = await import('node:path');
-  const raw = await readFile(resolve(projectRoot, 'config/eval-gate.json'), 'utf8');
+  // v0.10.5：AMR_CONFIG_DIR 指定时优先读配置目录里的题库（与 router.json 同构；测试/多实例部署用）
+  const cfgDir = process.env.AMR_CONFIG_DIR;
+  const bankPath = cfgDir ? resolve(cfgDir, 'eval-gate.json') : resolve(projectRoot, 'config/eval-gate.json');
+  let raw;
+  try { raw = await readFile(bankPath, 'utf8'); } catch { raw = await readFile(resolve(projectRoot, 'config/eval-gate.json'), 'utf8'); }
   const arr = JSON.parse(raw)?.cases;
   if (!Array.isArray(arr) || !arr.length) throw new Error('config/eval-gate.json 缺少 cases 题库');
   return arr.map((c) => ({ id: c.id, task: c.task, prompt: c.prompt, check: null, rubric: c.rubric || null, maxTokens: c.maxTokens || 1024 }));
@@ -2918,18 +2940,14 @@ const server = http.createServer(async (req, res) => {
     for (const m of config.models || []) {
       if (!m.enabled) continue;
       const h = health[m.id];
-      if (!h || !h.downSince) continue;
-      // v0.10.3：只认非 closed 状态（closed=已恢复成功，downSince 将被清零；此处为双保险）
-      if (h.circuitState === 'closed') continue;
+      if (!h) continue;
+      // v0.10.5：判定收敛到 src/health.mjs 的 offlineAlertDue()（与单测共用同一实现，防测试与生产漂移）
+      if (!offlineAlertDue(h)) continue;
       const downMin = (Date.now() - h.downSince) / 60000;
       const probeStreak = h.halfOpenFailStreak || 0;
-      // 无流量不是故障证据：lastFailureAt 超过 10 分钟没有任何失败记录（也没有探针失败），
-      // 说明只是没人调用——不告警
-      const stale = !h.lastFailureAt || (Date.now() - h.lastFailureAt) > 600000;
-      if (stale) continue;
       const longDown = downMin >= 30;
       const probeDead = probeStreak >= 3 && downMin >= 10;
-      if (longDown || probeDead) {
+      {
         alerts.push({ modelId: m.id, displayName: m.displayName || m.id, ownership: m.ownership,
           downMinutes: Math.round(downMin), halfOpenFailStreak: probeStreak,
           totalFailures: h.failures || 0, lastSuccessAt: h.lastSuccessAt ? new Date(h.lastSuccessAt).toISOString() : null,

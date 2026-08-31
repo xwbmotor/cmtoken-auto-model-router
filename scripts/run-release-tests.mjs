@@ -78,9 +78,14 @@ const classifierLabelsRevision = collect(() => classifierTag ? execSync(`docker 
 images.classifierImageId = classifierImageId;          // 进 release 报告证据链
 images.classifierLabelsRevision = classifierLabelsRevision;
 gate.classifierImageBuilt = Boolean(classifierImageId);
-// OCI revision 非空即记录（classifier 独立版本线，revision 指向其自身构建 commit；缺失=无证据=门禁挂）
-gate.classifierRevisionLabeled = Boolean(classifierLabelsRevision);
-const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence && gate.composeVersionMatches && gate.evalGateCasesPresent && gate.classifierTagPresent && gate.classifierImageBuilt && gate.classifierRevisionLabeled;
+// v0.10.5：revision 必须是 40 位 Git SHA（unlabeled/任意伪造串不再通过），且记录 rootfs 层 digest 证据
+// 用 --format json 输出整对象再 JS 解析（避开 Windows shell 的 Go template 引号转义问题）
+const classifierInspect = collect(() => classifierTag ? JSON.parse(execSync(`docker inspect cmt-amr-classifier:${classifierTag} --format "{{json .}}"`, { encoding: 'utf8' })) : null);
+const labels = classifierInspect?.Config?.Labels || {};
+const CLASSIFIER_REV_SHA = /^[0-9a-f]{40}$/;
+images.classifierRootfsLayers = classifierInspect?.RootFS?.Layers || null;
+gate.classifierRevisionIsSha = Boolean(labels['org.opencontainers.image.revision'] && CLASSIFIER_REV_SHA.test(labels['org.opencontainers.image.revision']));
+const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence && gate.composeVersionMatches && gate.evalGateCasesPresent && gate.classifierTagPresent && gate.classifierImageBuilt && gate.classifierRevisionIsSha;
 if (!validForRelease && !allowDirty) {
   console.error('[test:release] 发布证据链门禁未过：' + JSON.stringify({ ...gate, tag: git.tag, tagExpected, dirtyCount: git.dirty.length }));
   console.error('  正式发布流程：代码+compose 同 commit → docker build --build-arg GIT_REVISION=<HEAD> → git tag v{ver} → 干净 worktree 跑 npm run test:release。');

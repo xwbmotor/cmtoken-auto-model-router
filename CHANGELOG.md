@@ -2,6 +2,18 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.10.5] - 2026-08-31
+
+十九审收口（v0.10.4 收敛后封板版）：
+- P1 XSS：最近请求面板 selected/requested/keyFingerprint（含调用方指纹下拉）与语义模型下拉 option 全部 escHtml——关闭客户端可控字段的存储型 XSS 链路；
+- P1 EWMA 语义回归修复：updateHealthState 恢复与 server 原实现等价——成功与失败都更新 ewmaLatencyMs（失败/超时时延同样形成动态时延惩罚）；
+- P1 classifier 证据链：门禁 classifierRevisionIsSha 要求 OCI revision 为 40 位 Git SHA（unlabeled/伪造串不再通过），release 报告新增 classifierRootfsLayers 层 digest 证据；
+- P2 空响应记账：评测 failed 统一口径=!ok 或断言失败；errorType 统一分类（empty_response/timeout/http_401_403/http_429/http_5xx/http_4xx/invalid_payload/other），不再漏计空正文；
+- P2 判定单一事实源：/admin/api/model-offline-alerts 端点改调 health.mjs 的 offlineAlertDue()（与单测共用，防测试与生产漂移）；新增「已开熔断但失败证据过期不告警」测试分支；
+- P2 依赖锁定：新增 requirements-classifier.lock（sklearn 1.9.0/joblib 1.5.3/numpy 2.4.6/scipy 1.17.1 精确版本），Dockerfile.classifier 改用锁文件安装；
+- P2 题库路径：loadEvalGateCases 支持 AMR_CONFIG_DIR 覆盖（与 router.json 同构，测试/多实例部署）；
+- 新增 tests/eval-full.test.mjs：full 巡检黑盒测试（mock 上游覆盖正常/空正文/500/双 task，断言 readyRate/errorTypes/byTask/failed 全字段）。
+
 ## [0.10.4] - 2026-08-30
 
 十八审收口（v0.10.3 错配与遗留问题）：

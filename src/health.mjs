@@ -7,8 +7,9 @@ export function newHealthState() {
 }
 
 export function updateHealthState(state, ok, latencyMs, cfg = { circuitBreakerFailures: 3, circuitBreakerCooldownMs: 30000 }) {
+  // v0.10.5：EWMA 恢复与 server 原实现等价——成功与失败都更新（失败/超时时延同样形成动态时延惩罚）
+  state.ewmaLatencyMs = state.ewmaLatencyMs ? Math.round(state.ewmaLatencyMs * 0.8 + latencyMs * 0.2) : latencyMs;
   if (ok) {
-    state.ewmaLatencyMs = state.ewmaLatencyMs ? Math.round(state.ewmaLatencyMs * 0.8 + latencyMs * 0.2) : latencyMs;
     state.circuitState = 'closed'; state.probeInFlight = false; state.consecutiveFailures = 0; state.successes += 1;
     state.circuitOpenUntil = 0; state.lastSuccessAt = Date.now(); state.downSince = 0; state.halfOpenFailStreak = 0;
     return state;
