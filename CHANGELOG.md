@@ -2,6 +2,14 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.11.6] - 2026-08-31
+
+P1 管理台事件绑定全面失效（用户实测发现）：
+- 根因：v0.5.0 删除「组件体检」面板时未同步删 app.js 的两个死绑定（#evalClassifier/#replaySwitch，元素已不存在）——模块在绑定处 TypeError 中断执行，其后所有事件绑定失效 8 天（从上游发现模型/交错评测/离线横幅/eval 取消按钮全部无响应）。API 级测试与 node --check 均无法覆盖此类「UI 绑定中断」问题。
+- 修复：删除 38 行死代码（两个 onclick 块，后端 classifier/evaluate 与 /replay API 保留——测试与运维仍使用）。
+- 新增 tests/admin-smoke.test.mjs：真实浏览器（playwright）冒烟——登录后断言零 pageerror + 发现按钮点击后弹层打开（绑定生效证明）。无 python3+playwright 环境自动 skip。
+- 教训沉淀：删 HTML 面板必须 grep 对应 JS 绑定；UI 功能必须有浏览器级冒烟。
+
 ## [0.11.5] - 2026-08-31
 
 二十四审收口（3×P1 + metrics 口径）：

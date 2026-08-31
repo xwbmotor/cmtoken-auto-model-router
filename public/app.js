@@ -672,44 +672,10 @@ function renderBaselines() {
   box.innerHTML = `<article><span>当前路由</span><strong>质量 ${cur.averageQuality?.toFixed(3) ?? '—'}</strong><small>成本 ${cur.averageCostIndex?.toFixed(3) ?? '—'} · 时延 ${cur.averageLatencyIndex?.toFixed(3) ?? '—'}</small><small class="muted">应落在两个基线之间</small></article>` + row(b.zeroRouter?.label || '随机基线', b.zeroRouter || {}) + row(b.oracle?.label || '静态先验最优', b.oracle || {}) + `<p class="hint">Pareto 前沿：${(lastSimulation.proposed.paretoFrontier || []).map((s) => escHtml(String(s))).join('、') || '—'}。当前路由质量低于随机基线时，说明任务区分度不足或评分权重失衡，应先调分类/权重而不是加模型。</p>`;
 }
 
-//—— 组件体检：分类器标准评测 ——
-$('evalClassifier').onclick = async () => {
-  const box = $('classifierReport');
-  box.innerHTML = '<p class="empty">评测中（heldout 集 454 条，约几秒）…</p>';
-  try {
-    const r = await api('/admin/api/classifier/evaluate', { method: 'POST' });
-    const matrix = (confusion, labels) => `<table class="mini-matrix"><thead><tr><th>真实＼预测</th>${labels.map((l) => `<th>${l}</th>`).join('')}</tr></thead><tbody>${labels.map((a) => `<tr><th>${a}</th>${labels.map((b) => `<td class="${a === b && confusion[a][b] > 0 ? 'diag' : ''} ${a !== b && confusion[a][b] > 0 ? 'off' : ''}">${confusion[a][b]}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
-    const fmtAcc = (v) => `${(v * 100).toFixed(1)}%`;
-    box.innerHTML = `
-      <div class="checkup-grid">
-        <article><span>小模型分类器</span><strong>${fmtAcc(r.classifier.accuracy)}</strong><small>宏F1 ${r.classifier.macroF1.toFixed(4)} · 平均 ${r.classifier.avgInferMs}ms · 训练于 ${r.modelTrainedAt || '—'}</small></article>
-        <article><span>规则层（关键词）</span><strong>${fmtAcc(r.rules.accuracy)}</strong><small>宏F1 ${r.rules.macroF1.toFixed(4)} · 未触发率 ${fmtAcc(r.rules.unmatchedRate)}（落到 default）</small></article>
-        <article><span>两者分歧率</span><strong>${fmtAcc(r.disagreementRate)}</strong><small>标准评测集 ${r.heldoutSize} 条（与训练切分同源）</small></article>
-      </div>
-      <details class="advanced"><summary>混淆矩阵（换分类器前后对比用）</summary><div class="matrix-wrap"><div><h4>小模型</h4>${matrix(r.classifier.confusion, r.labels)}</div><div><h4>规则层</h4>${matrix(r.rules.confusion, r.labels)}</div></div></details>`;
-  } catch (e) { box.innerHTML = `<p class="empty" style="color:var(--danger)">${escHtml(String(e.message))}</p>`; }
-};
-
-//—— 切换影响预估：heldout 全量回放（判准率/成本/质量/误判方向）——
-$('replaySwitch').onclick = async () => {
-  const box = $('replayReport');
-  box.innerHTML = '<p class="empty">回放中（454 条全量路由回放，约 3~5 秒）…</p>';
-  try {
-    const r = await api('/admin/api/classifier/replay', { method: 'POST' });
-    const pct = (v) => `${(v * 100).toFixed(1)}%`;
-    const signed = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
-    const row = (name, d, hint) => `<article><span>${name}</span><strong>判准率 ${pct(d.taskAcc)}</strong><small>质量 ${d.avgQuality.toFixed(3)} · 用户成本指数 ${d.avgCost.toFixed(3)}</small><small class="muted">漏判难任务 ${d.misread.underCalled} 条 · 多判 ${d.misread.overCalled} 条 · 同档互错 ${d.misread.taskSwapped} 条${hint || ''}</small></article>`;
-    const dist = (d) => Object.entries(d.modelDist).map(([m, n]) => `${escHtml(m.replace('deepseekv4-flash', 'dsf').replace('qwen36-35b', 'qwen'))}×${n}`).join(' ');
-    const shifts = Object.entries(r.partial.modelShifts || {}).map(([k, n]) => `${escHtml(k.replace('deepseekv4-flash', 'dsf').replace('qwen36-35b', 'qwen'))} ${n} 条`).join('，') || '无变化';
-    box.innerHTML = `
-      <div class="checkup-grid" style="grid-template-columns:repeat(3,1fr)">
-        ${row('① 规则层主导（现状 shadow）', r.rules, `<br>分布 ${dist(r.rules)}`)}
-        ${row('② 分级采纳（现 active 语义）', r.partial, `<br>分布 ${dist(r.partial)}`)}
-        ${row('③ 全量采纳小模型', r.full, `<br>分布 ${dist(r.full)}`)}
-      </div>
-      <p class="hint">判准率：预测任务标签与真值一致的比例。漏判难任务=把 coding/reasoning 判成更轻的类（质量风险）；多判=反向（成本浪费）。切换到 active（含采纳门槛）≈ ②，全量采纳 ≈ ③。<br>模型迁移（①→②）：${shifts}。质量/成本为按 gold 任务的真实 quality/costIndex 加权平均。</p>`;
-  } catch (e) { box.innerHTML = `<p class="empty" style="color:var(--danger)">${escHtml(String(e.message))}</p>`; }
-};
+// v0.11.6 删除死代码：v0.5.0 移除组件体检面板（评测分类器/切换影响预估）时
+// app.js 两个 onclick（#evalClassifier / #replaySwitch，元素已不存在）未同步删除
+// 模块在 676 行 TypeError 中断，其后全部事件绑定失效 8 天（发现/交错/横幅/取消）
+// 后端 /admin/api/classifier/evaluate 与 /replay 保留，仅删 UI 死代码
 
 
 // ════════ v0.10.0 模型流水线：发现→注册→体检/评测→下线提醒 ════════
