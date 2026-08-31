@@ -2,6 +2,14 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.11.4] - 2026-08-31
+
+二十三审收口（2×P1 + P2）：
+- P1 生产 Judge settle fail-closed：异步质量评审（estTokens 8000）与 task-check（2000）两处 usage 缺失时按预占结算——不再只修交错评测路径（修 bug 修类不修点：全仓 `settle.*|| 0` 清零）；
+- P1 回放 modelShifts 键 escHtml（同段 modelDist 已修，此为二十三审 git show v0.10.5 对照发现的同类漏点）；
+- P2 JSON 导入键白名单：benchmarkScores 各层键须匹配 /^[a-zA-Z0-9_.-]{1,64}$/，非法键跳过并记录（bsImportIssues 回显）——任意 HTML 不再能经导入进前端 title/文本；
+- 同类自查：settle `|| 0` 全查无残留；app.js `.map(([k,v]) => ${k})` 模式全查无候选裸拼。
+
 ## [0.11.3] - 2026-08-31
 
 二十二审收口（2×P1 + P2 全修）：

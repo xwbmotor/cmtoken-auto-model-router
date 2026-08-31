@@ -216,7 +216,7 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
 
       if (!parsed || !looksLikeQualityVerdict(parsed)) { judgeGuard.settle(rq.handle, { ok: false }); judgeBump('errors'); judgeLog.writeRaw({ at, v: 1, requestId, event: 'error', stage: 'quality_parse', latencyMs: q.latencyMs }); return; }
 
-      judgeGuard.settle(rq.handle, { tokens: q.usage?.total_tokens || 0, ok: true });
+      judgeGuard.settle(rq.handle, { tokens: Number.isFinite(Number(q.usage?.total_tokens)) && Number(q.usage?.total_tokens) >= 0 ? Number(q.usage?.total_tokens) : 8000, ok: true }); // v0.11.4 fail-closed：usage 缺失按预占 8000 结算（二十三审 P1-2）
 
       judgeBump('qualityDone'); judgeBump('tokens', q.usage?.total_tokens || 0);
 
@@ -272,7 +272,7 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
 
             if (tp && isValidTaskCheckVerdict(tp)) {
 
-              judgeGuard.settle(rt.handle, { tokens: t.usage?.total_tokens || 0, ok: true });
+              judgeGuard.settle(rt.handle, { tokens: Number.isFinite(Number(t.usage?.total_tokens)) && Number(t.usage?.total_tokens) >= 0 ? Number(t.usage?.total_tokens) : 2000, ok: true }); // v0.11.4 fail-closed（task-check 预占 2000）
 
               judgeEvent.taskCheck = { agree: tp.task_agree === true, reason: String(tp.reason || '').slice(0, 80) || null, suggested: normalizeSuggestedTask(tp.suggested_task), latencyMs: t.latencyMs };
 
@@ -3335,6 +3335,7 @@ const server = http.createServer(async (req, res) => {
         const cur = target.benchmarkScores ||= {};
 
         // 合并语义：浅合并各层；值为 null 表示删除该键（用于修正录错的数据）
+const bsImportIssues = []; // v0.11.4：导入键白名单拒绝记录（响应回显给运营）
 
         const mergeLayer = (layer, incoming) => {
 
@@ -3344,6 +3345,8 @@ const server = http.createServer(async (req, res) => {
 
           for (const [k, v] of Object.entries(incoming)) {
 
+            // v0.11.4：键白名单（安全标识符——防任意 HTML 进键→前端 title/文本注入；二十三审 P2）
+            if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(k)) { bsImportIssues.push(String(k).slice(0, 30) + ' 含非法字符，已跳过'); continue; }
             if (v === null) delete dst[k]; else dst[k] = v;
 
           }

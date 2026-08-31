@@ -700,7 +700,7 @@ $('replaySwitch').onclick = async () => {
     const signed = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
     const row = (name, d, hint) => `<article><span>${name}</span><strong>判准率 ${pct(d.taskAcc)}</strong><small>质量 ${d.avgQuality.toFixed(3)} · 用户成本指数 ${d.avgCost.toFixed(3)}</small><small class="muted">漏判难任务 ${d.misread.underCalled} 条 · 多判 ${d.misread.overCalled} 条 · 同档互错 ${d.misread.taskSwapped} 条${hint || ''}</small></article>`;
     const dist = (d) => Object.entries(d.modelDist).map(([m, n]) => `${escHtml(m.replace('deepseekv4-flash', 'dsf').replace('qwen36-35b', 'qwen'))}×${n}`).join(' ');
-    const shifts = Object.entries(r.partial.modelShifts || {}).map(([k, n]) => `${k.replace('deepseekv4-flash', 'dsf').replace('qwen36-35b', 'qwen')} ${n} 条`).join('，') || '无变化';
+    const shifts = Object.entries(r.partial.modelShifts || {}).map(([k, n]) => `${escHtml(k.replace('deepseekv4-flash', 'dsf').replace('qwen36-35b', 'qwen'))} ${n} 条`).join('，') || '无变化';
     box.innerHTML = `
       <div class="checkup-grid" style="grid-template-columns:repeat(3,1fr)">
         ${row('① 规则层主导（现状 shadow）', r.rules, `<br>分布 ${dist(r.rules)}`)}
