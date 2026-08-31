@@ -53,7 +53,7 @@ test('interleaved 补强：Judge 见原题/预算耗尽/运行中取消/脏分�
       // 脏分测试：越界 100 + verifiable:false 带 score=9
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ usage: { total_tokens: 8000 }, choices: [{ message: { content: JSON.stringify({
-        correctness: { score: 100, verifiable: false, reason: '越界+不可核验' }, // normalizeDimension → null
+        correctness: { score: 'abc', reason: '非法分（normalizeScore→null 真过滤；注意 clamp 语义：-5→0/100→10 会入分，只有非法值才丢弃）' },
         instruction_following: { score: 7, reason: 'ok' },
         completeness: { score: 7, verifiable: false, reason: 'x' },  // verifiable:false → null
         safety: { score: 7, issues: '无' },
@@ -112,7 +112,8 @@ test('interleaved 补强：Judge 见原题/预算耗尽/运行中取消/脏分�
     for (const x of scored) assert.strictEqual(x.judgeScore, 7, `脏分必须被过滤（得到 ${x.judgeScore}）`);
 
     // ④ 预算耗尽：dailyMaxTokens=12000，每次 settle 8000 → 第 2 次后应 budget skip
-    assert.strictEqual(job.summary.judgeSkip.budget > 0, true, '低预算下应有 budget skip 计数');
+    assert.strictEqual(judgeCalls.length, 1, `dailyMaxTokens=12000 下 Judge 恰被调 1 次（首次 settle 8000 后即超限）（得到 ${judgeCalls.length}）——第 3 次 reserve 应被 daily_tokens_exhausted 拒`);
+    assert.ok(job.summary.judgeSkip.budget >= 1, '低预算下应有 budget skip 计数');
     assert.ok(job.summary.judgeReadyRate < 1, '预算耗尽后覆盖率<1');
 
     // ⑤ 运行中取消（新起一个 slow 上游任务再取消）

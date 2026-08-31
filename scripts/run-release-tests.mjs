@@ -84,11 +84,15 @@ const classifierInspect = collect(() => classifierTag ? JSON.parse(execSync(`doc
 const labels = classifierInspect?.Config?.Labels || {};
 const CLASSIFIER_REV_SHA = /^[0-9a-f]{40}$/;
 images.classifierRootfsLayers = classifierInspect?.RootFS?.Layers || null;
-// v0.11.1：revision 必须是仓库真实存在的 commit（git cat-file -t 校验）——40 个 0 不再通过
+// v0.11.3：强绑定——revision 必须等于 classifier 发布 tag（v{classifierTag}）指向的 commit。
+// git rev-parse 'v0.9.7^{commit}' 得到 tag 的 commit；与镜像 OCI revision 一致才通过。
+// 任意历史 commit / 伪造 SHA 不再通过；classifier 独立版本线 = 打自己的 vX.Y.Z tag。
 const revRaw = labels['org.opencontainers.image.revision'] || null;
 const revIsSha = Boolean(revRaw && CLASSIFIER_REV_SHA.test(revRaw));
-const revCommitExists = collect(() => revIsSha ? execSync(`git cat-file -t ${revRaw}`, { encoding: 'utf8' }).trim() === 'commit' : false);
-gate.classifierRevisionIsSha = revIsSha && revCommitExists === true;
+const classifierTagCommit = collect(() => classifierTag ? execSync(`git rev-parse 'v${classifierTag}^{{commit}}'`, { encoding: 'utf8' }).trim() : null);
+images.classifierTagCommit = classifierTagCommit; // 期望源码 commit 入报告（可复核）
+gate.classifierRevisionMatchesTag = Boolean(revRaw && classifierTagCommit && revRaw === classifierTagCommit);
+gate.classifierRevisionIsSha = revIsSha && gate.classifierRevisionMatchesTag;
 const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence && gate.composeVersionMatches && gate.evalGateCasesPresent && gate.classifierTagPresent && gate.classifierImageBuilt && gate.classifierRevisionIsSha;
 if (!validForRelease && !allowDirty) {
   console.error('[test:release] 发布证据链门禁未过：' + JSON.stringify({ ...gate, tag: git.tag, tagExpected, dirtyCount: git.dirty.length }));

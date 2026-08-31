@@ -2,6 +2,16 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.11.3] - 2026-08-31
+
+二十二审收口（2×P1 + P2 全修）：
+- P1 XSS 真收口：基线 modelDistribution（v0.11.2 实际漏改处）、回放 modelDist 缩写链、benchmarkScores 键（title 属性+文本双处）、画像 meta.at/judge、4 处模板串裸 e.message——全部 escHtml；
+- P1 Judge token fail-closed：settle 在 usage 缺失/非法时按预占 estTokens(8000) 结算（兼容端点不回 usage 也不能免费过 dailyMaxTokens 闸）；
+- P2 cancelled 前端完整：轮询增加 cancelled 分支（停轮询+如实显示已完成/计划量）；评测弹层新增「取消任务」按钮；
+- P2 significant 三态：null 显示「显著性不可判定」（区别于 false 不显著）；judgeReadyRate 分母改为全部非预热成功作答（含无 rubric——覆盖率不再虚高）；
+- P2 classifier 门禁强绑定：OCI revision 必须等于 git tag v{classifierTag} 指向的 commit（rev-parse 'v0.9.7^{commit}'），任意历史 commit 不再通过；classifierTagCommit 入 release 报告；
+- P2 测试精化：Judge 恰被调 1 次断言（首次 settle 8000 后超限）、脏分用非法值 'abc'（真过滤路径；实测确认 -5/100 是 clamp 语义会入分，只有非法值丢弃——语义如实入注释）。
+
 ## [0.11.2] - 2026-08-31
 
 二十一审收口（3×P1 + P2 前端契约）：

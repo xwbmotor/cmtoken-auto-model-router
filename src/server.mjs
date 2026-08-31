@@ -1752,8 +1752,9 @@ async function runInterleavedEval(job) {
         const norm = ['correctness', 'instruction_following', 'completeness', 'safety']
           .map((k) => normalizeDimension(dims[k]));
         const scores = norm.map((d) => d.score).filter((v) => typeof v === 'number');
-        // v0.11.2 修正：settle 带真实 tokens（二十一审 P1-2——不带则 dailyMaxTokens 可被连续评测绕过）
-        judgeGuard.settle(rq.handle, { ok: true, tokens: jm.usage?.total_tokens || 0 });
+        // v0.11.3 fail-closed：usage 缺失/非法时按预占 estTokens 结算（兼容端点不回 usage 也不能免费过 token 闸——二十二审 P1-2）
+        const usedTokens = Number(jm.usage?.total_tokens);
+        judgeGuard.settle(rq.handle, { ok: true, tokens: Number.isFinite(usedTokens) && usedTokens >= 0 ? usedTokens : 8000 });
         // 全维度缺失才不计分；部分缺失用可得维度均值（normalizeDimension 已把 verifiable:false 的脏分清掉）
         r.judgeScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
         if (r.judgeScore == null) { r.judgeError = 'no_scored_dim'; continue; }
@@ -1791,7 +1792,8 @@ async function runInterleavedEval(job) {
     if (ci.lo != null) pairwise[pairwise.length - 1].significant = ci.lo > 0 || ci.hi < 0;
   }
   // v0.11.1：Judge 覆盖率入 summary——缺失原因可见（预算/失败/无 rubric），不静默
-  const scoredTotal = job.results.filter((r) => !r.warmup && r.ok && r.rubric).length;
+  // v0.11.3：覆盖率分母=全部非预热成功作答（含无 rubric 的——同样是没评到，避免「100% 覆盖」与「无评分标准 N 条」并存误导）
+  const scoredTotal = job.results.filter((r) => !r.warmup && r.ok).length;
   job.summary = {
     kind: 'interleaved',
     judgeReadyRate: scoredTotal ? (job.judge?.scored || 0) / scoredTotal : null,

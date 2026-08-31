@@ -59,7 +59,7 @@ async function renderTaskBoard() {
       const catEn = b.categoryEn || sc[1];
       return `<tr><th>${icon} ${catLabel} · ${subLabel}<br><span class="task-cat">${catEn}</span></th><td>${b.total}</td>${cells}</tr>`;
     }).join('');
-  } catch (e) { rows.innerHTML = `<tr><td colspan="5" class="empty">${e.message}</td></tr>`; }
+  } catch (e) { rows.innerHTML = `<tr><td colspan="5" class="empty">${escHtml(String(e.message))}</td></tr>`; }
 }
 //市场信号状态：飞轮健康度（激活任务数/休眠原因），样本不足时明说「等真实流量」
 async function renderMarketSignal() {
@@ -98,7 +98,7 @@ async function renderRoutingReport() {
     const data = await api('/admin/api/routing-report');
     rows.innerHTML = data.arms.map((a) => `<tr${a.name.startsWith('auto') ? ' style="font-weight:600;background:#f5f6fc"' : ''}><th>${escHtml(a.name)}${a.name.startsWith('auto') ? ' ⭐' : ''}</th><td>${a.quality}</td><td>${a.costIndex}</td><td>${a.latencyIndex}</td></tr>`).join('');
     hl.innerHTML = (data.highlights || []).map((t) => `<div class="highlight">${escHtml(t)}</div>`).join('');
-  } catch (e) { rows.innerHTML = `<tr><td colspan="4" class="empty">${e.message}</td></tr>`; }
+  } catch (e) { rows.innerHTML = `<tr><td colspan="4" class="empty">${escHtml(String(e.message))}</td></tr>`; }
 }
 //总览 · 策略快照 + 任务分布（撑起总览信息密度）
 const TIER_SNAP = { budget: '省钱', balanced: '均衡', quality: '质量', max: '顶配', custom: '自定义' };
@@ -424,7 +424,7 @@ function renderProfile() {
   tbody.innerHTML = config.models.map((m, i) => {
     const bs = m.benchmarkScores || {};
     const dim = m.enabled ? '' : ' dim';
-    const scores = bs.scores && Object.keys(bs.scores).length ? Object.entries(bs.scores).map(([k, v]) => `<span class="pill ${v >= 0.8 ? 'good' : 'muted'}" title="${k}">${k} ${Number(v).toFixed(3).replace(/0+$/,'').replace(/\.$/,'')}</span>`).join(' ') : '<span class="pill muted">未录入</span>';
+    const scores = bs.scores && Object.keys(bs.scores).length ? Object.entries(bs.scores).map(([k, v]) => `<span class="pill ${v >= 0.8 ? 'good' : 'muted'}" title="${escHtml(k)}">${escHtml(k)} ${Number(v).toFixed(3).replace(/0+$/,'').replace(/\.$/,'')}</span>`).join(' ') : '<span class="pill muted">未录入</span>';
     const eg = bs.evalGate;
     const gate = eg ? CAP_TASKS.filter(t => eg[t] != null).map(t => `<span class="pill ${eg[t] >= Math.max(...CAP_TASKS.map(k => Number(eg[k]) || 0)) - 1e-9 ? 'good' : ''}" title="${CAP_TASK_LABEL[t]} ${eg[t]}">${CAP_TASK_LABEL[t]} ${eg[t]}</span>`).join(' ') + (eg.total != null ? `<span class="pill ${eg.total >= bestTotal - 1e-9 && eg.total > 0 ? 'good' : ''}" title="总均分${eg.total >= bestTotal - 1e-9 && eg.total > 0 ? '（三模型最高）' : ''}">总 ${eg.total}</span>` : '') : '<span class="pill muted">未实测</span>';
     return `<tr><th><div class="cap-model${dim}"><strong>${escHtml(m.displayName || m.id)}</strong><small>${escHtml(m.id)}</small></div></th><td>${scores}</td><td>${gate}</td></tr>`;
@@ -439,7 +439,7 @@ async function showSubDetail(modelIdx, subKey) {
   const cat = `${catIcon || ''} ${catCn}`;
   $('profileDetail').hidden = false;
   $('profileDetail').innerHTML = `<div class="panel-head"><div><p class="eyebrow">小类明细</p><h3>${label} <small>${cat}</small></h3></div><button class="secondary" onclick="document.getElementById('profileDetail').hidden=true">收起</button></div>
-  <p class="hint">模型 ${escHtml(m.displayName || m.id)} · ${label}（${catCn}）均分 <strong>${v.avg}</strong> · 样本 ${v.n} 条 · 实测时间 ${meta.at || '—'} · 裁判 ${meta.judge || '—'}</p>`;
+  <p class="hint">模型 ${escHtml(m.displayName || m.id)} · ${label}（${catCn}）均分 <strong>${v.avg}</strong> · 样本 ${v.n} 条 · 实测时间 ${escHtml(String(meta.at || '—'))} · 裁判 ${escHtml(String(meta.judge || '—'))}</p>`;
 }
 function bindProfile() {
   const summaryTb = $('profileRows');
@@ -668,7 +668,7 @@ function renderBaselines() {
   if (!box || !lastSimulation?.proposed?.baselines) return;
   const b = lastSimulation.proposed.baselines;
   const cur = lastSimulation.proposed;
-  const row = (name, data) => `<article><span>${name}</span><strong>质量 ${data.averageQuality?.toFixed(3) ?? '—'}</strong><small>成本 ${data.averageCostIndex?.toFixed(3) ?? '—'} · 时延 ${data.averageLatencyIndex?.toFixed(3) ?? '—'}</small><small class="muted">${Object.entries(data.modelDistribution || {}).map(([m, n]) => `${m}×${n}`).join(' ')}</small></article>`;
+  const row = (name, data) => `<article><span>${name}</span><strong>质量 ${data.averageQuality?.toFixed(3) ?? '—'}</strong><small>成本 ${data.averageCostIndex?.toFixed(3) ?? '—'} · 时延 ${data.averageLatencyIndex?.toFixed(3) ?? '—'}</small><small class="muted">${Object.entries(data.modelDistribution || {}).map(([m, n]) => `${escHtml(m)}×${n}`).join(' ')}</small></article>`;
   box.innerHTML = `<article><span>当前路由</span><strong>质量 ${cur.averageQuality?.toFixed(3) ?? '—'}</strong><small>成本 ${cur.averageCostIndex?.toFixed(3) ?? '—'} · 时延 ${cur.averageLatencyIndex?.toFixed(3) ?? '—'}</small><small class="muted">应落在两个基线之间</small></article>` + row(b.zeroRouter?.label || '随机基线', b.zeroRouter || {}) + row(b.oracle?.label || '静态先验最优', b.oracle || {}) + `<p class="hint">Pareto 前沿：${(lastSimulation.proposed.paretoFrontier || []).map((s) => escHtml(String(s))).join('、') || '—'}。当前路由质量低于随机基线时，说明任务区分度不足或评分权重失衡，应先调分类/权重而不是加模型。</p>`;
 }
 
@@ -687,7 +687,7 @@ $('evalClassifier').onclick = async () => {
         <article><span>两者分歧率</span><strong>${fmtAcc(r.disagreementRate)}</strong><small>标准评测集 ${r.heldoutSize} 条（与训练切分同源）</small></article>
       </div>
       <details class="advanced"><summary>混淆矩阵（换分类器前后对比用）</summary><div class="matrix-wrap"><div><h4>小模型</h4>${matrix(r.classifier.confusion, r.labels)}</div><div><h4>规则层</h4>${matrix(r.rules.confusion, r.labels)}</div></div></details>`;
-  } catch (e) { box.innerHTML = `<p class="empty" style="color:var(--danger)">${e.message}</p>`; }
+  } catch (e) { box.innerHTML = `<p class="empty" style="color:var(--danger)">${escHtml(String(e.message))}</p>`; }
 };
 
 //—— 切换影响预估：heldout 全量回放（判准率/成本/质量/误判方向）——
@@ -699,7 +699,7 @@ $('replaySwitch').onclick = async () => {
     const pct = (v) => `${(v * 100).toFixed(1)}%`;
     const signed = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
     const row = (name, d, hint) => `<article><span>${name}</span><strong>判准率 ${pct(d.taskAcc)}</strong><small>质量 ${d.avgQuality.toFixed(3)} · 用户成本指数 ${d.avgCost.toFixed(3)}</small><small class="muted">漏判难任务 ${d.misread.underCalled} 条 · 多判 ${d.misread.overCalled} 条 · 同档互错 ${d.misread.taskSwapped} 条${hint || ''}</small></article>`;
-    const dist = (d) => Object.entries(d.modelDist).map(([m, n]) => `${m.replace('deepseekv4-flash', 'dsf').replace('qwen36-35b', 'qwen')}×${n}`).join(' ');
+    const dist = (d) => Object.entries(d.modelDist).map(([m, n]) => `${escHtml(m.replace('deepseekv4-flash', 'dsf').replace('qwen36-35b', 'qwen'))}×${n}`).join(' ');
     const shifts = Object.entries(r.partial.modelShifts || {}).map(([k, n]) => `${k.replace('deepseekv4-flash', 'dsf').replace('qwen36-35b', 'qwen')} ${n} 条`).join('，') || '无变化';
     box.innerHTML = `
       <div class="checkup-grid" style="grid-template-columns:repeat(3,1fr)">
@@ -708,7 +708,7 @@ $('replaySwitch').onclick = async () => {
         ${row('③ 全量采纳小模型', r.full, `<br>分布 ${dist(r.full)}`)}
       </div>
       <p class="hint">判准率：预测任务标签与真值一致的比例。漏判难任务=把 coding/reasoning 判成更轻的类（质量风险）；多判=反向（成本浪费）。切换到 active（含采纳门槛）≈ ②，全量采纳 ≈ ③。<br>模型迁移（①→②）：${shifts}。质量/成本为按 gold 任务的真实 quality/costIndex 加权平均。</p>`;
-  } catch (e) { box.innerHTML = `<p class="empty" style="color:var(--danger)">${e.message}</p>`; }
+  } catch (e) { box.innerHTML = `<p class="empty" style="color:var(--danger)">${escHtml(String(e.message))}</p>`; }
 };
 
 
@@ -819,6 +819,21 @@ async function startEval(type, modelId) {
 }
 function pollEval(id) {
   clearInterval(evalTimer);
+  // v0.11.3：取消按钮（长任务可中止——服务端在题/Judge 循环边界响应）
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn-mini'; cancelBtn.style.cssText = 'margin-left:12px'; cancelBtn.textContent = '取消任务';
+  cancelBtn.onclick = async () => {
+    if (!confirm('确定取消当前评测任务？（已完成的调用照常计费）')) return;
+    try {
+      const r = await fetch('/admin/api/eval-jobs?action=cancel', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ id }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error?.message || r.status);
+      if (d.alreadyFinished) toast('任务已结束，无需取消');
+      else { toast('已请求取消——当前在途调用完成后停止'); cancelBtn.disabled = true; }
+    } catch (e) { toast('取消失败：' + e.message, true); }
+  };
+  const head = $id('evalTitle');
+  if (head && head.parentElement) { head.parentElement.querySelectorAll('.eval-cancel').forEach((x) => x.remove()); cancelBtn.classList.add('eval-cancel'); head.parentElement.insertBefore(cancelBtn, head.nextSibling); }
   evalTimer = setInterval(async () => {
     try {
       const r = await fetch('/admin/api/eval-jobs?id=' + id, { headers: { authorization: `Bearer ${token}` } });
@@ -826,6 +841,7 @@ function pollEval(id) {
       if (!r.ok) throw new Error(j.error?.message || r.status);
       const pct = j.total ? Math.round(j.done / j.total * 100) : 0;
       let html = '<div class="progress-wrap"><div class="progress-bar" style="width:' + pct + '%"></div></div><p>' + j.done + '/' + j.total + '（' + pct + '%）失败 ' + j.failed + '</p>';
+      if (j.status === 'cancelled') { clearInterval(evalTimer); html += '<p style="color:#c33">任务已取消——以上为取消前已完成部分（' + j.done + '/' + j.total + '）。</p>'; $id('evalBody').innerHTML = html; return; }
       if (j.status === 'done') {
         clearInterval(evalTimer);
         if (j.summary) {
@@ -846,7 +862,7 @@ function pollEval(id) {
               html += '<h4>两两对比（质量分差，正=A 好）</h4><ul>' + s.pairwise.map((p) =>
                 '<li>' + escHtml(p.a) + ' vs ' + escHtml(p.b) + '（配对 ' + (p.pairedN ?? 0) + ' 题）：' +
                 (p.qualityDiff && p.qualityDiff.mean != null
-                  ? (p.qualityDiff.mean > 0 ? '+' : '') + p.qualityDiff.mean.toFixed(2) + (p.qualityDiff.lo != null ? ' [' + p.qualityDiff.lo.toFixed(2) + ', ' + p.qualityDiff.hi.toFixed(2) + ']' : '（样本不足）') + ' ' + (p.significant ? '<b>显著</b>' : '（不显著）')
+                  ? (p.qualityDiff.mean > 0 ? '+' : '') + p.qualityDiff.mean.toFixed(2) + (p.qualityDiff.lo != null ? ' [' + p.qualityDiff.lo.toFixed(2) + ', ' + p.qualityDiff.hi.toFixed(2) + ']' : '（样本不足）') + ' ' + (p.significant === true ? '<b>显著</b>' : p.significant === false ? '（不显著）' : '（显著性不可判定）')
                   : '样本不足') + '</li>').join('') + '</ul>';
             }
             if (!s.judgeConfigured) html += '<p class="hint">Judge 未配置——质量列不可用（仅时延统计）。配置 Judge 端点后重跑。</p>';
