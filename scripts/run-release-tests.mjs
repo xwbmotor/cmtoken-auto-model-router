@@ -84,7 +84,11 @@ const classifierInspect = collect(() => classifierTag ? JSON.parse(execSync(`doc
 const labels = classifierInspect?.Config?.Labels || {};
 const CLASSIFIER_REV_SHA = /^[0-9a-f]{40}$/;
 images.classifierRootfsLayers = classifierInspect?.RootFS?.Layers || null;
-gate.classifierRevisionIsSha = Boolean(labels['org.opencontainers.image.revision'] && CLASSIFIER_REV_SHA.test(labels['org.opencontainers.image.revision']));
+// v0.11.1：revision 必须是仓库真实存在的 commit（git cat-file -t 校验）——40 个 0 不再通过
+const revRaw = labels['org.opencontainers.image.revision'] || null;
+const revIsSha = Boolean(revRaw && CLASSIFIER_REV_SHA.test(revRaw));
+const revCommitExists = collect(() => revIsSha ? execSync(`git cat-file -t ${revRaw}`, { encoding: 'utf8' }).trim() === 'commit' : false);
+gate.classifierRevisionIsSha = revIsSha && revCommitExists === true;
 const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence && gate.composeVersionMatches && gate.evalGateCasesPresent && gate.classifierTagPresent && gate.classifierImageBuilt && gate.classifierRevisionIsSha;
 if (!validForRelease && !allowDirty) {
   console.error('[test:release] 发布证据链门禁未过：' + JSON.stringify({ ...gate, tag: git.tag, tagExpected, dirtyCount: git.dirty.length }));

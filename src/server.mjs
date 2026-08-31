@@ -1649,8 +1649,9 @@ function startEvalJob(body) {
   const modelId = String(body?.modelId || '').trim();
   if (!['checkup', 'full', 'interleaved'].includes(type)) throw new Error('type 必须是 checkup（体检冒烟）、full（56 题稳定性巡检）或 interleaved（交错评测——多模型同窗口轮转+Judge 评分+置信区间，仅出建议值）');
   if (type === 'interleaved') {
-    const ids = Array.isArray(body?.modelIds) ? body.modelIds.map(String) : [];
-    if (ids.length < 2) throw new Error('interleaved 至少要 2 个模型（modelIds 数组）');
+    const ids0 = Array.isArray(body?.modelIds) ? body.modelIds.map(String) : [];
+    const ids = [...new Set(ids0)]; // v0.11.1：去重——防 [A,A] 重复付费/键覆盖/伪 pairwise
+    if (ids.length < 2) throw new Error('interleaved 至少要 2 个不同模型（modelIds 数组，已去重）');
     if (ids.length > 4) throw new Error('interleaved 最多 4 个模型（预算保护）');
     const unknown = ids.filter((id) => !(config.models || []).some((m) => m.id === id));
     if (unknown.length) throw new Error(`模型不在注册表：${unknown.join('、')}`);
@@ -1699,46 +1700,64 @@ async function runInterleavedEval(job) {
   const totalCalls = bank.length * job.modelIds.length;
   job.total = totalCalls;
 
-  // 逐题交错：题 → 每模型依次作答（同窗口内完成，负荷条件可比）
-  for (const c of bank) {
-    const isWarmup = bank.indexOf(c) < WARMUP;
-    for (const mid of job.modelIds) {
+  // v0.11.1：逐题轮换执行顺序（Latin rotation——第 k 题从 modelIds[k % N] 起始轮转，
+  // 消除「A 永远先答」的位置/负载偏差；每模型的前 WARMUP 次调用仍是预热）
+  let callIndexByModel = Object.fromEntries(job.modelIds.map((m) => [m, 0]));
+  for (let ci = 0; ci < bank.length; ci++) {
+    if (job.cancelRequested) { job.status = 'cancelled'; job.finishedAt = new Date().toISOString(); return; }
+    const c = bank[ci];
+    const isWarmup = ci < WARMUP;
+    const N = job.modelIds.length;
+    const order = job.modelIds.map((_, k) => job.modelIds[(ci + k) % N]); // 第 ci 题轮转起点
+    for (const mid of order) {
+      callIndexByModel[mid] += 1;
+      const modelWarmup = callIndexByModel[mid] <= WARMUP; // 每模型独立前 N 次调用=预热（不吞题）
       try {
         const r = await callUpstreamChat(mid, c.prompt, c.maxTokens || 512);
         const ok = r.text.length > 0;
-        job.results.push({ caseId: c.id, task: c.task || null, model: mid, warmup: isWarmup, ok,
-          answer: r.text.slice(0, 2000), latencyMs: r.latencyMs,
+        job.results.push({ caseId: c.id, task: c.task || null, model: mid, warmup: modelWarmup, ok,
+          answer: r.text, prompt: c.prompt, // v0.11.1：完整保存原题与全文答案（Judge 必须看到题目；截断交给 buildJudgeMessages 的 12000 预算）
+          latencyMs: r.latencyMs,
           rubric: c.rubric, judgeScore: null, judgeError: null });
-        if (!ok && !isWarmup) job.failed += 1;
+        if (!ok && !modelWarmup) job.failed += 1;
       } catch (error) {
-        job.results.push({ caseId: c.id, task: c.task || null, model: mid, warmup: isWarmup, ok: false,
-          answer: '', latencyMs: null, rubric: c.rubric, judgeScore: null,
+        job.results.push({ caseId: c.id, task: c.task || null, model: mid, warmup: modelWarmup, ok: false,
+          answer: '', prompt: c.prompt, latencyMs: null, rubric: c.rubric, judgeScore: null,
           judgeError: null, error: String(error?.message || error).slice(0, 120), errorType: classifyEvalError(String(error?.message || error)) });
-        if (!isWarmup) job.failed += 1;
+        if (!modelWarmup) job.failed += 1;
       }
       job.done += 1;
     }
   }
 
   // Judge 评分：仅非预热且 ok 的作答
+  // v0.11.1：Judge 评分走 normalizeDimension（越界分归一/verifiable:false 置 null——与生产质量评审同规范）
+  // + JudgeGuard 预算（dailyMaxCalls/Tokens/熔断——与生产同一 Guard，超额即停并如实标注）
+  job.judge = { ...job.judge, scored: 0, skippedBudget: 0, skippedError: 0, noRubric: 0 };
   if (judgeReady) {
     const common = { model: jModel, baseUrl: jBase, apiKey: jKey, timeoutMs: Number(jc.timeoutMs) || 60000, fetchImpl: fetch, maxOutputTokens: 1024 };
     for (const r of job.results) {
-      if (r.warmup || !r.ok || !r.rubric) continue;
+      if (job.cancelRequested) { job.status = 'cancelled'; job.finishedAt = new Date().toISOString(); return; }
+      if (r.warmup || !r.ok) continue;
+      if (!r.rubric) { job.judge.noRubric += 1; r.judgeError = 'no_rubric'; continue; }
+      const rq = judgeGuard.reserve({ estTokens: 8000 });
+      if (!rq.ok) { r.judgeError = `budget:${rq.reason}`; job.judge.skippedBudget += 1; continue; }
       try {
         const jm = await callJudgeModel({ ...common,
           messages: buildJudgeMessages({ messages: [{ role: 'user', content: c_prompt(r) }], answerText: r.answer }) });
-        if (!jm.ok) { r.judgeError = jm.error; continue; }
+        if (!jm.ok) { judgeGuard.settle(rq.handle, { ok: false }); r.judgeError = jm.error; job.judge.skippedError += 1; continue; }
         const parsed = parseJudgeJson(jm.text);
         const dims = parsed && typeof parsed === 'object' ? parsed : null;
-        if (!dims) { r.judgeError = 'unparseable'; continue; }
-        const scores = ['correctness', 'instruction_following', 'completeness', 'safety']
-          .map((k) => (dims[k] && typeof dims[k] === 'object' ? Number(dims[k].score) : NaN))
-          .filter((v) => Number.isFinite(v));
-        // 可核验维度缺失时用其余维度均值（Judge rubric 语义：verifiable=false 不打分≠低分）
+        if (!dims) { judgeGuard.settle(rq.handle, { ok: false }); r.judgeError = 'unparseable'; job.judge.skippedError += 1; continue; }
+        const norm = ['correctness', 'instruction_following', 'completeness', 'safety']
+          .map((k) => normalizeDimension(dims[k]));
+        const scores = norm.map((d) => d.score).filter((v) => typeof v === 'number');
+        judgeGuard.settle(rq.handle, { ok: true });
+        // 全维度缺失才不计分；部分缺失用可得维度均值（normalizeDimension 已把 verifiable:false 的脏分清掉）
         r.judgeScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
-        if (r.judgeScore == null) r.judgeError = 'no_scored_dim';
-      } catch (e) { r.judgeError = String(e?.message || e).slice(0, 100); }
+        if (r.judgeScore == null) { r.judgeError = 'no_scored_dim'; continue; }
+        job.judge.scored += 1;
+      } catch (e) { judgeGuard.settle(rq.handle, { ok: false }); r.judgeError = String(e?.message || e).slice(0, 100); job.judge.skippedError += 1; }
     }
   }
 
@@ -1756,26 +1775,37 @@ async function runInterleavedEval(job) {
       latencyMs: lat.length >= 3 ? bootstrap(lat, { seed: 43 }) : { mean: lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null, lo: null, hi: null, n: lat.length, note: '样本<3 不出 CI' },
     };
   }
+  // v0.11.1：两两比较改配对 bootstrap——同一题的 (scoreA, scoreB) 求 diff 后重采样（保留题目难度协方差；
+  // 二十审反例：恒定领先 1 分时独立采样会丢协方差判不显著，配对后 CI 严格为 1）
   const pairwise = [];
   for (let i = 0; i < job.modelIds.length; i++) for (let j = i + 1; j < job.modelIds.length; j++) {
     const A = job.modelIds[i], B = job.modelIds[j];
-    const qa = job.results.filter((r) => r.model === A && !r.warmup).map((r) => r.judgeScore).filter((v) => typeof v === 'number');
-    const qb = job.results.filter((r) => r.model === B && !r.warmup).map((r) => r.judgeScore).filter((v) => typeof v === 'number');
-    pairwise.push({ a: A, b: B, qualityDiff: bootstrapDiff(qa, qb, { seed: 44 }) });
+    const byCaseA = new Map(job.results.filter((r) => r.model === A && !r.warmup && typeof r.judgeScore === 'number').map((r) => [r.caseId, r.judgeScore]));
+    const byCaseB = new Map(job.results.filter((r) => r.model === B && !r.warmup && typeof r.judgeScore === 'number').map((r) => [r.caseId, r.judgeScore]));
+    const diffs = [...byCaseA.keys()].filter((cid) => byCaseB.has(cid)).map((cid) => byCaseA.get(cid) - byCaseB.get(cid));
+    pairwise.push({ a: A, b: B, pairedN: diffs.length,
+      qualityDiff: diffs.length >= 3 ? bootstrap(diffs, { seed: 44 }) : { mean: diffs.length ? diffs.reduce((x, y) => x + y, 0) / diffs.length : null, lo: null, hi: null, n: diffs.length, note: '配对样本<3 不出 CI' },
+      significant: null });
+    const ci = pairwise[pairwise.length - 1].qualityDiff;
+    if (ci.lo != null) pairwise[pairwise.length - 1].significant = ci.lo > 0 || ci.hi < 0;
   }
+  // v0.11.1：Judge 覆盖率入 summary——缺失原因可见（预算/失败/无 rubric），不静默
+  const scoredTotal = job.results.filter((r) => !r.warmup && r.ok && r.rubric).length;
   job.summary = {
     kind: 'interleaved',
+    judgeReadyRate: scoredTotal ? (job.judge?.scored || 0) / scoredTotal : null,
+    judgeSkip: { budget: job.judge?.skippedBudget || 0, error: job.judge?.skippedError || 0, noRubric: job.judge?.noRubric || 0 },
     models: perModel,
     pairwise,
     judgeConfigured: judgeReady,
-    note: '交错评测=同窗口轮转+Judge 四维评分+bootstrap 95% CI。结果仅为建议值：不自动改质量分/时延参数，采纳需管理员在「模型参数」页确认后发布。',
+    note: '交错评测=同窗口轮转（逐题轮换次序）+Judge 四维评分+bootstrap 95% CI（两两比较为同题配对差值）。结果仅为建议值：不自动改质量分/时延参数，采纳需管理员在「模型参数」页确认后发布。',
 
   };
   job.status = 'done';
   job.finishedAt = new Date().toISOString();
 }
-// 题面构造（含 rubric 上下文，Judge 评分更稳）
-function c_prompt(r) { return `[任务要求]\n${r.rubric || ''}\n[题目]\n请根据任务要求完成。（评测题 #${r.caseId}）`; }
+// v0.11.1：题面构造——必须含原题正文（Judge 要能核验「答的是不是这道题」），rubric 作评分标准附后
+function c_prompt(r) { return `${r.prompt || ''}\n\n（评分标准供参考：${r.rubric || '无'}）`; }
 
 // v0.10.5：评测错误统一分类（与十九审建议对齐：empty_response/timeout/http_401/http_429/http_5xx/invalid_payload/other）
 function classifyEvalError(msg) {
@@ -3078,6 +3108,17 @@ const server = http.createServer(async (req, res) => {
   }
   // ── P2 评测任务：POST 起任务 / GET 查进度
   if (url.pathname === '/admin/api/eval-jobs') {
+    // v0.11.1：取消评测任务（执行与 Judge 循环均检查 cancelRequested）
+    if (req.method === 'POST' && url.searchParams.get('action') === 'cancel') {
+      try {
+        const body = await readJson(req);
+        const job = getEvalJob(body?.id);
+        if (!job) return errorJson(res, 404, '任务不存在或已过期', 'eval_job_not_found');
+        if (job.finishedAt) return json(res, 200, { ok: true, alreadyFinished: true, status: job.status });
+        job.cancelRequested = true;
+        return json(res, 202, { ok: true, cancelling: true });
+      } catch (error) { return errorJson(res, 400, error.message, 'invalid_body'); }
+    }
     if (req.method === 'POST') {
       try {
         const body = await readJson(req);

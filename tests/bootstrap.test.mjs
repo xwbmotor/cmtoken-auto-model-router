@@ -22,7 +22,8 @@ test('bootstrap：空/单样本/非数值边界', () => {
   assert.strictEqual(bootstrap(null).n, 0);
   assert.strictEqual(bootstrap([1, NaN, undefined, 2]).n, 2);
   const single = bootstrap([5]);
-  assert.strictEqual(single.lo, 5); assert.strictEqual(single.hi, 5);
+  // v0.11.1 契约：n<2 不出区间
+  assert.strictEqual(single.lo, null); assert.strictEqual(single.hi, null); assert.strictEqual(single.mean, 5);
 });
 
 test('bootstrapDiff：明显差异显著、相同分布不显著', () => {

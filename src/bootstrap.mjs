@@ -34,7 +34,8 @@ export function bootstrap(values, { repeats = 2000, alpha = 0.05, seed = 42, sta
   const mean = arr.reduce((a, b) => a + b, 0) / n;
   const sorted0 = [...arr].sort((a, b) => a - b);
   const median = quantile(sorted0, 0.5);
-  if (n < 2) return { mean, median, lo: arr[0], hi: arr[0], n };
+  // v0.11.1：n<2 无重采样可言——lo/hi 置 null（与「样本<2 不出区间」契约一致）
+  if (n < 2) return { mean, median, lo: null, hi: null, n };
 
   const rand = mulberry32(seed);
   const estimates = new Array(repeats);

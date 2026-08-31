@@ -71,6 +71,7 @@ test('e2e interleaved：双模型交错+Judge 评分+CI 汇总（仅建议值）
 
   try {
     const cfg = structuredClone(base);
+    cfg.judge = { ...(cfg.judge || {}), guardStatePath: join(dir, 'judge-guard-state.json') }; // v0.11.1: guard 状态落测试目录（防污染项目 data/）
     cfg.decisionLog = { ...cfg.decisionLog, enabled: false, dirPath: cfg.decisionLog?.dirPath || './data/decisions' };
     writeFileSync(join(dir, 'router.json'), JSON.stringify(cfg));
     // 缩小题库：6 题（前 2 题每模型预热不计分，后 4 题计分）
@@ -111,9 +112,20 @@ test('e2e interleaved：双模型交错+Judge 评分+CI 汇总（仅建议值）
     }
     assert.strictEqual(job.status, 'done', 'job 应完成: ' + JSON.stringify(job).slice(0, 300));
     assert.strictEqual(job.total, 12); // 6 题 × 2 模型
-    // 交错顺序：第 1 题的 A、B 相邻
+    // v0.11.1 轮换顺序：第 1 题 (ci=0) A,B；第 2 题 (ci=1) B,A——位置偏差消除
     assert.strictEqual(job.results[0].caseId, 'i1'); assert.strictEqual(job.results[0].model, ID_A);
     assert.strictEqual(job.results[1].caseId, 'i1'); assert.strictEqual(job.results[1].model, ID_B);
+    assert.strictEqual(job.results[2].caseId, 'i2'); assert.strictEqual(job.results[2].model, ID_B, '第 2 题应从 B 起始轮转');
+    assert.strictEqual(job.results[3].caseId, 'i2'); assert.strictEqual(job.results[3].model, ID_A);
+    // 预热语义：每模型前 2 次「调用」为预热（不再吞题）——A/B 在 i1、i2 各有 1-2 次调用，i3 起两人都计分
+    const aWarm = job.results.filter((x) => x.model === ID_A && x.warmup).length;
+    const bWarm = job.results.filter((x) => x.model === ID_B && x.warmup).length;
+    assert.strictEqual(aWarm, 2, 'A 恰好 2 次预热'); assert.strictEqual(bWarm, 2, 'B 恰好 2 次预热');
+    // Judge 覆盖统计
+    assert.ok(job.summary.judgeReadyRate != null && job.summary.judgeReadyRate > 0, 'judgeReadyRate 应有值');
+    // 配对比较字段
+    assert.strictEqual(job.summary.pairwise[0].pairedN, 4, '6 题 - 2 预热 = 4 对');
+    assert.strictEqual(job.summary.pairwise[0].significant, true, '恒定 6 分差配对应显著');
     // 预热：i1、i2 warmup=true，i3 起 false
     assert.strictEqual(job.results[0].warmup, true);
     assert.strictEqual(job.results.find((x) => x.caseId === 'i3' && x.model === ID_A).warmup, false);
@@ -125,14 +137,15 @@ test('e2e interleaved：双模型交错+Judge 评分+CI 汇总（仅建议值）
       `A=${s.models[ID_A].quality.mean} B=${s.models[ID_B].quality.mean}`);
     // 时延：B（30ms）均值应大于 A（5ms）
     assert.ok(s.models[ID_B].latencyMs.mean > s.models[ID_A].latencyMs.mean);
-    // 两两对比显著
-    const d = s.pairwise[0].qualityDiff;
-    assert.strictEqual(d.significant, true);
-    assert.ok(d.lo > 0);
+    // 两两对比显著（v0.11.1：significant 在 pairwise 顶层，qualityDiff 为配对 CI）
+    assert.strictEqual(s.pairwise[0].significant, true);
+    assert.ok(s.pairwise[0].qualityDiff.lo > 0);
     // 仅建议值：质量分不得被改
     const after = await (await fetch(`http://127.0.0.1:${port}/admin/api/config`, { headers: H })).json();
-    assert.strictEqual(after.models.find((m) => m.id === ID_A).quality.default,
-                       before.models.find((m) => m.id === ID_A).quality.default, '质量分不得被自动修改');
+    for (const m of before.models) {
+      const a = after.models.find((x) => x.id === m.id);
+      assert.deepStrictEqual(a, m, `模型 ${m.id} 全量配置不得被自动修改`);
+    }
   } finally {
     if (child) child.kill();
     upstream.close(); judge.close();

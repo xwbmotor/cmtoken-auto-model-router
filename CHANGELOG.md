@@ -2,6 +2,19 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.11.1] - 2026-08-31
+
+二十审收口（P1×5 + P2×6 全量修复）：
+- P1 XSS 全页面收口：能力矩阵/画像/能力表/部署表/基线报告（displayName×5 + m.id×3）、任务榜 picks、市场信号模型名、基线 arm 名与 highlights 全部 escHtml——上游恶意模型 ID 经发现-注册链不再可注入；
+- P1 交错评测 Judge 看得到原题：results 保存完整 prompt 与全文 answer（截断交给 buildJudgeMessages 的 12000 预算），c_prompt 含原题正文+rubric 附注；
+- P1 评分规范化：Judge 维度统一过 normalizeDimension（[0,10] 归一、verifiable:false 置 null），与生产质量评审同规范；summary 新增 judgeReadyRate + judgeSkip{budget,error,noRubric}——缺失原因不再静默；
+- P1 JudgeGuard 预算接入：交错评测 Judge 调用走 reserve/settle（dailyMaxCalls/Tokens/熔断与生产同一 Guard），超额即停并标注；新增任务取消端点 POST /admin/api/eval-jobs?action=cancel（执行与 Judge 循环均检查 cancelRequested）；
+- P1 发布门禁绑真实 commit：classifier revision 除 40 位 SHA 格式外须 git cat-file -t 验证为仓库真实 commit（伪造全零不再通过）；
+- P2 两两比较改配对 bootstrap：同 caseId 求 scoreA−scoreB 后重采样（保留题目难度协方差；恒定领先场景 CI 正确收窄）；pairwise 带 pairedN 与 significant；
+- P2 交错顺序逐题轮换（Latin rotation）：第 k 题从 modelIds[k%N] 起始，消除「A 永远先答」的位置/负载偏差；预热改为每模型前 2 次「调用」（不再吞掉题库前 2 题）；
+- P2 modelIds 去重（[A,A] 拒绝）；bootstrap 单样本 lo/hi=null 契约对齐；
+- 测试：bootstrap 契约更新、interleaved 断言强化（轮换顺序/独立预热/配对显著/judgeReadyRate/全模型 config 不变）、新增 eval-interleaved-2（去重+取消端点）。
+
 ## [0.11.0] - 2026-08-31
 
 交错评测（十六~十九审规划的能力正式落地）：

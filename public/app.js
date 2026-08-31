@@ -50,7 +50,7 @@ async function renderTaskBoard() {
     if (!data.board?.length) { rows.innerHTML = '<tr><td colspan="5" class="empty">暂无决策记录（需开启决策日志）。</td></tr>'; return; }
     rows.innerHTML = data.board.map((b) => {
       const cells = [0, 1, 2].map((i) => b.picks[i]
-        ? `<td>${b.picks[i].model} <span class="pill ${i === 0 ? 'good' : 'muted'}">${b.picks[i].share}%${b.picks[i].fails ? ` ·失败${b.picks[i].fails}` : ''}</span></td>`
+        ? `<td>${escHtml(b.picks[i].model)} <span class="pill ${i === 0 ? 'good' : 'muted'}">${b.picks[i].share}%${b.picks[i].fails ? ` ·失败${b.picks[i].fails}` : ''}</span></td>`
         : '<td class="empty">—</td>').join('');
       const sc = subCategoryOf(b.task, b.sub);
       const subLabel = b.subLabel || sc[3];
@@ -80,7 +80,7 @@ async function renderMarketSignal() {
         const items = Object.entries(models).map(([m, sg]) => {
           const adj = sg.adjust ? `<span style="color:${sg.adjust > 0 ? 'var(--good,#067647)' : 'var(--danger,#b42318)'};font-weight:600">（${sg.adjust > 0 ? '+' : ''}${sg.adjust}）</span>` : '';
           const fails = sg.fails ? ` <span style="color:var(--danger,#b42318)">失败${sg.fails}</span>` : '';
-          return `${m} ${sg.share}%${adj}${fails}`;
+          return `${escHtml(m)} ${sg.share}%${adj}${fails}`;
         }).join('；');
         return `<div><strong>${TASK_LABELS[task] || task}</strong>：${items}</div>`;
       }).join('');
@@ -96,8 +96,8 @@ async function renderRoutingReport() {
   rows.innerHTML = '<tr><td colspan="4" class="empty">计算中…</td></tr>';
   try {
     const data = await api('/admin/api/routing-report');
-    rows.innerHTML = data.arms.map((a) => `<tr${a.name.startsWith('auto') ? ' style="font-weight:600;background:#f5f6fc"' : ''}><th>${a.name}${a.name.startsWith('auto') ? ' ⭐' : ''}</th><td>${a.quality}</td><td>${a.costIndex}</td><td>${a.latencyIndex}</td></tr>`).join('');
-    hl.innerHTML = (data.highlights || []).map((t) => `<div class="highlight">${t}</div>`).join('');
+    rows.innerHTML = data.arms.map((a) => `<tr${a.name.startsWith('auto') ? ' style="font-weight:600;background:#f5f6fc"' : ''}><th>${escHtml(a.name)}${a.name.startsWith('auto') ? ' ⭐' : ''}</th><td>${a.quality}</td><td>${a.costIndex}</td><td>${a.latencyIndex}</td></tr>`).join('');
+    hl.innerHTML = (data.highlights || []).map((t) => `<div class="highlight">${escHtml(t)}</div>`).join('');
   } catch (e) { rows.innerHTML = `<tr><td colspan="4" class="empty">${e.message}</td></tr>`; }
 }
 //总览 · 策略快照 + 任务分布（撑起总览信息密度）
@@ -399,7 +399,7 @@ function renderSubMatrix() {
   const rowBody = config.models.map((m, i) => {
     const dim = m.enabled ? '' : ' dim';
     const subs = m.benchmarkScores?.subtasks || {};
-    return `<tr data-row="${i}"><th class="row-head-cell"><div class="cap-model${dim}"><strong>${m.displayName || m.id}</strong><small>${m.id}</small></div></th>${keys.map((k) => {
+    return `<tr data-row="${i}"><th class="row-head-cell"><div class="cap-model${dim}"><strong>${escHtml(m.displayName || m.id)}</strong><small>${escHtml(m.id)}</small></div></th>${keys.map((k) => {
       const v = subs[k];
       if (!v) return `<td class="matrix-cell empty" data-model="${i}" data-sub="${k}">—</td>`;
       const isBest = best[k] != null && Math.abs(Number(v.avg) - best[k]) < 1e-9;
@@ -427,7 +427,7 @@ function renderProfile() {
     const scores = bs.scores && Object.keys(bs.scores).length ? Object.entries(bs.scores).map(([k, v]) => `<span class="pill ${v >= 0.8 ? 'good' : 'muted'}" title="${k}">${k} ${Number(v).toFixed(3).replace(/0+$/,'').replace(/\.$/,'')}</span>`).join(' ') : '<span class="pill muted">未录入</span>';
     const eg = bs.evalGate;
     const gate = eg ? CAP_TASKS.filter(t => eg[t] != null).map(t => `<span class="pill ${eg[t] >= Math.max(...CAP_TASKS.map(k => Number(eg[k]) || 0)) - 1e-9 ? 'good' : ''}" title="${CAP_TASK_LABEL[t]} ${eg[t]}">${CAP_TASK_LABEL[t]} ${eg[t]}</span>`).join(' ') + (eg.total != null ? `<span class="pill ${eg.total >= bestTotal - 1e-9 && eg.total > 0 ? 'good' : ''}" title="总均分${eg.total >= bestTotal - 1e-9 && eg.total > 0 ? '（三模型最高）' : ''}">总 ${eg.total}</span>` : '') : '<span class="pill muted">未实测</span>';
-    return `<tr><th><div class="cap-model${dim}"><strong>${m.displayName || m.id}</strong><small>${m.id}</small></div></th><td>${scores}</td><td>${gate}</td></tr>`;
+    return `<tr><th><div class="cap-model${dim}"><strong>${escHtml(m.displayName || m.id)}</strong><small>${escHtml(m.id)}</small></div></th><td>${scores}</td><td>${gate}</td></tr>`;
   }).join('');
   renderSubMatrix();
 }
@@ -439,7 +439,7 @@ async function showSubDetail(modelIdx, subKey) {
   const cat = `${catIcon || ''} ${catCn}`;
   $('profileDetail').hidden = false;
   $('profileDetail').innerHTML = `<div class="panel-head"><div><p class="eyebrow">小类明细</p><h3>${label} <small>${cat}</small></h3></div><button class="secondary" onclick="document.getElementById('profileDetail').hidden=true">收起</button></div>
-  <p class="hint">模型 ${m.displayName || m.id} · ${label}（${catCn}）均分 <strong>${v.avg}</strong> · 样本 ${v.n} 条 · 实测时间 ${meta.at || '—'} · 裁判 ${meta.judge || '—'}</p>`;
+  <p class="hint">模型 ${escHtml(m.displayName || m.id)} · ${label}（${catCn}）均分 <strong>${v.avg}</strong> · 样本 ${v.n} 条 · 实测时间 ${meta.at || '—'} · 裁判 ${meta.judge || '—'}</p>`;
 }
 function bindProfile() {
   const summaryTb = $('profileRows');
@@ -491,11 +491,11 @@ function renderCapabilityMatrix() {
       const bg = m.enabled ? ` style="background:rgba(18,145,80,${(heat * 0.38).toFixed(3)})"` : ''; //未启用行去色阶只灰显
       return `<td${bg}><div class="cap-cell${dim}"><input class="cap-input" data-task="${t}" data-index="${i}" type="number" min="0" max="1" step="0.001" value="${v}">${crown}</div></td>`;
     }).join('');
-    return `<tr><th><div class="cap-model${dim}"><strong>${m.displayName || m.id}</strong><span class="pill ${m.enabled ? 'good' : 'muted'}" style="margin-left:8px">${m.enabled ? '启用中' : '已停用'}</span><small>${m.id}</small></div></th>${cells}</tr>`;
+    return `<tr><th><div class="cap-model${dim}"><strong>${escHtml(m.displayName || m.id)}</strong><span class="pill ${m.enabled ? 'good' : 'muted'}" style="margin-left:8px">${m.enabled ? '启用中' : '已停用'}</span><small>${escHtml(m.id)}</small></div></th>${cells}</tr>`;
   }).join('');
 }
 $('capRows').addEventListener('input', (e) => { if (!e.target.classList.contains('cap-input')) return; const idx = Number(e.target.dataset.index); const task = e.target.dataset.task; const v = e.target.value === '' ? null : Number(e.target.value); config.models[idx].quality[task] = v; syncDirty(); scheduleSimulation(); });
-function renderDeployment() { const cm = config.costModel || {}; const source = cm.source || 'deployment'; $('costSource').value = source; $('pricingMixInput').value = cm.pricingMix?.input ?? 10; $('pricingMixOutput').value = cm.pricingMix?.output ?? 1; $('beansPerYuan').value = config.budget?.beansPerYuan ?? ''; const cardPrice = cm.cardPrice || {}; const computed = source === 'pricing' ? (computeCostIndexFromPricingClient(config.models, cm.pricingMix) || {}) : (computeCostIndexClient(config.models, cardPrice) || {}); $('deployment').innerHTML = config.models.map((m, i) => { const d = m.deployment || {}; return `<tr data-index="${i}"><td><strong>${m.displayName || m.id}</strong></td><td><select class="device-type"><option value="910B2" ${d.deviceType === '910B2' ? 'selected' : ''}>910B2</option><option value="910B4" ${d.deviceType === '910B4' ? 'selected' : ''}>910B4</option></select></td><td><input class="machines" type="number" min="1" step="1" value="${d.machines ?? ''}" placeholder="设备数"></td><td><input class="cards" type="number" min="1" step="1" value="${d.cardsPerMachine ?? ''}" placeholder="单机卡数"></td><td><input class="instances" type="number" min="1" step="1" value="${d.instances ?? ''}" placeholder="实例数"></td><td><input class="concurrency" type="number" min="1" step="1" value="${d.concurrencyPerInstance ?? ''}" placeholder="单实例并发"></td><td>${d.instances && d.concurrencyPerInstance ? `<span class="pill good">${d.totalConcurrency ?? d.instances * d.concurrencyPerInstance}</span>` : '<span class="pill muted">—</span>'}</td><td><input class="tps" type="number" min="1" value="${d.tps ?? ''}" placeholder="tokens/s"></td><td><span class="cost-preview pill ${computed[m.id] != null ? 'good' : 'muted'}">${computed[m.id] ?? '待录入'}</span></td></tr>`; }).join(''); }
+function renderDeployment() { const cm = config.costModel || {}; const source = cm.source || 'deployment'; $('costSource').value = source; $('pricingMixInput').value = cm.pricingMix?.input ?? 10; $('pricingMixOutput').value = cm.pricingMix?.output ?? 1; $('beansPerYuan').value = config.budget?.beansPerYuan ?? ''; const cardPrice = cm.cardPrice || {}; const computed = source === 'pricing' ? (computeCostIndexFromPricingClient(config.models, cm.pricingMix) || {}) : (computeCostIndexClient(config.models, cardPrice) || {}); $('deployment').innerHTML = config.models.map((m, i) => { const d = m.deployment || {}; return `<tr data-index="${i}"><td><strong>${escHtml(m.displayName || m.id)}</strong></td><td><select class="device-type"><option value="910B2" ${d.deviceType === '910B2' ? 'selected' : ''}>910B2</option><option value="910B4" ${d.deviceType === '910B4' ? 'selected' : ''}>910B4</option></select></td><td><input class="machines" type="number" min="1" step="1" value="${d.machines ?? ''}" placeholder="设备数"></td><td><input class="cards" type="number" min="1" step="1" value="${d.cardsPerMachine ?? ''}" placeholder="单机卡数"></td><td><input class="instances" type="number" min="1" step="1" value="${d.instances ?? ''}" placeholder="实例数"></td><td><input class="concurrency" type="number" min="1" step="1" value="${d.concurrencyPerInstance ?? ''}" placeholder="单实例并发"></td><td>${d.instances && d.concurrencyPerInstance ? `<span class="pill good">${d.totalConcurrency ?? d.instances * d.concurrencyPerInstance}</span>` : '<span class="pill muted">—</span>'}</td><td><input class="tps" type="number" min="1" value="${d.tps ?? ''}" placeholder="tokens/s"></td><td><span class="cost-preview pill ${computed[m.id] != null ? 'good' : 'muted'}">${computed[m.id] ?? '待录入'}</span></td></tr>`; }).join(''); }
 function readForm() {
   const r = config.routing; r.costTier = document.querySelector('input[name="costTier"]:checked')?.value || 'custom'; r.mode = $('mode').value; r.autoModelId = $('autoModelId').value.trim() || 'auto'; r.exposeModelList = $('exposeModelList').value; r.activeTrafficPercent = Number($('activeTrafficPercent').value); r.qualityFloor = Number($('qualityFloor').value); r.selfHostedBonus = Number($('selfBonus').value); r.qualityWeight = Number($('qualityWeight').value); r.costWeight = Number($('costWeight').value); r.latencyWeight = Number($('latencyWeight').value); r.providerCostWeight = Number($('providerCostWeight').value); r.uncertaintyPenalty = Number($('uncertaintyPenalty').value); r.complexQualityMargin = Number($('complexQualityMargin').value); r.maxAttempts = Number($('maxAttempts').value); r.preferSelfHosted = $('preferSelf').checked;
   //新滑条收集
