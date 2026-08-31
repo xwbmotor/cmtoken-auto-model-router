@@ -3077,6 +3077,24 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && url.pathname === '/admin/api/config') return json(res, 200, config);
   // ── P1 模型发现：代理上游 GET /v1/models（30s 缓存），勾选注册用。key 永不出服务端。
+  // v0.11.8：流水线向导第一步——管理员现场填端点+key 探测（POST，key 只用于本次请求，不落盘不回显不进日志）
+  if (req.method === 'POST' && url.pathname === '/admin/api/discover-probe') {
+    try {
+      const body = await readJson(req);
+      const base = String(body?.baseUrl || '').trim().replace(/\/$/, '');
+      const key = String(body?.apiKey || '').trim();
+      if (!/^https?:\/\/.+/.test(base)) return errorJson(res, 400, '端点必须是 http(s) URL（如 https://host:port/v1）', 'invalid_request_error');
+      if (!key) return errorJson(res, 400, '请填写该端点的 API Key', 'invalid_request_error');
+      const res2 = await fetch(`${base}/models`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15000) });
+      if (!res2.ok) return errorJson(res, 502, `端点返回 HTTP ${res2.status}——请核对 URL 与 Key（key 是否有 /models 权限）`, 'discover_probe_error');
+      const payload = await res2.json();
+      const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : [];
+      const registered = new Set((config.models || []).map((m) => m.id));
+      const models = list.map((m) => ({ id: m.id, registered: registered.has(m.id), ownedBy: m.owned_by || null }));
+      return json(res, 200, { total: models.length, newCount: models.filter((m) => !m.registered).length, models,
+        upstream: { baseUrl: base, keyMasked: key.slice(0, 6) + '…' + key.slice(-4) } });
+    } catch (error) { return errorJson(res, 502, `探测失败：${error.message}（URL 拼写/网络可达性/Key 有效性）`, 'discover_probe_error'); }
+  }
   if (req.method === 'GET' && url.pathname === '/admin/api/discover-models') {
     try {
       const r = await fetchUpstreamModels();

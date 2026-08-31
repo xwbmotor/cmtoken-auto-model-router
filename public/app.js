@@ -713,44 +713,68 @@ async function refreshOfflineAlerts() {
   } catch {}
 }
 
+// v0.11.8：发现模型=两步向导。第一步填端点+key（留空可展开用服务端已配——由后端 GET 兜底）；第二步探测+勾选注册。
+// key 只在第二步 POST 请求体内一次性使用，不落 config、不回显、不进日志。
 async function openDiscover() {
   const modal = $id('discoverModal'); const body = $id('discoverBody');
   modal.style.display = 'flex';
-  body.innerHTML = '<p class="hint">正在从上游拉取模型列表…</p><div style="margin-top:14px"><button id="discoverRetry" class="secondary btn-mini">重试</button> <button id="discoverCancel2" class="secondary btn-mini">关闭</button></div>';
-  $id('discoverRetry').onclick = () => openDiscover();
-  $id('discoverCancel2').onclick = () => { $id('discoverModal').style.display = 'none'; };
-  try {
-    const r = await fetch('/admin/api/discover-models', { headers: { authorization: `Bearer ${token}` } });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error?.message || r.status);
+  // ── 第一步：填写端点与密钥 ──
+  body.innerHTML = `
+    <p class="hint" style="margin-bottom:12px">第 1 步 · 填写上游端点与密钥（OpenAI 兼容格式，例如 https://host:port/v1）。密钥只用于本次拉取，不会保存。</p>
+    <label style="display:block;margin-bottom:10px"><span class="lbl">上游端点 URL</span>
+      <input id="dcBaseUrl" type="text" placeholder="https://maas.example.com:36007/v1" style="width:100%"></label>
+    <label style="display:block;margin-bottom:14px"><span class="lbl">API Key</span>
+      <input id="dcApiKey" type="password" placeholder="sk-…" style="width:100%"></label>
+    <details style="margin-bottom:12px"><summary class="hint">不填，直接用服务端已配置的上游（.env）</summary>
+      <p class="hint" style="margin-top:6px">点下方「发现模型」将使用服务端 .env 里的 UPSTREAM_BASE_URL / UPSTREAM_API_KEY 拉取。</p></details>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button id="dcCancel1" class="secondary">取消</button>
+      <button id="dcNext" class="primary">发现模型</button>
+    </div>`;
+  $id('dcCancel1').onclick = () => { modal.style.display = 'none'; };
+  $id('dcNext').onclick = async () => {
+    const baseUrl = $id('dcBaseUrl').value.trim();
+    const apiKey = $id('dcApiKey').value;
+    // ── 第二步：探测 + 勾选 ──
+    body.innerHTML = '<p class="hint">正在连接端点拉取模型列表…</p>';
+    let d;
+    try {
+      if (baseUrl && apiKey) {
+        const r = await fetch('/admin/api/discover-probe', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + ($('token') ? $('token').value.trim() : '') }, body: JSON.stringify({ baseUrl, apiKey }) });
+        d = await r.json();
+        if (!r.ok) throw new Error(d.error?.message || r.status);
+      } else {
+        const r = await fetch('/admin/api/discover-models', { headers: { authorization: 'Bearer ' + ($('token') ? $('token').value.trim() : '') } });
+        d = await r.json();
+        if (!r.ok) throw new Error(d.error?.message || r.status);
+      }
+    } catch (e) {
+      body.innerHTML = '<p style="color:#c33;margin-bottom:10px">拉取失败：' + escHtml(String(e.message)) + '</p>' +
+        '<div style="display:flex;gap:10px"><button id="dcBack" class="secondary btn-mini">← 回上一步改端点/密钥</button></div>';
+      $id('dcBack').onclick = () => openDiscover();
+      return;
+    }
     const news = d.models.filter(m => !m.registered);
     const olds = d.models.filter(m => m.registered);
     const ups = d.upstream || {};
-    const head = '<p class="hint" style="margin-bottom:10px">上游端点：<code>' + escHtml(ups.baseUrl || '未知') + '</code>' + (ups.keyMasked ? ' · 密钥 <code>' + escHtml(ups.keyMasked) + '</code>' : '') + '</p>';
+    const head = '<p class="hint" style="margin-bottom:10px">第 2 步 · 已连接 <code>' + escHtml(ups.baseUrl || '未知') + '</code>' + (ups.keyMasked ? '（密钥 ' + escHtml(ups.keyMasked) + '）' : '') + '——勾选要纳入管理的模型：</p>';
     const listHtml = news.length
-      ? '<p class="hint">勾选要纳入管理的模型。新纳入的模型<b>不会立即上线</b>：先在下方模型列表补归属、定价、质量分，确认后再手动启用。</p>' +
-        news.map(m => '<label class="discover-row"><input type="checkbox" class="disc-new" value="' + escHtml(m.id) + '"><strong>' + escHtml(m.id) + '</strong><span class="pill muted">新</span></label>').join('')
-      : '<p class="hint">没有发现新模型——上游的模型都已在本页列表中。</p>';
+      ? news.map(m => '<label class="discover-row"><input type="checkbox" class="disc-new" value="' + escHtml(m.id) + '"><strong>' + escHtml(m.id) + '</strong><span class="pill muted">新</span></label>').join('')
+      : '<p class="hint">该端点没有新模型——所有模型都已在下方列表中。</p>';
     const oldsHtml = olds.length ? '<p class="hint" style="margin-top:8px">已在列表中（无需重复添加）：' + olds.map(m => escHtml(m.id)).join('、') + '</p>' : '';
+    const notice = '<p class="hint" style="margin-top:10px">新纳入的模型<b>不会立即上线</b>：先在下方模型列表补归属、定价、质量分，确认后再手动启用。</p>';
     const foot = '<div style="margin-top:14px;display:flex;gap:10px;align-items:center">' +
-      '<button id="discoverRefresh" class="secondary btn-mini">刷新列表</button>' +
-      '<span style="flex:1"></span>' +
-      (news.length ? '<button id="discoverCancel" class="secondary">取消</button><button id="registerSelected" class="primary" disabled>注册所选（0）</button>' : '<button id="discoverCancel" class="secondary">关闭</button>') +
-      '</div>';
-    body.innerHTML = head + listHtml + oldsHtml + foot;
+      '<button id="dcBack2" class="secondary btn-mini">← 换个端点</button><span style="flex:1"></span>' +
+      '<button id="dcCancel2" class="secondary">取消</button>' +
+      '<button id="registerSelected" class="primary" ' + (news.length ? 'disabled' : '') + '>纳入所选（0）</button></div>';
+    body.innerHTML = head + listHtml + oldsHtml + notice + foot;
     const regBtn = $id('registerSelected');
-    const syncReg = () => { const n = document.querySelectorAll('.disc-new:checked').length; if (regBtn) { regBtn.textContent = '注册所选（' + n + '）'; regBtn.disabled = n === 0; } };
+    const syncReg = () => { const n = document.querySelectorAll('.disc-new:checked').length; if (regBtn) { regBtn.textContent = '纳入所选（' + n + '）'; regBtn.disabled = n === 0; } };
     document.querySelectorAll('.disc-new').forEach((c) => c.addEventListener('change', syncReg));
-    $id('discoverRefresh').onclick = () => openDiscover();
-    $id('discoverCancel').onclick = () => { $id('discoverModal').style.display = 'none'; };
+    $id('dcBack2').onclick = () => openDiscover();
+    $id('dcCancel2').onclick = () => { modal.style.display = 'none'; };
     if (regBtn) regBtn.onclick = registerDiscovered;
-  } catch (e) {
-    body.innerHTML = '<p style="color:#c33;margin-bottom:10px">获取失败：' + escHtml(String(e.message)) + '</p>' +
-      '<p>请确认服务端已配置上游端点与密钥（.env 的 UPSTREAM_BASE_URL / UPSTREAM_API_KEY），或稍后重试。</p>' +
-      '<div style="margin-top:14px"><button id="discoverRetry" class="secondary btn-mini">重试</button> <button id="discoverCancel3" class="secondary btn-mini">关闭</button></div>';
-    $id('discoverRetry').onclick = () => openDiscover();
-    $id('discoverCancel3').onclick = () => { $id('discoverModal').style.display = 'none'; };
-  }
+  };
 }
 function registerDiscovered() {
   const picked = [...document.querySelectorAll('.disc-new:checked')].map(c => c.value);
