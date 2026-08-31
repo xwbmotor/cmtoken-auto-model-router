@@ -40,6 +40,7 @@ import { createShutdownManager, installCrashHandlers } from './shutdown.mjs';
 import { createRateLimiter } from './rate-limiter.mjs';
 
 import { shouldPromoteVerified } from './calibration.mjs';
+import { newHealthState, updateHealthState } from './health.mjs';
 
 import { MarketSignal } from './market-signal.mjs';
 
@@ -1204,39 +1205,8 @@ function proposeDominanceReason(cfg) {
 }
 
 function updateHealth(model, ok, latencyMs) {
-
-  const state = health[model] ||= { circuitState: 'closed', probeInFlight: false, consecutiveFailures: 0, successes: 0, failures: 0, ewmaLatencyMs: 0, circuitOpenUntil: 0, lastSuccessAt: 0, downSince: 0, halfOpenFailStreak: 0 };
-
-  state.ewmaLatencyMs = state.ewmaLatencyMs ? Math.round(state.ewmaLatencyMs * 0.8 + latencyMs * 0.2) : latencyMs;
-
-  if (ok) {
-
-    state.circuitState = 'closed'; state.probeInFlight = false; state.consecutiveFailures = 0; state.successes += 1; state.circuitOpenUntil = 0; state.lastSuccessAt = Date.now(); state.downSince = 0; state.halfOpenFailStreak = 0;
-
-  } else {
-
-    const wasProbe = state.circuitState === 'half_open';
-
-    state.probeInFlight = false;
-
-    state.consecutiveFailures += 1; state.failures += 1;
-    state.lastFailureAt = Date.now();
-    if (wasProbe) state.halfOpenFailStreak = (state.halfOpenFailStreak || 0) + 1;
-
-    if (wasProbe || state.consecutiveFailures >= config.routing.circuitBreakerFailures) {
-
-      state.circuitState = 'open';
-
-      state.circuitOpenUntil = Date.now() + config.routing.circuitBreakerCooldownMs;
-
-      // v0.10.3：downSince 只在熔断首次打开时设置（首失败≠宕机——偶发失败后无流量，
-      // 30 分钟后不应被误判为「持续不可用」；无流量不是故障证据）
-      if (!state.downSince) state.downSince = Date.now();
-
-    }
-
-  }
-
+  const state = health[model] ||= newHealthState();
+  return updateHealthState(state, ok, latencyMs, config.routing);
 }
 
 function claimCircuitAttempt(model) {

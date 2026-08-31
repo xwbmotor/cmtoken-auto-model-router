@@ -74,8 +74,13 @@ if (!gate.evalGateCasesPresent) console.error(`[test:release] 题库校验失败
 const classifierTag = collect(() => (/image:\s*cmt-amr-classifier:([^\s#]+)/.exec(composeText) || [])[1]);
 gate.classifierTagPresent = Boolean(classifierTag);
 const classifierImageId = collect(() => classifierTag ? execSync(`docker images --no-trunc --format "{{.ID}}" cmt-amr-classifier:${classifierTag}`, { encoding: 'utf8' }).trim() || null : null);
+const classifierLabelsRevision = collect(() => classifierTag ? execSync(`docker inspect --format "{{ index .Config.Labels \\\\"org.opencontainers.image.revision\\\\" }}" cmt-amr-classifier:${classifierTag}`, { encoding: 'utf8' }).trim() || null : null);
+images.classifierImageId = classifierImageId;          // 进 release 报告证据链
+images.classifierLabelsRevision = classifierLabelsRevision;
 gate.classifierImageBuilt = Boolean(classifierImageId);
-const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence && gate.composeVersionMatches && gate.evalGateCasesPresent && gate.classifierTagPresent && gate.classifierImageBuilt;
+// OCI revision 非空即记录（classifier 独立版本线，revision 指向其自身构建 commit；缺失=无证据=门禁挂）
+gate.classifierRevisionLabeled = Boolean(classifierLabelsRevision);
+const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence && gate.composeVersionMatches && gate.evalGateCasesPresent && gate.classifierTagPresent && gate.classifierImageBuilt && gate.classifierRevisionLabeled;
 if (!validForRelease && !allowDirty) {
   console.error('[test:release] 发布证据链门禁未过：' + JSON.stringify({ ...gate, tag: git.tag, tagExpected, dirtyCount: git.dirty.length }));
   console.error('  正式发布流程：代码+compose 同 commit → docker build --build-arg GIT_REVISION=<HEAD> → git tag v{ver} → 干净 worktree 跑 npm run test:release。');

@@ -159,6 +159,8 @@ test('路由排除：ownership=unknown 的模型不进候选（ownership_unconfi
   const r = routeRequest({ messages: [{ role: 'user', content: '写个快排' }], max_tokens: 100 }, config, { now: Date.now(), health: {} });
   const rejectedIds = (r.rejected || []).map((x) => x.model || x.modelId || x.id);
   assert.ok(rejectedIds.includes(config.models[0].id), 'unknown 模型应进 rejected（ownership_unconfirmed）');
-  const allChosen = [...(r.candidates || []).map((c) => c.modelId), ...(r.pool || []).map((c) => c.modelId)];
+  const rej = (r.rejected || []).find((x) => (x.model || x.modelId) === config.models[0].id);
+  assert.ok(rej.reasons.includes('ownership_unconfirmed'), '拒因必须含 ownership_unconfirmed');
+  const allChosen = [...(r.candidates || []).map((c) => c.model), ...(r.pool || []).map((c) => c.model)];
   assert.ok(!allChosen.includes(config.models[0].id), 'unknown 模型不得进入候选池');
 });

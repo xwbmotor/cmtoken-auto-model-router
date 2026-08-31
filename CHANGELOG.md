@@ -2,6 +2,17 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.10.4] - 2026-08-30
+
+十八审收口（v0.10.3 错配与遗留问题）：
+- P1 full summary 前端按 type 分支渲染：readyRate/byTask/errorTypes（56 题稳定性巡检不再显示 NaN% 与 —/—）；
+- P2 XSS 全面关闭：模型主表 displayName/id、发现弹窗已注册列表全部 escHtml；
+- P2 手工新增模型默认 ownership=unknown（与发现入口一致）；
+- P2 候选池测试改读真实字段 candidate.model；rejected 断言强化（拒因必须含 ownership_unconfirmed）；
+- P2 health 行为测试：src/health.mjs 抽出可单测模块，6 个测试覆盖 downSince 触发条件/恢复清零/下线判定（含“无流量≠宕机”）；
+- P2 classifier 证据链：Dockerfile.classifier 加 ARG GIT_REVISION + LABEL org.opencontainers.image.revision；发布门禁增加 classifierRevisionLabeled 校验；
+- 重建 .venv：删除损坏虚拟环境，按 requirements-classifier.txt 重建（Python 3.11.5），记录验证组合 sklearn 1.9.0 + numpy 2.4.6 + scipy 1.17.1 + joblib 1.5.3。
+
 ## [0.10.3] - 2026-08-30
 
 十七审收口（v0.10.2 遗留问题全量落实）：
