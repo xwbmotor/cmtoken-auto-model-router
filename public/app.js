@@ -717,6 +717,8 @@ async function refreshOfflineAlerts() {
 // key 只在第二步 POST 请求体内一次性使用，不落 config、不回显、不进日志。
 async function openDiscover() {
   const modal = $id('discoverModal'); const body = $id('discoverBody');
+  // v0.11.11（二十六审 P2-1）：key 生命周期——所有出口（取消/关闭/成功/失败/重新打开）清空输入框，不留 DOM
+  const wipeKey = () => { const el = $id('dcApiKey'); if (el) el.value = ''; };
   modal.style.display = 'flex';
   // ── 第一步：填写端点与密钥 ──
   body.innerHTML = `
@@ -731,10 +733,12 @@ async function openDiscover() {
       <button id="dcCancel1" class="secondary">取消</button>
       <button id="dcNext" class="primary">发现模型</button>
     </div>`;
-  $id('dcCancel1').onclick = () => { modal.style.display = 'none'; };
+  $id('dcCancel1').onclick = () => { modal.style.display = 'none'; ; wipeKey(); };
   $id('dcNext').onclick = async () => {
     const baseUrl = $id('dcBaseUrl').value.trim();
     const apiKey = $id('dcApiKey').value;
+    // v0.11.11（二十六审 P2-2）：只填一项=明确阻止（原逻辑静默回落 .env，产生「这个端点探测成功」的误导）
+    if ((baseUrl && !apiKey) || (!baseUrl && apiKey)) { toast('端点与密钥需同时填写（或都留空用服务端已配上游）', true); return; }
     // ── 第二步：探测 + 勾选 ──
     body.innerHTML = '<p class="hint">正在连接端点拉取模型列表…</p>';
     let d;
@@ -781,7 +785,7 @@ async function openDiscover() {
     const sa = $id('discSelectAll');
     if (sa) sa.addEventListener('change', () => { document.querySelectorAll('.disc-new').forEach((c) => { c.checked = sa.checked; }); syncReg(); });
     $id('dcBack2').onclick = () => openDiscover();
-    $id('dcCancel2').onclick = () => { modal.style.display = 'none'; };
+    $id('dcCancel2').onclick = () => { modal.style.display = 'none'; ; wipeKey(); };
     if (regBtn) regBtn.onclick = registerDiscovered;
   };
 }
@@ -800,6 +804,7 @@ function registerDiscovered() {
   }
   renderModels(); renderProviderColumn(); renderDeployment(); syncDirty();
   $id('discoverModal').style.display = 'none';
+  const wk = $id('dcApiKey'); if (wk) wk.value = '';
   toast('已注册 ' + added + ' 个模型（未启用、归属待定）——发布前须先在表格把归属改为 自建/生态（unknown 不参与自建加分），录入定价/质量分后「安全发布」');
 }
 $id('discoverModels')?.addEventListener('click', openDiscover);
@@ -809,7 +814,7 @@ $id('discoverClose')?.addEventListener('click', () => $id('discoverModal').style
 let evalTimer = null;
 // v0.11.0 交错评测：多模型同窗口轮转+Judge 评分+置信区间（仅建议值）
 async function startInterleaved() {
-  const enabled = config.models.filter((m) => m.enabled || m.ownership !== 'unknown');
+  const enabled = config.models.filter((m) => m.enabled === true && m.ownership !== 'unknown'); // v0.11.11（二十六审 P1-2）：启用且归属已确认——禁用模型/归属待定不得进入交错评测
   const ids = enabled.map((m) => m.id);
   if (ids.length < 2) { toast('交错评测至少需要 2 个可用模型（当前 ' + ids.length + ' 个）', true); return; }
   const pick = ids.slice(0, 4).join('、');

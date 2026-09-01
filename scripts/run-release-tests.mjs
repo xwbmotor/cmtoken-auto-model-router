@@ -102,7 +102,7 @@ if (!validForRelease && !allowDirty) {
 }
 
 const env = { ...process.env, AMR_TEST_STRICT_SKIP: '1' };
-const cmd = 'node --test';
+const cmd = 'node --test --test-concurrency=1'; // v0.11.11（二十六审 P1-4）：串行——ui-regression 与其他 e2e 并发 spawn 会挂起
 const t0 = Date.now();
 const child = spawn(process.execPath, ['--test'], { env, stdio: ['ignore', 'pipe', 'pipe'], cwd });
 
@@ -154,6 +154,11 @@ child.on('exit', (code, signal) => {
   if (!gate.onTag) console.error('[test:release] HEAD 无 exact tag——报告对应的 commit 不是发布 tag。');
   else if (!gate.tagMatchesVersion) console.error(`[test:release] tag ${git.tag} 与 package.json ${tagExpected} 不一致。`);
   if (!gate.imageEvidence) console.error(`[test:release] 镜像证据不完整或 revision 不等于 HEAD（imageId=${images.routerImageId}, revision=${images.routerLabelsRevision}, HEAD=${git.commit}）——先 docker build --build-arg GIT_REVISION=${git.commit} 。`);
+  // v0.11.11（二十六审 P1-4）：报告层终检——发布档 skipped 必须=0（含 UI 测试静默 skip 的情形）
+  if (validForRelease && (summary.skipped > 0 || summary.fail > 0)) {
+    console.error(`[test:release] 发布门禁终检失败：skipped=${summary.skipped} fail=${summary.fail}——发布档不允许任何 skip/失败。`);
+    process.exit(4);
+  }
   if (code === 0 && validForRelease) {
     console.log(`\n[test:release] 全量通过（含 replay，无 skip）且发布证据链完整（tag=${git.tag}）。`);
     console.log('[test:release] 注意：报告不提交回 tag——作为 Release Artifact 归档（reports/ 目录已被协议排除）。');

@@ -305,6 +305,8 @@ body:not(.simple-view) .simple-only{display:none!important}
 /* 发现弹层模型列表：两列 grid、单行省略、不再 96px 折行 */
 .discover-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:4px 12px;max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px}
 .discover-row{display:flex;flex-direction:row!important;align-items:center;gap:8px;padding:6px 8px;border-bottom:none;border-radius:6px;min-width:0;font-size:13px;color:var(--text)}/* 覆盖全局 label 竖排（styles.css label{flex-direction:column}）——v0.11.9 */
+.discover-row input[type=checkbox]{width:auto;flex:0 0 auto}/* v0.11.11：全局 input{width:100%} 把 checkbox 拉到 220px 挤压 strong 至 0 宽——模型名不可见 */
+.discover-row .pill{flex:0 0 auto}
 .discover-row:hover{background:rgba(0,0,0,.04)}
 .discover-row strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .discover-bar{display:flex;align-items:center;gap:10px;margin:8px 0 6px;padding:6px 8px;background:rgba(0,0,0,.03);border-radius:8px}

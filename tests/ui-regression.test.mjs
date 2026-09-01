@@ -16,9 +16,15 @@ import { createServer as netServer } from 'node:net';
 import { createServer as httpServer } from 'node:http';
 
 const hasPlaywright = (() => {
-  try { execFileSync('python3', ['-c', 'import playwright'], { stdio: 'ignore' }); return true; }
-  catch { return false; }
+  for (const py of ['python3', 'python', 'py']) {
+    try { execFileSync(py, ['-c', 'import playwright'], { stdio: 'ignore' }); return py; } catch {}
+  }
+  return null;
 })();
+// v0.11.11（二十六审 P1-4）：正式发布（AMR_TEST_STRICT_SKIP=1）时缺依赖直接失败，不静默跳过
+if (!hasPlaywright && process.env.AMR_TEST_STRICT_SKIP === '1') {
+  throw new Error('发布门禁：缺少 python+playwright，UI 测试不可跳过');
+}
 
 const freePort = () => new Promise((resolve, reject) => {
   const srv = netServer(); srv.unref(); srv.on('error', reject);
@@ -26,7 +32,7 @@ const freePort = () => new Promise((resolve, reject) => {
 });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-test('UI 回归审计：7 tab + 发现向导，零错误 + 布局断言', { skip: !hasPlaywright && '无 python3+playwright（跳过 UI 审计）' }, async () => {
+test('UI 回归审计：7 tab + 发现向导，零错误 + 布局断言', { skip: !hasPlaywright && '无 python+playwright（跳过 UI 审计）' }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'amr-ui-regress-'));
   const cfg = JSON.parse(readFileSync(join(process.cwd(), 'config', 'router.json'), 'utf8'));
   cfg.decisionLog = { ...(cfg.decisionLog || {}), enabled: false };
@@ -35,7 +41,7 @@ test('UI 回归审计：7 tab + 发现向导，零错误 + 布局断言', { skip
   let mockProc = null; // v0.11.10：finally 可见（try 内 const 块作用域不可见）
   const child = spawn(process.execPath, ['src/server.mjs'], {
     cwd: process.cwd(), stdio: 'ignore',
-    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', ADMIN_TOKEN: 'regress', CONFIG_PATH: join(dir, 'router.json'), AMR_CONFIG_DIR: dir },
+    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', ADMIN_TOKEN: 'regress', CONFIG_PATH: join(dir, 'router.json'), AMR_CONFIG_DIR: dir, AMR_PROBE_ALLOW_LOCALHOST: '1' }, // mock 上游是 127.0.0.1——绕过 SSRF IP 拦截（仅测试）
   });
   try {
     let up = false;
@@ -104,6 +110,13 @@ with sync_playwright() as pw:
     result['ownershipSelect'] = sel
     bl = pg.evaluate("() => { const l = document.querySelector('label.btn-like'); return l ? getComputedStyle(l).borderTopWidth !== '0px' : 'missing'; }")
     result['btnLikeStyled'] = bl
+    # v0.11.11：断言内容可见性（不只行高）+ modal 兄弟 + 交错评测弹层可见
+    result['nameWidths'] = pg.evaluate("() => [...document.querySelectorAll('.discover-row strong')].map(s => Math.round(s.getBoundingClientRect().width))")
+    result['modalSiblings'] = pg.evaluate("() => { const dm = document.getElementById('discoverModal'); const em = document.getElementById('evalModal'); return !!dm && !!em && dm.parentElement === em.parentElement; }")
+    pg.on('dialog', lambda dlg: dlg.accept())
+    pg.evaluate("() => { const b = document.getElementById('interleavedEval'); if (b) b.click(); }")
+    pg.wait_for_timeout(1200)
+    result['evalModalVisible'] = pg.evaluate("() => { const em = document.getElementById('evalModal'); const r = em.getBoundingClientRect(); return getComputedStyle(em).display === 'flex' && r.width > 0; }")
     result['pageerrors_final'] = errs
     b.close()
 print(json.dumps(result))
@@ -116,6 +129,9 @@ print(json.dumps(result))
     if (r.pageerrors_final?.length) throw new Error(`页面 JS 错误: ${r.pageerrors_final.join(' | ')}`);
     if (!r.step1?.url || !r.step1?.key || !r.step1?.next) throw new Error(`向导第1步元素缺失: ${JSON.stringify(r.step1)}`);
     if (!r.hasSelectAll) throw new Error(`全选复选框缺失；step2 body: ${JSON.stringify(r.step2Body || r).slice(0, 300)}`);
+    if (!Array.isArray(r.nameWidths) || r.nameWidths.some((w) => w < 10)) throw new Error(`模型名宽度 ${JSON.stringify(r.nameWidths)}——不可见（v0.11.9 全局 input width:100% 挤压回归）`);
+    if (!r.modalSiblings) throw new Error('discoverModal/evalModal 非兄弟节点——modal 嵌套回归（v0.11.8 闭合标签缺失）');
+    if (!r.evalModalVisible) throw new Error('交错评测弹层不可见（v0.11.11 P1-1 回归锚点）');
     const tall = (r.rowHeights || []).filter((h) => h > 44);
     if (tall.length) throw new Error(`发现列表行折行（>${44}px）: ${JSON.stringify(r.rowHeights)}`);
     if (r.ownershipSelect && r.ownershipSelect.selW < r.ownershipSelect.needW) throw new Error(`归属下拉过窄: ${JSON.stringify(r.ownershipSelect)}`);

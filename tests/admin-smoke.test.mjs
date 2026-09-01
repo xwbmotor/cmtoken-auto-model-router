@@ -11,9 +11,15 @@ import { join } from 'node:path';
 import { createServer as netServer } from 'node:net';
 
 const hasPlaywright = (() => {
-  try { execFileSync('python3', ['-c', 'import playwright'], { stdio: 'ignore' }); return true; }
-  catch { return false; }
+  for (const py of ['python3', 'python', 'py']) {
+    try { execFileSync(py, ['-c', 'import playwright'], { stdio: 'ignore' }); return py; } catch {}
+  }
+  return null;
 })();
+// v0.11.11（二十六审 P1-4）：正式发布（AMR_TEST_STRICT_SKIP=1）时缺依赖直接失败，不静默跳过
+if (!hasPlaywright && process.env.AMR_TEST_STRICT_SKIP === '1') {
+  throw new Error('发布门禁：缺少 python+playwright，UI 测试不可跳过');
+}
 
 const freePort = () => new Promise((resolve, reject) => {
   const srv = netServer(); srv.unref(); srv.on('error', reject);
@@ -21,7 +27,7 @@ const freePort = () => new Promise((resolve, reject) => {
 });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-test('管理台冒烟：页面零 pageerror + 发现按钮绑定生效', { skip: !hasPlaywright && '无 python3+playwright（跳过浏览器冒烟）' }, async () => {
+test('管理台冒烟：页面零 pageerror + 发现按钮绑定生效', { skip: !hasPlaywright && '无 python+playwright（跳过浏览器冒烟）' }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'amr-smoke-'));
   const cfg = JSON.parse(readFileSync(join(process.cwd(), 'config', 'router.json'), 'utf8'));
   cfg.decisionLog = { ...(cfg.decisionLog || {}), enabled: false };

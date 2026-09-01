@@ -1583,7 +1583,7 @@ async function fetchUpstreamModels() {
   const registered = new Set((config.models || []).map((m) => m.id));
   const models = list.map((m) => ({ id: m.id, registered: registered.has(m.id), ownedBy: m.owned_by || null }));
   const result = { total: models.length, newCount: models.filter((m) => !m.registered).length, models,
-    upstream: { baseUrl: base || null, keyMasked: key ? key.slice(0, 6) + '…' + key.slice(-4) : null } }; // v0.11.7：弹层端点可见性（key 只遮蔽显示，永不出明文）
+    upstream: { baseUrl: base || null, keyMasked: key ? (key.length <= 8 ? '…' + key.slice(-2) : key.slice(0, 6) + '…' + key.slice(-4)) : null } }; // v0.11.11：短 key 只露末2位（二十六审 P2-3）
   discoverCache = { at: now, result };
   return result;
 }
@@ -1656,6 +1656,9 @@ function startEvalJob(body) {
     if (ids.length > 4) throw new Error('interleaved 最多 4 个模型（预算保护）');
     const unknown = ids.filter((id) => !(config.models || []).some((m) => m.id === id));
     if (unknown.length) throw new Error(`模型不在注册表：${unknown.join('、')}`);
+    // v0.11.11（二十六审 P1-2）：后端强校验 enabled+ownership——禁用/归属待定模型拒绝（与前端同口径，防直连 API 绕过）
+    const ineligible = ids.filter((id) => { const m = (config.models || []).find((x) => x.id === id); return m && (m.enabled !== true || m.ownership === 'unknown'); });
+    if (ineligible.length) throw new Error(`模型未启用或归属待定（不参与评测）：${ineligible.join('、')}`);
     for (const j of evalJobs.values()) if (!j.finishedAt) throw new Error(`已有任务在跑（${j.id} ${j.type}），请等它完成`);
     const id = `job_${Date.now().toString(36)}`;
     const job = { id, type, modelIds: ids, startedAt: new Date().toISOString(), finishedAt: null, status: 'running',
@@ -3083,16 +3086,33 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       const base = String(body?.baseUrl || '').trim().replace(/\/$/, '');
       const key = String(body?.apiKey || '').trim();
-      if (!/^https?:\/\/.+/.test(base)) return errorJson(res, 400, '端点必须是 http(s) URL（如 https://host:port/v1）', 'invalid_request_error');
       if (!key) return errorJson(res, 400, '请填写该端点的 API Key', 'invalid_request_error');
-      const res2 = await fetch(`${base}/models`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15000) });
+      // v0.11.11（二十六审 P1-3）SSRF 防护：new URL 严格解析 + 主机名白名单（禁止 IP 直连与内网默认放行）
+      let u;
+      try { u = new URL(base); } catch { return errorJson(res, 400, '端点必须是合法 http(s) URL（如 https://host:port/v1）', 'invalid_request_error'); }
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return errorJson(res, 400, '端点协议只允许 http/https', 'invalid_request_error');
+      if (u.username || u.password || u.hash) return errorJson(res, 400, '端点不允许携带用户名/密码/fragment', 'invalid_request_error');
+      const host = u.hostname.toLowerCase();
+      // 测试逃生口：e2e 用 127.0.0.1 mock 上游（默认关——生产绝不设）
+      const allowLocal = process.env.AMR_PROBE_ALLOW_LOCALHOST === '1';
+      if (!allowLocal && (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host === 'localhost' || host.endsWith('.localhost') || host.includes(':'))) {
+        return errorJson(res, 400, '不允许直接用 IP/localhost 作为端点——请使用域名（防内网探测）', 'invalid_request_error');
+      }
+      if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
+        return errorJson(res, 400, '端点主机名格式不合法', 'invalid_request_error');
+      }
+      const ALLOW = (process.env.DISCOVER_PROBE_ALLOW_HOSTS || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+      if (!allowLocal && (ALLOW.length ? !ALLOW.includes(host) : !/^(maas\.gd\.chinamobile\.com|api\.z\.ai)$/.test(host))) {
+        return errorJson(res, 400, `端点 ${host} 不在允许清单（DISCOVER_PROBE_ALLOW_HOSTS 可扩展）`, 'invalid_request_error');
+      }
+      const res2 = await fetch(`${base}/models`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15000), redirect: 'error' });
       if (!res2.ok) return errorJson(res, 502, `端点返回 HTTP ${res2.status}——请核对 URL 与 Key（key 是否有 /models 权限）`, 'discover_probe_error');
       const payload = await res2.json();
       const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : [];
       const registered = new Set((config.models || []).map((m) => m.id));
       const models = list.map((m) => ({ id: m.id, registered: registered.has(m.id), ownedBy: m.owned_by || null }));
       return json(res, 200, { total: models.length, newCount: models.filter((m) => !m.registered).length, models,
-        upstream: { baseUrl: base, keyMasked: key.slice(0, 6) + '…' + key.slice(-4) } });
+        upstream: { baseUrl: base, keyMasked: key.length <= 8 ? '…' + key.slice(-2) : key.slice(0, 6) + '…' + key.slice(-4) } });
     } catch (error) { return errorJson(res, 502, `探测失败：${error.message}（URL 拼写/网络可达性/Key 有效性）`, 'discover_probe_error'); }
   }
   if (req.method === 'GET' && url.pathname === '/admin/api/discover-models') {
