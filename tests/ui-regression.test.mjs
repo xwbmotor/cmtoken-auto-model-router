@@ -112,6 +112,15 @@ with sync_playwright() as pw:
     result['btnLikeStyled'] = bl
     # v0.11.11：断言内容可见性（不只行高）+ modal 兄弟 + 交错评测弹层可见
     result['nameWidths'] = pg.evaluate("() => [...document.querySelectorAll('.discover-row strong')].map(s => Math.round(s.getBoundingClientRect().width))")
+    # v0.11.12：注册后引导面板 + 模型删除按钮
+    pg.evaluate("() => { const c = document.querySelector('.disc-new'); if (c && !c.checked) c.click(); }")
+    pg.wait_for_timeout(200)
+    pg.evaluate("() => document.getElementById('registerSelected') && document.getElementById('registerSelected').click()")
+    pg.wait_for_timeout(800)
+    result['onboardGuide'] = pg.evaluate("() => { const g = document.querySelector('.onboard-guide'); return !!g && g.textContent.includes('交错评测') && g.textContent.includes('安全发布'); }")
+    pg.evaluate("() => document.getElementById('guideClose') && document.getElementById('guideClose').click()")
+    pg.wait_for_timeout(300)
+    result['removeBtns'] = pg.evaluate("() => document.querySelectorAll('#models button[data-act=remove]').length")
     result['modalSiblings'] = pg.evaluate("() => { const dm = document.getElementById('discoverModal'); const em = document.getElementById('evalModal'); return !!dm && !!em && dm.parentElement === em.parentElement; }")
     pg.on('dialog', lambda dlg: dlg.accept())
     pg.evaluate("() => { const b = document.getElementById('interleavedEval'); if (b) b.click(); }")
@@ -132,6 +141,9 @@ print(json.dumps(result))
     if (!Array.isArray(r.nameWidths) || r.nameWidths.some((w) => w < 10)) throw new Error(`模型名宽度 ${JSON.stringify(r.nameWidths)}——不可见（v0.11.9 全局 input width:100% 挤压回归）`);
     if (!r.modalSiblings) throw new Error('discoverModal/evalModal 非兄弟节点——modal 嵌套回归（v0.11.8 闭合标签缺失）');
     if (!r.evalModalVisible) throw new Error('交错评测弹层不可见（v0.11.11 P1-1 回归锚点）');
+    if (!r.onboardGuide) throw new Error('注册成功后无上线路径引导面板（v0.11.12）');
+    if (!Array.isArray(r.removeBtns) && !(r.removeBtns > 0)) throw new Error('模型表无删除按钮（v0.11.12）');
+    if (!(Number(r.removeBtns) > 0)) throw new Error(`模型表删除按钮数 ${r.removeBtns}——应≥1`);
     const tall = (r.rowHeights || []).filter((h) => h > 44);
     if (tall.length) throw new Error(`发现列表行折行（>${44}px）: ${JSON.stringify(r.rowHeights)}`);
     if (r.ownershipSelect && r.ownershipSelect.selW < r.ownershipSelect.needW) throw new Error(`归属下拉过窄: ${JSON.stringify(r.ownershipSelect)}`);

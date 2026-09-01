@@ -338,7 +338,7 @@ function bindPolicy() {
   if (styleRadio) styleRadio.checked = true;
   updateRangeLabels();
 }
-function renderModels() { $('models').innerHTML = config.models.map((m, i) => `<tr data-index="${i}"><td><input class="enabled" type="checkbox" ${m.enabled ? 'checked' : ''}></td><td><strong>${escHtml(m.displayName || m.id)}</strong><br><small>${escHtml(m.id)}</small></td><td><select class="ownership"><option value="self_hosted" ${m.ownership === 'self_hosted' ? 'selected' : ''}>自建</option><option value="ecosystem" ${m.ownership === 'ecosystem' ? 'selected' : ''}>生态</option><option value="unknown" ${m.ownership === 'unknown' ? 'selected' : ''}>归属待定</option></select></td><td><input class="quality" type="number" min="0" max="1" step=".01" value="${m.quality.default}"></td><td><input class="cost" type="number" min="0" step=".01" value="${m.costIndex}"></td><td class="provider-cost">—</td><td><input class="latency" type="number" min="0" step=".01" value="${m.latencyIndex}"></td><td><input class="input-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.input ?? ''}"></td><td><input class="cached-price" type="number" min="0" step=".01" placeholder="无折扣" value="${m.pricingYuanPerMillionTokens?.inputCached ?? ''}"></td><td><input class="output-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.output ?? ''}"></td><td><input class="p95" type="number" min="0" step="1" placeholder="待观测" value="${m.performance?.totalP95Ms ?? ''}"></td><td><span class="pill ${(m.reliabilityStatus || m.calibrationStatus) === 'verified' ? 'good' : 'muted'}">${(m.reliabilityStatus || m.calibrationStatus) === 'verified' ? '可靠' : (m.reliabilityStatus || m.calibrationStatus) === 'pilot' ? 'Pilot' : '待观测'}</span></td><td><button class="btn-mini" data-act="checkup">体检</button><button class="btn-mini" data-act="full">巡检</button></td><td class="health">—</td></tr>`).join(''); }
+function renderModels() { $('models').innerHTML = config.models.map((m, i) => `<tr data-index="${i}"><td><input class="enabled" type="checkbox" ${m.enabled ? 'checked' : ''}></td><td><strong>${escHtml(m.displayName || m.id)}</strong><br><small>${escHtml(m.id)}</small></td><td><select class="ownership"><option value="self_hosted" ${m.ownership === 'self_hosted' ? 'selected' : ''}>自建</option><option value="ecosystem" ${m.ownership === 'ecosystem' ? 'selected' : ''}>生态</option><option value="unknown" ${m.ownership === 'unknown' ? 'selected' : ''}>归属待定</option></select></td><td><input class="quality" type="number" min="0" max="1" step=".01" value="${m.quality.default}"></td><td><input class="cost" type="number" min="0" step=".01" value="${m.costIndex}"></td><td class="provider-cost">—</td><td><input class="latency" type="number" min="0" step=".01" value="${m.latencyIndex}"></td><td><input class="input-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.input ?? ''}"></td><td><input class="cached-price" type="number" min="0" step=".01" placeholder="无折扣" value="${m.pricingYuanPerMillionTokens?.inputCached ?? ''}"></td><td><input class="output-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.output ?? ''}"></td><td><input class="p95" type="number" min="0" step="1" placeholder="待观测" value="${m.performance?.totalP95Ms ?? ''}"></td><td><span class="pill ${(m.reliabilityStatus || m.calibrationStatus) === 'verified' ? 'good' : 'muted'}">${(m.reliabilityStatus || m.calibrationStatus) === 'verified' ? '可靠' : (m.reliabilityStatus || m.calibrationStatus) === 'pilot' ? 'Pilot' : '待观测'}</span></td><td><button class="btn-mini" data-act="checkup">体检</button><button class="btn-mini" data-act="full">巡检</button><button class="btn-mini danger" data-act="remove" title="从注册表删除该模型（不影响上游模型本身）">删除</button></td><td class="health">—</td></tr>`).join(''); }
 //算力消耗指数列（成本双指标之一）：来自 deployment 数据 (机×卡×卡价)/tps，独立于用户侧豆价 costIndex
 function providerIndexClient(m) { const d = m.deployment; if (!d || !d.machines || !d.tps) return null; const cw = Number((config.costModel?.cardPrice || {})[d.deviceType] || 1); const unit = Number(d.machines) * (Number(d.cardsPerMachine) || 1) * cw / Number(d.tps); return { unit }; }
 function renderProviderColumn() { const units = config.models.map(providerIndexClient).map((x) => x?.unit).filter(Number.isFinite); const anchor = units.length ? Math.max(...units) : null; document.querySelectorAll('#models tr').forEach((row, i) => { const m = config.models[i]; const cell = row.querySelector('.provider-cost'); if (!cell) return; const p = providerIndexClient(m); cell.textContent = (p && anchor) ? Math.min(1, p.unit / anchor).toFixed(3) : '—'; }); }
@@ -803,9 +803,21 @@ function registerDiscovered() {
     added += 1;
   }
   renderModels(); renderProviderColumn(); renderDeployment(); syncDirty();
-  $id('discoverModal').style.display = 'none';
   const wk = $id('dcApiKey'); if (wk) wk.value = '';
-  toast('已注册 ' + added + ' 个模型（未启用、归属待定）——发布前须先在表格把归属改为 自建/生态（unknown 不参与自建加分），录入定价/质量分后「安全发布」');
+  // v0.11.12：注册成功不再直接关弹层+一句 toast——弹层内容替换为「上线路径」引导（三条路可视化，可关闭）
+  const body = $id('discoverBody');
+  if (body) body.innerHTML = '<div class="onboard-guide">'
+    + '<h4>已注册 ' + added + ' 个模型（未启用、归属待定）</h4>'
+    + '<p>模型已出现在下方「模型参数」表格。要让它上线参与路由，走完以下路径（顺序即推荐度）：</p>'
+    + '<ol style="margin:10px 0 10px 20px;line-height:2">'
+    + '<li><b>① 定归属+定价</b>：在「模型参数」表格该模型行，把「归属」从 <span class="pill muted">归属待定</span> 改为 自建/生态，填三个单价（元/百万token）。<u>归属不改无法启用</u>。</li>'
+    + '<li><b>② 出质量分</b>（三选一）：<br>· <b>交错评测</b>（推荐）：本页上方「交错评测」按钮——56 题轮转实测+Judge 四维评分，30-90 分钟出建议值；<br>· <b>体检/巡检</b>：表格该行最右「体检」（8 题快检）或「巡检」（全量）；<br>· <b>手工录入</b>：直接改表格「质量」列（0-1），适合已有官方基准分的模型。</li>'
+    + '<li><b>③ 启用+发布</b>：勾选该行「启用」→ 点「安全发布」。发布后即可被 cmtoken-auto 路由选中。</li>'
+    + '</ol>'
+    + '<div style="display:flex;gap:10px;justify-content:flex-end">'
+    + '<button id="guideClose" class="primary">知道了，去表格操作</button></div></div>';
+  const gb = $id('guideClose');
+  if (gb) gb.onclick = () => { $id('discoverModal').style.display = 'none'; };
 }
 $id('discoverModels')?.addEventListener('click', openDiscover);
 $id('interleavedEval')?.addEventListener('click', startInterleaved);
@@ -923,6 +935,21 @@ $id('models')?.addEventListener('click', (ev) => {
   if (!m) return;
   if (b.dataset.act === 'checkup') startEval('checkup', m.id);
   if (b.dataset.act === 'full') startEval('full', m.id);
+  // v0.11.12：模型删除——引用检查（defaultExplicitModel/shadowModel/taskPreferences/semanticRouter 引用中不可删）
+  if (b.dataset.act === 'remove') {
+    const refs = [];
+    const r = config.routing || {};
+    if (r.defaultExplicitModel === m.id) refs.push('routing.defaultExplicitModel（默认指定模型）');
+    if (r.shadowModel === m.id) refs.push('routing.shadowModel（影子模型）');
+    for (const [t, p2] of Object.entries(r.taskPreferences || {})) if (p2 && p2.model === m.id) refs.push('routing.taskPreferences.' + t);
+    if (config.semanticRouter && config.semanticRouter.model === m.id) refs.push('semanticRouter.model');
+    if (config.semanticRouter && config.semanticRouter.openaiChat && config.semanticRouter.openaiChat.model === m.id) refs.push('semanticRouter.openaiChat.model');
+    if (refs.length) { toast('不能删除 ' + m.id + '：仍被 ' + refs.join('、') + ' 引用——先把对应配置改指向其他模型', true); return; }
+    if (!confirm('删除模型 ' + m.id + '？\n只从注册表移除（不影响上游模型本身），未发布前可重新添加。')) return;
+    config.models.splice(idx, 1);
+    renderModels(); renderProviderColumn(); renderDeployment(); bindPolicy(); syncDirty(); scheduleSimulation();
+    toast('已删除 ' + m.id + '（记得「安全发布」生效）');
+  }
 });
 
 // 页面加载后拉一次下线提醒 + 刷新换算提示

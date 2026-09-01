@@ -310,3 +310,11 @@ body:not(.simple-view) .simple-only{display:none!important}
 .discover-row:hover{background:rgba(0,0,0,.04)}
 .discover-row strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .discover-bar{display:flex;align-items:center;gap:10px;margin:8px 0 6px;padding:6px 8px;background:rgba(0,0,0,.03);border-radius:8px}
+
+/* v0.11.12：删除按钮 danger 态 + 注册引导面板 */
+.btn-mini.danger{color:#c0392b;border-color:#e5b4ae}
+.btn-mini.danger:hover{background:#fdf0ee}
+.onboard-guide{padding:4px 2px}
+.onboard-guide h4{margin:0 0 8px}
+.onboard-guide ol{margin:8px 0;padding-left:20px}
+.onboard-guide li{margin:4px 0}
