@@ -2,6 +2,15 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.11.9] - 2026-09-01
+
+管理台 UI 批量修复（playwright 全页面审计 7 tab + 弹层，用户要求产品级交互标准）：
+- 发现弹层列表重做：全局 label 竖排样式导致每行 96px 三段折行——覆盖为横排 33px；两列自适应 grid；长模型名 ellipsis 截断（title 悬停看全名）；列表区独立滚动（max-height 320px）；
+- 新增「全选新模型」复选框（三态：全选/半选 indeterminate/空）+ 实时「已选 n / N」计数；
+- 归属下拉显示不全修复：.table-wrap select 最小宽 92px（原 47px 装不下 56px 的选项文字）；数值输入最小 72px；
+- 「上传导入」按钮裸样式修复：.btn-like 样式定义（与 button.secondary 同视觉——原 label 无 button 样式规则匹配）；
+- index.html 内联 .discover-row 旧定义删除（覆盖了 styles.css 新样式——CSS 优先级陷阱）。
+
 ## [0.11.8] - 2026-08-31
 
 「从上游发现模型」改标准两步流水线向导（用户实测反馈：端点/key 应管理员自己填，注册应是分步流水线）：

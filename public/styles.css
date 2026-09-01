@@ -293,3 +293,18 @@ body:not(.simple-view) .simple-only{display:none!important}
 /* key 指纹（最近请求）：默认灰显不抢眼，hover 出完整指纹提示 */
 .recent-item .key-fp{color:var(--muted);border-bottom:1px dotted var(--muted);cursor:help}
 .recent-item .key-fp:hover{color:var(--text)}
+
+/* ── v0.11.9 UI 修复 ── */
+/* 上传导入按钮（label.btn-like）：与 button.secondary 同视觉 */
+.btn-like{display:inline-block;background:var(--panel);color:var(--text);border:1px solid var(--line-strong);border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer;user-select:none}
+.btn-like:hover{background:#f5f6f8;border-color:#b7bdc7}
+/* 表格内输入控件最小宽度——归属下拉/单价输入不再被挤成一条缝 */
+.table-wrap select{min-width:92px}
+.table-wrap input[type=number]{min-width:72px}
+.table-wrap input.enabled{min-width:0}
+/* 发现弹层模型列表：两列 grid、单行省略、不再 96px 折行 */
+.discover-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:4px 12px;max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px}
+.discover-row{display:flex;flex-direction:row!important;align-items:center;gap:8px;padding:6px 8px;border-bottom:none;border-radius:6px;min-width:0;font-size:13px;color:var(--text)}/* 覆盖全局 label 竖排（styles.css label{flex-direction:column}）——v0.11.9 */
+.discover-row:hover{background:rgba(0,0,0,.04)}
+.discover-row strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.discover-bar{display:flex;align-items:center;gap:10px;margin:8px 0 6px;padding:6px 8px;background:rgba(0,0,0,.03);border-radius:8px}

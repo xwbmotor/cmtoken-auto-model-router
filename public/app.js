@@ -759,7 +759,8 @@ async function openDiscover() {
     const ups = d.upstream || {};
     const head = '<p class="hint" style="margin-bottom:10px">第 2 步 · 已连接 <code>' + escHtml(ups.baseUrl || '未知') + '</code>' + (ups.keyMasked ? '（密钥 ' + escHtml(ups.keyMasked) + '）' : '') + '——勾选要纳入管理的模型：</p>';
     const listHtml = news.length
-      ? news.map(m => '<label class="discover-row"><input type="checkbox" class="disc-new" value="' + escHtml(m.id) + '"><strong>' + escHtml(m.id) + '</strong><span class="pill muted">新</span></label>').join('')
+      ? '<div class="discover-bar"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="discSelectAll"><span>全选新模型</span></label><span class="hint" id="discCount">已选 0 / ' + news.length + '</span></div>' +
+        '<div class="discover-list">' + news.map(m => '<label class="discover-row" title="' + escHtml(m.id) + '"><input type="checkbox" class="disc-new" value="' + escHtml(m.id) + '"><strong>' + escHtml(m.id) + '</strong><span class="pill muted">新</span></label>').join('') + '</div>'
       : '<p class="hint">该端点没有新模型——所有模型都已在下方列表中。</p>';
     const oldsHtml = olds.length ? '<p class="hint" style="margin-top:8px">已在列表中（无需重复添加）：' + olds.map(m => escHtml(m.id)).join('、') + '</p>' : '';
     const notice = '<p class="hint" style="margin-top:10px">新纳入的模型<b>不会立即上线</b>：先在下方模型列表补归属、定价、质量分，确认后再手动启用。</p>';
@@ -769,8 +770,16 @@ async function openDiscover() {
       '<button id="registerSelected" class="primary" ' + (news.length ? 'disabled' : '') + '>纳入所选（0）</button></div>';
     body.innerHTML = head + listHtml + oldsHtml + notice + foot;
     const regBtn = $id('registerSelected');
-    const syncReg = () => { const n = document.querySelectorAll('.disc-new:checked').length; if (regBtn) { regBtn.textContent = '纳入所选（' + n + '）'; regBtn.disabled = n === 0; } };
+    const syncReg = () => {
+      const boxes = [...document.querySelectorAll('.disc-new')];
+      const n = boxes.filter((c) => c.checked).length;
+      if (regBtn) { regBtn.textContent = '纳入所选（' + n + '）'; regBtn.disabled = n === 0; }
+      const cnt = $id('discCount'); if (cnt) cnt.textContent = '已选 ' + n + ' / ' + boxes.length;
+      const sa = $id('discSelectAll'); if (sa) { sa.checked = n === boxes.length && n > 0; sa.indeterminate = n > 0 && n < boxes.length; }
+    };
     document.querySelectorAll('.disc-new').forEach((c) => c.addEventListener('change', syncReg));
+    const sa = $id('discSelectAll');
+    if (sa) sa.addEventListener('change', () => { document.querySelectorAll('.disc-new').forEach((c) => { c.checked = sa.checked; }); syncReg(); });
     $id('dcBack2').onclick = () => openDiscover();
     $id('dcCancel2').onclick = () => { modal.style.display = 'none'; };
     if (regBtn) regBtn.onclick = registerDiscovered;
