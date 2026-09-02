@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 
 import { loadConfig, projectRoot, saveConfig, validateConfig } from './config.mjs';
+import { promises as dnsPromises } from 'node:dns'; // v0.11.13（二十七审 P1-1）SSRF DNS pinning
 
 import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice, recommendReasoningLevel, isAutoRequest, autoModelId } from './router.mjs';
 
@@ -3093,19 +3094,48 @@ const server = http.createServer(async (req, res) => {
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return errorJson(res, 400, '端点协议只允许 http/https', 'invalid_request_error');
       if (u.username || u.password || u.hash) return errorJson(res, 400, '端点不允许携带用户名/密码/fragment', 'invalid_request_error');
       const host = u.hostname.toLowerCase();
-      // 测试逃生口：e2e 用 127.0.0.1 mock 上游（默认关——生产绝不设）
-      const allowLocal = process.env.AMR_PROBE_ALLOW_LOCALHOST === '1';
-      if (!allowLocal && (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host === 'localhost' || host.endsWith('.localhost') || host.includes(':'))) {
-        return errorJson(res, 400, '不允许直接用 IP/localhost 作为端点——请使用域名（防内网探测）', 'invalid_request_error');
+      // v0.11.13（二十七审 P1-1/P2-2）：拒绝 query；fetch 用规范化 URL（防 base 带 ?x=1 拼出 /v1?x=1/models）
+      if (u.search) return errorJson(res, 400, '端点不允许携带 query 参数', 'invalid_request_error');
+      // 测试逃生口：e2e 用 127.0.0.1 mock 上游（默认关——生产绝不设）。v0.11.13 收窄：仅放行 127.0.0.1 字面量，
+      // 不再豁免域名白名单与其他 IP（二十七审指出原实现允许任意 IP+任意域名=生产误设即全开）
+      const allowLoopbackOnly = process.env.AMR_PROBE_ALLOW_LOCALHOST === '1' && host === '127.0.0.1' && (u.port !== '');
+      if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host === 'localhost' || host.endsWith('.localhost') || host.includes(':')) {
+        if (!allowLoopbackOnly) return errorJson(res, 400, '不允许直接用 IP/localhost 作为端点——请使用域名（防内网探测）', 'invalid_request_error');
       }
-      if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
+      if (!allowLoopbackOnly && !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host)) {
         return errorJson(res, 400, '端点主机名格式不合法', 'invalid_request_error');
       }
       const ALLOW = (process.env.DISCOVER_PROBE_ALLOW_HOSTS || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
-      if (!allowLocal && (ALLOW.length ? !ALLOW.includes(host) : !/^(maas\.gd\.chinamobile\.com|api\.z\.ai)$/.test(host))) {
+      if (!allowLoopbackOnly && (ALLOW.length ? !ALLOW.includes(host) : !/^(maas\.gd\.chinamobile\.com|api\.z\.ai)$/.test(host))) {
         return errorJson(res, 400, `端点 ${host} 不在允许清单（DISCOVER_PROBE_ALLOW_HOSTS 可扩展）`, 'invalid_request_error');
       }
-      const res2 = await fetch(`${base}/models`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15000), redirect: 'error' });
+      // v0.11.13（二十七审 P1-1）DNS pinning：域名必须先解析，解析结果全部落在禁用网段则拒绝（RFC1918/loopback/
+      // link-local(含云元数据 169.254.169.254)/IPv6 ULA/IPv4-mapped）。白名单域名解析异常也拒绝（fail-closed）。
+      const ipIsBlocked = (ip) => {
+        if (ip.includes('.')) {
+          const o = ip.split('.').map(Number);
+          if (o[0] === 127 || o[0] === 10 || o[0] === 0) return true;
+          if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;
+          if (o[0] === 192 && o[1] === 168) return true;
+          if (o[0] === 169 && o[1] === 254) return true;
+          if (o[0] === 100 && o[1] >= 64 && o[1] <= 127) return true; // CGNAT
+          return false;
+        }
+        const v6 = ip.toLowerCase();
+        if (v6 === '::' || v6 === '::1') return true;
+        if (v6.startsWith('fe80:') || v6.startsWith('fc') || v6.startsWith('fd')) return true;
+        if (v6.startsWith('::ffff:')) return ipIsBlocked(v6.slice(7)); // IPv4-mapped
+        return false;
+      };
+      if (!allowLoopbackOnly) {
+        let addrs;
+        try { addrs = await dnsPromises.lookup(host, { all: true }); }
+        catch { return errorJson(res, 400, `端点域名 ${host} 解析失败（DNS）`, 'invalid_request_error'); }
+        const bad = addrs.filter((a) => ipIsBlocked(a.address));
+        if (bad.length) return errorJson(res, 400, `端点域名解析到禁用网段（${bad.map((b) => b.address).join('、')}）——禁止内网/元数据探测`, 'invalid_request_error');
+      }
+      const probeUrl = new URL(u.toString().replace(/\/$/, '') + '/models');
+      const res2 = await fetch(probeUrl, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15000), redirect: 'error' });
       if (!res2.ok) return errorJson(res, 502, `端点返回 HTTP ${res2.status}——请核对 URL 与 Key（key 是否有 /models 权限）`, 'discover_probe_error');
       const payload = await res2.json();
       const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : [];

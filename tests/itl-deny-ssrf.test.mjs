@@ -92,6 +92,16 @@ test('discover-probe SSRF：IP/localhost/非清单域名/带凭据 URL 全拒绝
     // 清单内域名（不携带内嵌凭据）应通过 URL 校验（连接失败是 502，不是 400——语义不同）
     const r2 = await fetch(`${B}/admin/api/discover-probe`, { method: 'POST', headers: H, body: JSON.stringify({ baseUrl: 'https://maas.gd.chinamobile.com:36007/ai/uifm/open/v1', apiKey: 'k' }) });
     if (r2.status === 400) throw new Error('清单内域名不应被 URL 校验拒绝');
+    // v0.11.13（二十七审 P2-3 补强）：query 拒绝 + IPv6 拒绝
+    const more = [
+      ['https://maas.gd.chinamobile.com:36007/v1?x=1', '带 query'],
+      ['http://[::1]:8080/v1', 'IPv6 loopback'],
+      ['http://[fe80::1]:8080/v1', 'IPv6 link-local'],
+    ];
+    for (const [u3, name3] of more) {
+      const r3 = await fetch(`${B}/admin/api/discover-probe`, { method: 'POST', headers: H, body: JSON.stringify({ baseUrl: u3, apiKey: 'k' }) });
+      if (r3.status !== 400) throw new Error(`${name3} 应 400，实际 ${r3.status}`);
+    }
   } finally {
     child.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true });
   }

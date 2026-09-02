@@ -67,7 +67,7 @@ test('管理台冒烟：页面零 pageerror + 发现按钮绑定生效', { skip:
     ].join('\n');
     writeFileSync(join(dir, 'smoke.py'), script);
     let out;
-    try { out = execFileSync('python3', [join(dir, 'smoke.py')], { encoding: 'utf8', timeout: 90000 }); }
+    try { out = execFileSync(hasPlaywright, [join(dir, 'smoke.py')], { encoding: 'utf8', timeout: 90000 }); }
     catch (e) { throw new Error(`playwright 脚本失败: ${String(e.stdout || e.message).slice(0, 300)}`); }
     const r = JSON.parse(out.slice(out.indexOf('{')));
     if (r.pageerrors && r.pageerrors.length) throw new Error(`页面 JS 错误（事件绑定可能中断）: ${r.pageerrors.join(' | ')}`);

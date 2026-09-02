@@ -118,6 +118,11 @@ child.on('exit', (code, signal) => {
     fail: num(/^ℹ fail (\d+)/m), skipped: num(/^ℹ skipped (\d+)/m),
     cancelled: num(/^ℹ cancelled (\d+)/m),
   };
+  // v0.11.13（二十七审 P1-2④）：汇总 fail-closed——任何字段解析失败（null，如 TAP 格式差异）发布档一律判失败
+  if (validForRelease && Object.values(summary).some((v) => v === null)) {
+    console.error('[test:release] 汇总解析失败（null）——fail-closed 判失败: ' + JSON.stringify(summary));
+    process.exit(5);
+  }
   const report = {
     stamp: new Date().toISOString(),
     version: pkg.version,

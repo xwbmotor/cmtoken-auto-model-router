@@ -132,7 +132,7 @@ print(json.dumps(result))
 `;
     writeFileSync(join(dir, 'regress.py'), script);
     let out;
-    try { out = execFileSync('python3', [join(dir, 'regress.py')], { encoding: 'utf8', timeout: 120000 }); }
+    try { out = execFileSync(hasPlaywright, [join(dir, 'regress.py')], { encoding: 'utf8', timeout: 120000 }); }
     catch (e) { throw new Error(`playwright 失败: ${String(e.stdout || e.message).slice(0, 300)}`); }
     const r = JSON.parse(out.slice(out.indexOf('{')));
     if (r.pageerrors_final?.length) throw new Error(`页面 JS 错误: ${r.pageerrors_final.join(' | ')}`);

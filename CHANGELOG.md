@@ -2,6 +2,22 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.11.11] - 2026-09-01
+
+二十六审收口（4×P1+P0）：
+- P0 发现列表模型名不可见：全局 input{width:100%} 把 checkbox 拉到 220px 挤压模型名至 0 宽——.discover-row checkbox width:auto；ui-regression 固化 nameWidths≥10px 断言
+- P1 modal 闭合标签：v0.11.8 挪动致 evalModal 嵌进 discoverModal 内部（交错评测弹层永不可见）——补闭合+HTMLParser 零错误+测试断言兄弟关系
+- P1 禁用模型进交错评测：前端 enabled===true&&ownership!=='unknown'，后端黑盒校验（itl-deny-ssrf）
+- P1 discover-probe SSRF：new URL 严格解析+协议/凭据/IP 拒绝+域名白名单+redirect:'error'
+- P1 发布门禁：UI 测试读 AMR_TEST_STRICT_SKIP、python 三回退、run-release-tests 串行+skipped 终检
+- P2 key 四出口清空/半填阻止/短 key 遮蔽
+
+## [0.11.12] - 2026-09-01
+
+用户实测流程断点：
+- 注册成功后三步上线路径引导面板（定归属+定价→交错评测/体检巡检/手工录入→启用+安全发布），替代原一句话 toast
+- 模型删除按钮（danger 态）：引用检查（defaultExplicitModel/shadowModel/taskPreferences/semanticRouter）+confirm+走安全发布事务，后端 validateConfig 兜底
+
 ## [0.11.10] - 2026-09-01
 
 UI 审计常态化 + 剩余问题收尾：
