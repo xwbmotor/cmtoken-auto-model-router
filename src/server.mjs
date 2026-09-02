@@ -443,6 +443,44 @@ function buildRoutingReport() {
 
 const counters = { startedAt: new Date().toISOString(), total: 0, auto: 0, explicit: 0, success: 0, errors: 0, fallback: 0, selected: {}, selectedBy: {}, suggested: {}, task: {}, outcome: { auto: { success: 0, error: 0 }, explicit: { success: 0, error: 0 } }, semantic: { eligible: 0, attempted: 0, succeeded: 0, disagreed: 0, errors: 0, applied: 0, escalated: 0, rejectedLowConfidence: 0, rolloutHold: 0, byCascadeLevel: {}, bucketKeySource: { session: 0, fingerprint: 0, internal: 0 } } };
 
+// v0.11.14：总请求等指标改累计口径——落盘 JSON + 启动恢复（发版重启不清零）。
+// 磁盘只存累计聚合值；health/recent 等 ephemeral 状态不入盘。异步批量原子写（与 budget 台账同模式）。
+const countersStatePath = resolve(projectRoot, process.env.AMR_COUNTERS_PATH || './data/counters.json');
+function countersToPersist() {
+  const { startedAt, ...cumulative } = counters;
+  return { version: 1, savedAt: new Date().toISOString(), cumulative };
+}
+let countersWriteTimer = null;
+function scheduleCountersWrite() {
+  if (countersWriteTimer) return; // 批量：500ms 内合并为一次写
+  countersWriteTimer = setTimeout(() => {
+    countersWriteTimer = null;
+    const snapshot = JSON.stringify(countersToPersist(), null, 2) + String.fromCharCode(10);
+    (async () => {
+      await fsp.mkdir(dirname(countersStatePath), { recursive: true });
+      const temp = `${countersStatePath}.${process.pid}.${Date.now()}.tmp`;
+      await fsp.writeFile(temp, snapshot, { encoding: 'utf8', mode: 0o600 });
+      await fsp.rename(temp, countersStatePath);
+    })().catch((e) => { console.error('counters_write_failed', e?.message || String(e)); });
+  }, 500);
+  countersWriteTimer.unref?.();
+}
+let countersWriteHooked = false;
+function countersPersistOnMutate() {
+  if (countersWriteHooked) return;
+  countersWriteHooked = true;
+  // Proxy 陷阱太重——改为在关键递增点显式调用 scheduleCountersWrite()（见 chat 路由处）。
+}
+(async () => {
+  try {
+    const saved = JSON.parse(await fsp.readFile(countersStatePath, 'utf8'));
+    if (saved && saved.version === 1 && saved.cumulative && typeof saved.cumulative.total === 'number') {
+      Object.assign(counters, saved.cumulative);
+      logger.info('counters_restored', { total: counters.total, savedAt: saved.savedAt });
+    }
+  } catch { /* ENOENT/损坏都按空起步 */ }
+})();
+
 // 真实业务规模输入构造器：模拟样本不再是「一句话玩具提问」，而是带系统提示词+多轮上下文的真实调用形态。
 
 // 用户侧输入 token 是模拟成本失真的主因（真实调用输入常为几十~上千 token，而一句话提问只有几个）。
@@ -2324,7 +2362,7 @@ async function proxyCompletion(req, res) {
 
   if (!Array.isArray(body.messages)) return errorJson(res, 400, 'messages 必须是数组', 'invalid_request_error');
 
-  counters.total += 1;
+  counters.total += 1; scheduleCountersWrite();
 
   const auto = isAutoRequest(body, config);
 
@@ -2332,15 +2370,15 @@ async function proxyCompletion(req, res) {
 
   if (auto) {
 
-    counters.auto += 1;
+    counters.auto += 1; scheduleCountersWrite();
 
     try { decision = await resolveAutoDecision(body, { clientAuthHeader: req.headers.authorization, requestId: req.requestId, bucketKey: { sessionId: req.headers['x-session-id'] || null, keyFingerprint: keyFingerprint(req.headers.authorization), requestId: req.requestId } }); }
 
-    catch (error) { counters.errors += 1; return errorJson(res, 503, error.message); }
+    catch (error) { counters.errors += 1; scheduleCountersWrite(); return errorJson(res, 503, error.message); }
 
   } else {
 
-    counters.explicit += 1;
+    counters.explicit += 1; scheduleCountersWrite();
 
     const model = config.models.find((x) => x.id === body.model && x.enabled);
 
@@ -2382,9 +2420,9 @@ async function proxyCompletion(req, res) {
 
   }
 
-  counters.suggested[decision.suggestedModel] = (counters.suggested[decision.suggestedModel] || 0) + 1;
+  counters.suggested[decision.suggestedModel] = (counters.suggested[decision.suggestedModel] || 0) + 1; scheduleCountersWrite();
 
-  counters.task[decision.analysis.task] = (counters.task[decision.analysis.task] || 0) + 1;
+  counters.task[decision.analysis.task] = (counters.task[decision.analysis.task] || 0) + 1; scheduleCountersWrite();
 
   const fallback = decision.fallbackOrder.filter((m) => m !== decision.selectedModel);
 
@@ -2530,7 +2568,7 @@ async function proxyCompletion(req, res) {
 
   const markSelectedBy = (model) => {
 
-    counters.selected[model] = (counters.selected[model] || 0) + 1;
+    counters.selected[model] = (counters.selected[model] || 0) + 1; scheduleCountersWrite();
 
     const selectedBy = counters.selectedBy[model] ||= { explicit: 0, auto: 0, autoPreference: 0 };
 
@@ -2558,9 +2596,9 @@ async function proxyCompletion(req, res) {
 
       maybePromoteVerified(c.model);
 
-      counters.success += 1;
+      counters.success += 1; scheduleCountersWrite();
 
-      counters.outcome[c.auto ? 'auto' : 'explicit'].success += 1;
+      counters.outcome[c.auto ? 'auto' : 'explicit'].success += 1; scheduleCountersWrite();
 
       markSelectedBy(c.model);
 
@@ -2574,7 +2612,7 @@ async function proxyCompletion(req, res) {
 
       updateHealth(c.model, false, Date.now() - c.started);
 
-      counters.failures += 1;
+      counters.failures += 1; scheduleCountersWrite();
 
       counters.outcome[c.auto ? 'auto' : 'explicit'].error += 1;
 
@@ -2922,7 +2960,7 @@ async function proxyCompletion(req, res) {
 
       updateHealth(model, false, Date.now() - started);
 
-      if (error.retryable !== false && i + 1 < attempts.length) { counters.fallback += 1; continue; }
+      if (error.retryable !== false && i + 1 < attempts.length) { counters.fallback += 1; scheduleCountersWrite(); continue; }
 
       break;
 
@@ -2932,9 +2970,9 @@ async function proxyCompletion(req, res) {
 
   clearTimeout(timer);
 
-  counters.errors += 1;
+  counters.errors += 1; scheduleCountersWrite();
 
-  counters.outcome[auto ? 'auto' : 'explicit'].error += 1;
+  counters.outcome[auto ? 'auto' : 'explicit'].error += 1; scheduleCountersWrite();
 
   const failure = { at: new Date().toISOString(), requested: decision.requestedModel, selected: attempts.at(-1), suggested: decision.suggestedModel, task: decision.analysis.task, reasoningLevel: decision.reasoningLevel, reasoningApplied: false, keyFingerprint: keyFingerprint(req.headers.authorization), ok: false, error: lastError?.message };
 

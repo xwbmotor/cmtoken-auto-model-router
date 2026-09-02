@@ -80,7 +80,7 @@ test('e2e 超时 fallback：attempt 1 超时不得污染 attempt 2（独立 cont
   const port = held.port;
   const { configPath, dataDir } = await makeSandbox(realUpstreamPort);
   const child = spawn(process.execPath, ['src/server.mjs'], {
-    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', ROUTER_KEY_MODE: 'passthrough', MAAS_BASE_URL: `http://127.0.0.1:${realUpstreamPort}/v1`, ADMIN_TOKEN: 'adm', METRICS_TOKEN: 'met', CONFIG_PATH: configPath },
+    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', ROUTER_KEY_MODE: 'passthrough', MAAS_BASE_URL: `http://127.0.0.1:${realUpstreamPort}/v1`, ADMIN_TOKEN: 'adm', METRICS_TOKEN: 'met', CONFIG_PATH: configPath, AMR_COUNTERS_PATH: join(dataDir, 'counters.json') },
     cwd: process.cwd(), stdio: 'ignore'
   });
   await held.release();
@@ -126,7 +126,7 @@ test('e2e 非流式客户端断开：写回前断开记失败不记成功（交�
   const port = held.port;
   const { configPath, dataDir } = await makeSandbox(realUpstreamPort);
   const child = spawn(process.execPath, ['src/server.mjs'], {
-    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', ROUTER_KEY_MODE: 'passthrough', MAAS_BASE_URL: `http://127.0.0.1:${realUpstreamPort}/v1`, ADMIN_TOKEN: 'adm', METRICS_TOKEN: 'met', CONFIG_PATH: configPath },
+    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', ROUTER_KEY_MODE: 'passthrough', MAAS_BASE_URL: `http://127.0.0.1:${realUpstreamPort}/v1`, ADMIN_TOKEN: 'adm', METRICS_TOKEN: 'met', CONFIG_PATH: configPath, AMR_COUNTERS_PATH: join(dataDir, 'counters.json') },
     cwd: process.cwd(), stdio: 'ignore'
   });
   await held.release();
