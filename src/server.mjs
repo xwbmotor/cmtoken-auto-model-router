@@ -3171,6 +3171,25 @@ const server = http.createServer(async (req, res) => {
         catch { return errorJson(res, 400, `端点域名 ${host} 解析失败（DNS）`, 'invalid_request_error'); }
         const bad = addrs.filter((a) => ipIsBlocked(a.address));
         if (bad.length) return errorJson(res, 400, `端点域名解析到禁用网段（${bad.map((b) => b.address).join('、')}）——禁止内网/元数据探测`, 'invalid_request_error');
+        // 二十八审 P1-1 剩余窗口的如实说明：fetch 时 Node/undici 会再次解析（rebinding TOCTOU）。
+        // 现实风险评估：白名单默认仅企业自有域名（maas.gd.chinamobile.com / api.z.ai），攻击者需控制其 DNS
+        // 才能利用；DISCOVER_PROBE_ALLOW_HOSTS 扩展时运营自负其责。http 端点可加 IP 直连+Host 头彻底闭环
+        // （https 因 SNI/证书绑定不可行）。此处选择：http 端点用解析出的第一个非禁 IP 直连（真闭环），
+        // https 端点接受窗口（默认白名单域名全为 https 且可信）。
+        if (u.protocol === 'http:') {
+          const safeIp = addrs.find((a) => !ipIsBlocked(a.address));
+          if (safeIp) {
+            // IP 直连（真闭环：无二次解析窗口）+ Host 头保上游路由
+            const ipUrl = new URL(`${u.protocol}//${safeIp.address}${u.port ? ':' + u.port : ''}${u.pathname.replace(/\/$/, '')}/models`);
+            const res3 = await fetch(ipUrl, { headers: { authorization: `Bearer ${key}`, host: u.host }, signal: AbortSignal.timeout(15000), redirect: 'error' });
+            if (!res3.ok) return errorJson(res, 502, `端点返回 HTTP ${res3.status}——请核对 URL 与 Key（key 是否有 /models 权限）`, 'discover_probe_error');
+            const payload3 = await res3.json();
+            const list3 = Array.isArray(payload3?.data) ? payload3.data : Array.isArray(payload3) ? payload3 : [];
+            const registered3 = new Set((config.models || []).map((m) => m.id));
+            const models3 = list3.map((m) => ({ id: m.id, registered: registered3.has(m.id), ownedBy: m.owned_by || null }));
+            return json(res, 200, { total: models3.length, models: models3, upstream: { baseUrl: base, keyMasked: key.length <= 8 ? '…' + key.slice(-2) : key.slice(0, 6) + '…' + key.slice(-4) } });
+          }
+        }
       }
       const probeUrl = new URL(u.toString().replace(/\/$/, '') + '/models');
       const res2 = await fetch(probeUrl, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15000), redirect: 'error' });

@@ -121,8 +121,12 @@ with sync_playwright() as pw:
     pg.evaluate("() => document.getElementById('guideClose') && document.getElementById('guideClose').click()")
     pg.wait_for_timeout(300)
     result['removeBtns'] = pg.evaluate("() => document.querySelectorAll('#models button[data-act=remove]').length")
+    pg.on('dialog', lambda dlg: dlg.accept())  # 删除 confirm 在此之前挂好
+    # 二十八审 P2-3：真实删除一遍——注册进来的 regress-new-model 应可删且删后行数-1
+    result['removeFlow'] = pg.evaluate("() => { const trs = [...document.querySelectorAll('#models tr')]; const before = trs.length; const tr = trs.find(r => r.textContent.includes('regress-new-model')); if (!tr) return { found: false }; tr.querySelector('button[data-act=remove]').click(); return { found: true, before }; }")
+    pg.wait_for_timeout(600)
+    result['removeAfter'] = pg.evaluate("() => [...document.querySelectorAll('#models tr')].length")
     result['modalSiblings'] = pg.evaluate("() => { const dm = document.getElementById('discoverModal'); const em = document.getElementById('evalModal'); return !!dm && !!em && dm.parentElement === em.parentElement; }")
-    pg.on('dialog', lambda dlg: dlg.accept())
     pg.evaluate("() => { const b = document.getElementById('interleavedEval'); if (b) b.click(); }")
     pg.wait_for_timeout(1200)
     result['evalModalVisible'] = pg.evaluate("() => { const em = document.getElementById('evalModal'); const r = em.getBoundingClientRect(); return getComputedStyle(em).display === 'flex' && r.width > 0; }")
@@ -144,6 +148,8 @@ print(json.dumps(result))
     if (!r.onboardGuide) throw new Error('注册成功后无上线路径引导面板（v0.11.12）');
     if (!Array.isArray(r.removeBtns) && !(r.removeBtns > 0)) throw new Error('模型表无删除按钮（v0.11.12）');
     if (!(Number(r.removeBtns) > 0)) throw new Error(`模型表删除按钮数 ${r.removeBtns}——应≥1`);
+    if (r.removeFlow && !r.removeFlow.found) throw new Error('注册模型行未找到——删除流测试失效');
+    if (r.removeFlow?.found && Number(r.removeAfter) !== Number(r.removeFlow.before) - 1) throw new Error(`删除后行数未减（before=${r.removeFlow.before} after=${r.removeAfter}）——二十八审 P1-4 删除链路`);
     const tall = (r.rowHeights || []).filter((h) => h > 44);
     if (tall.length) throw new Error(`发现列表行折行（>${44}px）: ${JSON.stringify(r.rowHeights)}`);
     if (r.ownershipSelect && r.ownershipSelect.selW < r.ownershipSelect.needW) throw new Error(`归属下拉过窄: ${JSON.stringify(r.ownershipSelect)}`);

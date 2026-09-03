@@ -17,7 +17,7 @@
 //     脏 worktree 的报告不再能冒充正式发布证据。开发期可用 --allow-dirty 显式降级，
 //     报告标记 validForRelease=false。
 //   ③报告写盘失败=发布失败（exit 2），不再吞掉。
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { cpus } from 'node:os';
@@ -57,7 +57,7 @@ const gate = {
 // 否则报告不能标 validForRelease（tag 可变，sha256 摘要+revision 才绑定 build 产物）。
 const images = {
   routerImageId: collect(() => execSync(`docker images --no-trunc --format "{{.ID}}" cmt-auto-model-router:${pkg.version}`, { encoding: 'utf8' }).trim() || null),
-  routerLabelsRevision: collect(() => execSync(`docker inspect --format "{{ index .Config.Labels \\"org.opencontainers.image.revision\\" }}" cmt-auto-model-router:${pkg.version}`, { encoding: 'utf8' }).trim() || null),
+  routerLabelsRevision: collect(() => JSON.parse(execFileSync('docker', ['inspect', `cmt-auto-model-router:${pkg.version}`, '--format', '{{json .Config.Labels}}'], { encoding: 'utf8' }))['org.opencontainers.image.revision'] || null),
 };
 gate.imageEvidence = Boolean(images.routerImageId) && Boolean(images.routerLabelsRevision) && images.routerLabelsRevision === git.commit;
 // v0.10.2 门禁：compose 镜像版本必须与 package.json 一致（防 tag 复现出旧版本）+ 巡检题库存在
@@ -74,7 +74,7 @@ if (!gate.evalGateCasesPresent) console.error(`[test:release] 题库校验失败
 const classifierTag = collect(() => (/image:\s*cmt-amr-classifier:([^\s#]+)/.exec(composeText) || [])[1]);
 gate.classifierTagPresent = Boolean(classifierTag);
 const classifierImageId = collect(() => classifierTag ? execSync(`docker images --no-trunc --format "{{.ID}}" cmt-amr-classifier:${classifierTag}`, { encoding: 'utf8' }).trim() || null : null);
-const classifierLabelsRevision = collect(() => classifierTag ? execSync(`docker inspect --format "{{ index .Config.Labels \\\\"org.opencontainers.image.revision\\\\" }}" cmt-amr-classifier:${classifierTag}`, { encoding: 'utf8' }).trim() || null : null);
+const classifierLabelsRevision = collect(() => classifierTag ? JSON.parse(execFileSync('docker', ['inspect', `cmt-amr-classifier:${classifierTag}`, '--format', '{{json .Config.Labels}}'], { encoding: 'utf8' }))['org.opencontainers.image.revision'] || null : null);
 images.classifierImageId = classifierImageId;          // 进 release 报告证据链
 images.classifierLabelsRevision = classifierLabelsRevision;
 gate.classifierImageBuilt = Boolean(classifierImageId);
@@ -89,7 +89,7 @@ images.classifierRootfsLayers = classifierInspect?.RootFS?.Layers || null;
 // 任意历史 commit / 伪造 SHA 不再通过；classifier 独立版本线 = 打自己的 vX.Y.Z tag。
 const revRaw = labels['org.opencontainers.image.revision'] || null;
 const revIsSha = Boolean(revRaw && CLASSIFIER_REV_SHA.test(revRaw));
-const classifierTagCommit = collect(() => classifierTag ? execSync(`git rev-parse 'v${classifierTag}^{{commit}}'`, { encoding: 'utf8' }).trim() : null);
+const classifierTagCommit = collect(() => classifierTag ? execSync(`git rev-parse 'v${classifierTag}^{commit}'`, { encoding: 'utf8' }).trim() : null);
 images.classifierTagCommit = classifierTagCommit; // 期望源码 commit 入报告（可复核）
 gate.classifierRevisionMatchesTag = Boolean(revRaw && classifierTagCommit && revRaw === classifierTagCommit);
 gate.classifierRevisionIsSha = revIsSha && gate.classifierRevisionMatchesTag;
@@ -104,7 +104,7 @@ if (!validForRelease && !allowDirty) {
 const env = { ...process.env, AMR_TEST_STRICT_SKIP: '1' };
 const cmd = 'node --test --test-concurrency=1'; // v0.11.11（二十六审 P1-4）：串行——ui-regression 与其他 e2e 并发 spawn 会挂起
 const t0 = Date.now();
-const child = spawn(process.execPath, ['--test'], { env, stdio: ['ignore', 'pipe', 'pipe'], cwd });
+const child = spawn(process.execPath, ['--test', '--test-concurrency=1'], { env, stdio: ['ignore', 'pipe', 'pipe'], cwd });
 
 let out = '';
 child.stdout.on('data', (c) => { out += c; });

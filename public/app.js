@@ -821,7 +821,7 @@ function registerDiscovered() {
 }
 $id('discoverModels')?.addEventListener('click', openDiscover);
 $id('interleavedEval')?.addEventListener('click', startInterleaved);
-$id('discoverClose')?.addEventListener('click', () => $id('discoverModal').style.display = 'none');
+$id('discoverClose')?.addEventListener('click', () => { $id('discoverModal').style.display = 'none'; const wk = $id('dcApiKey'); if (wk) wk.value = ''; }); // 二十八审 P2-1
 
 let evalTimer = null;
 // v0.11.0 交错评测：多模型同窗口轮转+Judge 评分+置信区间（仅建议值）
@@ -937,6 +937,8 @@ $id('models')?.addEventListener('click', (ev) => {
   if (b.dataset.act === 'full') startEval('full', m.id);
   // v0.11.12：模型删除——引用检查（defaultExplicitModel/shadowModel/taskPreferences/semanticRouter 引用中不可删）
   if (b.dataset.act === 'remove') {
+    if (config.models.length <= 1) { toast('至少保留 1 个模型——注册表不能清空', true); return; }
+    if ((config.routing?.maxAttempts || 1) > config.models.length - 1) { toast(`删除后模型数（${config.models.length - 1}）将少于 maxAttempts（${config.routing.maxAttempts}）——请先把 maxAttempts 调小`, true); return; }
     const refs = [];
     const r = config.routing || {};
     if (r.defaultExplicitModel === m.id) refs.push('routing.defaultExplicitModel（默认指定模型）');
@@ -947,7 +949,8 @@ $id('models')?.addEventListener('click', (ev) => {
     if (refs.length) { toast('不能删除 ' + m.id + '：仍被 ' + refs.join('、') + ' 引用——先把对应配置改指向其他模型', true); return; }
     if (!confirm('删除模型 ' + m.id + '？\n只从注册表移除（不影响上游模型本身），未发布前可重新添加。')) return;
     config.models.splice(idx, 1);
-    renderModels(); renderProviderColumn(); renderDeployment(); bindPolicy(); syncDirty(); scheduleSimulation();
+    // 二十八审 P1-4：所有以模型下标为依据的视图必须全量重绘——能力矩阵/画像保留旧 data-index 会静默改错模型
+    renderModels(); renderProviderColumn(); renderDeployment(); bindPolicy(); renderCapabilityMatrix(); renderProfile(); syncDirty(); scheduleSimulation();
     toast('已删除 ' + m.id + '（记得「安全发布」生效）');
   }
 });

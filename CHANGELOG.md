@@ -2,6 +2,12 @@
 
 本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
+## [0.11.12] - 2026-09-01
+
+用户实测流程断点：
+- 注册成功后三步上线路径引导面板（定归属+定价→交错评测/体检巡检/手工录入→启用+安全发布），替代原一句话 toast
+- 模型删除按钮（danger 态）：引用检查（defaultExplicitModel/shadowModel/taskPreferences/semanticRouter）+confirm+走安全发布事务，后端 validateConfig 兜底
+
 ## [0.11.11] - 2026-09-01
 
 二十六审收口（4×P1+P0）：
@@ -12,11 +18,13 @@
 - P1 发布门禁：UI 测试读 AMR_TEST_STRICT_SKIP、python 三回退、run-release-tests 串行+skipped 终检
 - P2 key 四出口清空/半填阻止/短 key 遮蔽
 
-## [0.11.12] - 2026-09-01
+## [0.11.13] - 2026-09-01
 
-用户实测流程断点：
-- 注册成功后三步上线路径引导面板（定归属+定价→交错评测/体检巡检/手工录入→启用+安全发布），替代原一句话 toast
-- 模型删除按钮（danger 态）：引用检查（defaultExplicitModel/shadowModel/taskPreferences/semanticRouter）+confirm+走安全发布事务，后端 validateConfig 兜底
+二十七审收口（3×P1+5×P2）：SSRF DNS pinning（解析后 IP 禁用网段全拒+fail-closed+逃生口收窄仅 127.0.0.1:port+拒绝 query+规范化 URL）；发布门禁四处；compose 回写；×关闭清 key；CHANGELOG 补记；SSRF 测试补 query/IPv6 用例。
+
+## [0.11.14] - 2026-09-03
+
+总请求累计口径（用户反馈）：counters JSON 落盘+启动恢复（发版不再清零）；前端卡片累计口径提示；新黑盒测试 itl-counters-persist；e2e 补 AMR_COUNTERS_PATH 隔离。
 
 ## [0.11.10] - 2026-09-01
 
