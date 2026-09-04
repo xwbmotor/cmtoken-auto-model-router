@@ -89,7 +89,7 @@ images.classifierRootfsLayers = classifierInspect?.RootFS?.Layers || null;
 // 任意历史 commit / 伪造 SHA 不再通过；classifier 独立版本线 = 打自己的 vX.Y.Z tag。
 const revRaw = labels['org.opencontainers.image.revision'] || null;
 const revIsSha = Boolean(revRaw && CLASSIFIER_REV_SHA.test(revRaw));
-const classifierTagCommit = collect(() => classifierTag ? execSync(`git rev-parse 'v${classifierTag}^{commit}'`, { encoding: 'utf8' }).trim() : null);
+const classifierTagCommit = collect(() => classifierTag ? execFileSync('git', ['rev-parse', `v${classifierTag}^{commit}`], { cwd, encoding: 'utf8' }).trim() : null); // 二十九审 P1-1：execSync 过 cmd.exe 单引号不剥离→ambiguous argument；去 shell 用 argv
 images.classifierTagCommit = classifierTagCommit; // 期望源码 commit 入报告（可复核）
 gate.classifierRevisionMatchesTag = Boolean(revRaw && classifierTagCommit && revRaw === classifierTagCommit);
 gate.classifierRevisionIsSha = revIsSha && gate.classifierRevisionMatchesTag;
@@ -101,7 +101,8 @@ if (!validForRelease && !allowDirty) {
   process.exit(3);
 }
 
-const env = { ...process.env, AMR_TEST_STRICT_SKIP: '1' };
+// 二十九审 P2-3：全测试树统一注入临时 counters 路径——其余 ~31 个启动点不再读写仓库 data/
+const env = { ...process.env, AMR_COUNTERS_PATH: resolve(cwd, 'data', `counters-test-${process.pid}.json`), AMR_TEST_STRICT_SKIP: '1' };
 const cmd = 'node --test --test-concurrency=1'; // v0.11.11（二十六审 P1-4）：串行——ui-regression 与其他 e2e 并发 spawn 会挂起
 const t0 = Date.now();
 const child = spawn(process.execPath, ['--test', '--test-concurrency=1'], { env, stdio: ['ignore', 'pipe', 'pipe'], cwd });

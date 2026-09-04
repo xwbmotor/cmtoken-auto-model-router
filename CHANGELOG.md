@@ -1,6 +1,18 @@
-# Changelog
+## [0.11.16] - 2026-09-03
 
-本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
+二十九审收口（发版流程改序：compose 进发版提交）：rev-parse 去 shell（execFileSync argv）；counters 串行写链+优雅关停最终快照+恢复 await 于监听前+结构校验+损坏告警+firstStartedAt 持久化；release runner 全树注入临时 counters 路径；IPv6 URL 括号。
+
+## [0.11.15] - 2026-09-03
+
+二十八审收口：发布门禁三处真落盘（execFileSync+argv 实跑验证）；SSRF http IP 直连真闭环；compose 回写；删除后全量重绘（能力矩阵/画像）；×清 key；删除边界前置提示；真实删除流断言。
+
+## [0.11.14] - 2026-09-03
+
+总请求累计口径（用户反馈）：counters JSON 落盘+启动恢复（发版不再清零）；前端卡片累计口径提示；新黑盒测试 itl-counters-persist；e2e 补 AMR_COUNTERS_PATH 隔离。
+
+## [0.11.13] - 2026-09-01
+
+二十七审收口（3×P1+5×P2）：SSRF DNS pinning（解析后 IP 禁用网段全拒+fail-closed+逃生口收窄仅 127.0.0.1:port+拒绝 query+规范化 URL）；发布门禁四处；compose 回写；×关闭清 key；CHANGELOG 补记；SSRF 测试补 query/IPv6 用例。
 
 ## [0.11.12] - 2026-09-01
 
@@ -18,13 +30,9 @@
 - P1 发布门禁：UI 测试读 AMR_TEST_STRICT_SKIP、python 三回退、run-release-tests 串行+skipped 终检
 - P2 key 四出口清空/半填阻止/短 key 遮蔽
 
-## [0.11.13] - 2026-09-01
+# Changelog
 
-二十七审收口（3×P1+5×P2）：SSRF DNS pinning（解析后 IP 禁用网段全拒+fail-closed+逃生口收窄仅 127.0.0.1:port+拒绝 query+规范化 URL）；发布门禁四处；compose 回写；×关闭清 key；CHANGELOG 补记；SSRF 测试补 query/IPv6 用例。
-
-## [0.11.14] - 2026-09-03
-
-总请求累计口径（用户反馈）：counters JSON 落盘+启动恢复（发版不再清零）；前端卡片累计口径提示；新黑盒测试 itl-counters-persist；e2e 补 AMR_COUNTERS_PATH 隔离。
+本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
 
 ## [0.11.10] - 2026-09-01
 

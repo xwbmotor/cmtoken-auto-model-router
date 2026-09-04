@@ -448,38 +448,45 @@ const counters = { startedAt: new Date().toISOString(), total: 0, auto: 0, expli
 const countersStatePath = resolve(projectRoot, process.env.AMR_COUNTERS_PATH || './data/counters.json');
 function countersToPersist() {
   const { startedAt, ...cumulative } = counters;
+  // 二十九审 P2-2：首启时间持久化——重启后 UI「累计起算日」不再错误显示本次启动日期
+  if (!cumulative.firstStartedAt) cumulative.firstStartedAt = startedAt;
   return { version: 1, savedAt: new Date().toISOString(), cumulative };
 }
 let countersWriteTimer = null;
+let countersWriteChain = Promise.resolve(); // 二十九审 P2-1：单一串行写链——写永远排队，杜绝旧快照后完成覆盖新快照
+function countersFlushNow() {
+  if (countersWriteTimer) { clearTimeout(countersWriteTimer); countersWriteTimer = null; }
+  const snapshot = JSON.stringify(countersToPersist(), null, 2) + String.fromCharCode(10);
+  countersWriteChain = countersWriteChain.then(async () => {
+    await fsp.mkdir(dirname(countersStatePath), { recursive: true });
+    const temp = `${countersStatePath}.${process.pid}.${Date.now()}.tmp`;
+    await fsp.writeFile(temp, snapshot, { encoding: 'utf8', mode: 0o600 });
+    await fsp.rename(temp, countersStatePath);
+  }).catch((e) => { logger.warn('counters_write_failed', { error: String(e?.message || e) }); });
+  return countersWriteChain;
+}
 function scheduleCountersWrite() {
   if (countersWriteTimer) return; // 批量：500ms 内合并为一次写
-  countersWriteTimer = setTimeout(() => {
-    countersWriteTimer = null;
-    const snapshot = JSON.stringify(countersToPersist(), null, 2) + String.fromCharCode(10);
-    (async () => {
-      await fsp.mkdir(dirname(countersStatePath), { recursive: true });
-      const temp = `${countersStatePath}.${process.pid}.${Date.now()}.tmp`;
-      await fsp.writeFile(temp, snapshot, { encoding: 'utf8', mode: 0o600 });
-      await fsp.rename(temp, countersStatePath);
-    })().catch((e) => { console.error('counters_write_failed', e?.message || String(e)); });
-  }, 500);
+  countersWriteTimer = setTimeout(() => { countersWriteTimer = null; countersFlushNow(); }, 500);
   countersWriteTimer.unref?.();
 }
-let countersWriteHooked = false;
-function countersPersistOnMutate() {
-  if (countersWriteHooked) return;
-  countersWriteHooked = true;
-  // Proxy 陷阱太重——改为在关键递增点显式调用 scheduleCountersWrite()（见 chat 路由处）。
-}
-(async () => {
+// 恢复：结构校验 + 损坏可见（二十九审 P2-2：原静默吞错+嵌套损坏仍载入）
+let countersRestored = (async () => {
   try {
-    const saved = JSON.parse(await fsp.readFile(countersStatePath, 'utf8'));
-    if (saved && saved.version === 1 && saved.cumulative && typeof saved.cumulative.total === 'number') {
-      Object.assign(counters, saved.cumulative);
+    const raw = await fsp.readFile(countersStatePath, 'utf8');
+    const saved = JSON.parse(raw);
+    const c = saved?.cumulative;
+    if (saved?.version === 1 && typeof c?.total === 'number' && typeof c?.success === 'number' && typeof c?.errors === 'number' && c.selected && typeof c.selected === 'object' && c.outcome?.auto && c.outcome?.explicit) {
+      Object.assign(counters, c);
       logger.info('counters_restored', { total: counters.total, savedAt: saved.savedAt });
+    } else {
+      logger.warn('counters_state_invalid_shape', { total: c?.total });
     }
-  } catch { /* ENOENT/损坏都按空起步 */ }
+  } catch (e) {
+    if (e?.code !== 'ENOENT') logger.warn('counters_state_corrupt', { error: String(e?.message || e) });
+  }
 })();
+await countersRestored; // 二十九审 P2-2：恢复完成于 server 监听前（此处已过 TDZ；监听在文件后段）
 
 // 真实业务规模输入构造器：模拟样本不再是「一句话玩具提问」，而是带系统提示词+多轮上下文的真实调用形态。
 
@@ -3180,7 +3187,8 @@ const server = http.createServer(async (req, res) => {
           const safeIp = addrs.find((a) => !ipIsBlocked(a.address));
           if (safeIp) {
             // IP 直连（真闭环：无二次解析窗口）+ Host 头保上游路由
-            const ipUrl = new URL(`${u.protocol}//${safeIp.address}${u.port ? ':' + u.port : ''}${u.pathname.replace(/\/$/, '')}/models`);
+            const hostForUrl = safeIp.address.includes(':') ? `[${safeIp.address}]` : safeIp.address; // 二十九审 P2-4：IPv6 须括号否则 Invalid URL
+            const ipUrl = new URL(`${u.protocol}//${hostForUrl}${u.port ? ':' + u.port : ''}${u.pathname.replace(/\/$/, '')}/models`);
             const res3 = await fetch(ipUrl, { headers: { authorization: `Bearer ${key}`, host: u.host }, signal: AbortSignal.timeout(15000), redirect: 'error' });
             if (!res3.ok) return errorJson(res, 502, `端点返回 HTTP ${res3.status}——请核对 URL 与 Key（key 是否有 /models 权限）`, 'discover_probe_error');
             const payload3 = await res3.json();
@@ -4160,6 +4168,8 @@ const shutdownManager = createShutdownManager({
 
   flush: async () => {
 
+    // ①counters 最终快照（二十九审 P2-1：优雅关停丢最后 500ms）
+    await countersFlushNow();
 
     // ②决策日志写链 ③语义事件写链 ④预算账本。HTTP 响应结束≠复核结束，滚动重启前必须等完。
 
