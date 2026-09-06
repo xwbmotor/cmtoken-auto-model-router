@@ -22,7 +22,6 @@ services:
       # ⚠️ 凭证全部经 env 注入，不进镜像、不进 git
       ROUTER_KEY_MODE: passthrough    # passthrough=客户端 MaaS key 透传 | strict=ROUTER_ACCESS_KEY
       ADMIN_TOKEN: ${ADMIN_TOKEN}          # 管理页登录 token（非本机绑定时必填）
-      MAAS_API_KEY: ${MAAS_API_KEY:-}      # 可选：沿用生产评审/运维凭据，不改变 passthrough 业务认证
       MAAS_BASE_URL: ${MAAS_BASE_URL}      # 上游 MaaS 平台地址
       # v0.7.2 八审 P1：语义灰度分桶 HMAC secret——本生产 compose 恒必填（shadow 也配：
       # 统一口径防「shadow 期忘了配、切 active 时才发现」的运维断层；shadow 下缺省仅限本地开发）。
