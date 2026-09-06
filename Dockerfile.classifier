@@ -16,6 +16,9 @@ RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
 COPY --chown=nobody:nogroup scripts/classifier_common.py scripts/serve_classifier.py ./scripts/
 COPY --chown=nobody:nogroup data/training/model/ ./data/training/model/
 
+# COPY 的父目录仍可能归 root；预建启动日志，允许运行用户写入。
+RUN touch /app/data/training/serve.log && chown nobody:nogroup /app/data/training/serve.log
+
 # v0.10.4：OCI revision 标签（发布门禁证据链要求；构建时 --build-arg GIT_REVISION=<commit>）
 ARG GIT_REVISION=unlabeled
 LABEL org.opencontainers.image.revision="${GIT_REVISION}"
