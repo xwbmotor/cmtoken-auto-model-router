@@ -10,6 +10,7 @@
 
 ```powershell
 node scripts/analyze-routing-matrix.mjs --input data/business-matrix.json --out data/business-matrix-report.json
+node scripts/analyze-routing-matrix.mjs --input data/business-matrix.json --selections data/business-selections.json --out data/learned-comparison.json
 node scripts/analyze-routing-matrix.mjs --input data/business-matrix.json --selection-split train --bootstrap 1000 --seed 42
 node --test tests/routing-matrix.test.mjs
 ```
@@ -17,6 +18,8 @@ node --test tests/routing-matrix.test.mjs
 默认用 `validation` 选择固定／按任务基线，使用 `test` 报告结果。可以预先指定 `train`，不能使用 `test` 选择基线。`--min-test-groups` 默认 30，`--bootstrap` 默认 1000、设 0 关闭；`--seed` 固定重采样结果。最低组数是探索性报告的操作门槛，不是统计充分性或优越性保证。
 
 CLI 将完整 JSON 报告输出到标准输出；`--out` 同时保存文件。报告记录输入路径与文件 SHA-256，保留输入与报告即可重算。输出不得覆盖输入。
+
+`--selections` 可以附加[离线学习流程](routing-learning-workflow.md)产生的独立预测文件。分析前校验数据集、候选版本、非测试拟合证据及测试任务清单；已有 predicted 策略不自动替换。预测文件的资格、覆盖与时延测量限制也会进入报告。
 
 | 退出码 | 含义 |
 | --- | --- |

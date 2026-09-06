@@ -48,6 +48,7 @@ histogram_quantile(0.95, sum by (le) (rate(router_completion_ms_bucket[5m])))
 1. [评测完整性](evaluation-integrity.md)：完整 Judge 输入、生成/评分覆盖门禁、同版本补跑、显式合并评分。历史缺原题的报告需要重评；原配置中的历史质量先验没有被本轮凭空重估。
 2. [反馈关联](feedback-learning.md)：把请求、人工声明反馈和 Judge 按 requestId 关联，保留来源及未知项，只导出人工待审候选。
 3. [业务任务矩阵](routing-matrix.md)：先冻结真实任务与成功标准，再形成相同候选面板，比较固定模型、按任务基线、当前/新策略和事后上界。
+4. [离线路由学习流程](routing-learning-workflow.md)：已实现请求特征、按候选概率/费用拟合、盲化预测与矩阵比较。软件回归不等于真实业务训练或生产收益验证。
 
 ```powershell
 npm run eval:matrix -- --input data/business-matrix.json --out data/business-matrix-report.json

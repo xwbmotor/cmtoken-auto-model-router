@@ -74,6 +74,7 @@ npm run eval:matrix -- --input data/business-matrix.json --out data/business-mat
 - [路由约束与评测基础](docs/router-foundations.md) —— 执行约束、指标变更及真实数据阶段边界
 - [评测完整性](docs/evaluation-integrity.md) —— Judge 输入、覆盖门禁和显式评分导入
 - [真实任务矩阵](docs/routing-matrix.md) —— 公平比较固定模型、当前路由、新策略与理想上界
+- [离线路由学习流程](docs/routing-learning-workflow.md) —— 数据隔离、请求级概率/费用拟合、盲化预测与独立结果比较
 - [反馈关联与待审样本](docs/feedback-learning.md) —— 传输结果、人工评价和 Judge 分开使用
 - [使用说明](docs/使用说明.md) —— 功能导览与参数口径
 - [MaaS平台集成部署运营手册](docs/MaaS平台集成部署运营手册.md) —— 平台侧集成与运营

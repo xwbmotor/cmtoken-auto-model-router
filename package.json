@@ -13,6 +13,9 @@
     "benchmark:stream": "node --env-file-if-exists=.env scripts/stream-performance.mjs",
     "eval:gate": "node --env-file-if-exists=.env scripts/eval-gate.mjs",
     "eval:matrix": "node scripts/analyze-routing-matrix.mjs",
+    "learning:prepare": "node scripts/prepare-routing-learning.mjs",
+    "learning:train": "node scripts/train-routing-policy.mjs",
+    "learning:predict": "node scripts/predict-routing-policy.mjs",
     "eval:subtask": "node --env-file-if-exists=.env scripts/subtask-eval.mjs",
     "eval:regen": "node --env-file-if-exists=.env scripts/subtask-regen.mjs"
   },
