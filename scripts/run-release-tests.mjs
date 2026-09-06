@@ -21,7 +21,7 @@ import { spawn, execSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { cpus } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 const cwd = process.cwd();
 const collect = (fn, fallback = null) => { try { return fn(); } catch { return fallback; } };

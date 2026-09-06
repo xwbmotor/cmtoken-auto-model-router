@@ -11,12 +11,13 @@
 .btn-mini{font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid var(--border,#ccc);background:transparent;cursor:pointer;margin-right:4px}
 .progress-wrap{background:var(--border,#eee);border-radius:6px;height:10px;overflow:hidden;margin:10px 0}
 .progress-bar{background:var(--accent,#369);height:100%;width:0;transition:width .4s}
-</style>
+</style><link rel="stylesheet" href="/workspace.css">
 </head>
 
-<body>
+<body class="console">
+<a class="skip-link" href="#mainContent">跳到主要内容</a>
 
-  <header><div><p class="eyebrow">模型路由 · 运行管理</p><h1>Auto Model Router</h1><p class="subtitle">用业务目标配置路由，发布前先看全局影响。</p></div><div class="view-switch" title="简单模式只保留日常运营页面；专家模式开放全部页面与参数。"><button id="btnSimple">简单模式</button><button id="btnExpert" class="active">专家模式</button></div><div class="auth"><label>Admin Token<input id="token" type="password" placeholder="已登录可留空（会话生效）"></label><button id="connect" class="secondary">连接</button><button id="logout" class="secondary" title="退出登录会话：清除 HttpOnly cookie，返回登录页">登出</button><span id="status" class="pill muted">未连接</span></div></header>
+  <header><div><p class="eyebrow">模型路由 · 运行管理</p><h1>Auto Model Router</h1><p class="subtitle">用业务目标配置路由，发布前先看全局影响。</p></div><div class="view-switch" title="简单模式只保留日常运营页面；专家模式开放全部页面与参数。"><button id="btnSimple">简单模式</button><button id="btnExpert" class="active">专家模式</button></div><div class="auth"><span id="status" class="pill muted" role="status">正在连接…</span><details class="connection-options"><summary>连接设置</summary><div class="connection-fields"><label>管理员令牌<input id="token" type="password" autocomplete="off" placeholder="使用登录会话时无需填写"></label><p class="hint">默认使用当前登录会话。仅在需要切换认证时填写令牌。</p><button id="connect" class="secondary">重新连接</button></div></details><button id="logout" class="secondary">退出登录</button></div></header>
 
   <nav class="tabs" id="tabs" aria-label="页面分区">
 
@@ -36,7 +37,8 @@
 
   </nav>
 
-  <main>
+  <main id="mainContent" tabindex="-1">
+    <div class="workspace-heading"><div><p class="eyebrow">工作空间 / 路由管理</p><h2 id="pageTitle">运行总览</h2><p id="pageDescription">查看流量、成本与路由表现，快速定位需要关注的问题。</p></div><label>本页导航<select id="sectionJump"><option value="">跳转到本页内容…</option></select></label></div>
 
     <section class="tab-page" data-tab="overview">
 
@@ -52,7 +54,11 @@
 
       </section>
 
-      <section class="panel arch-panel"><div class="panel-head"><div><p class="eyebrow">一图看懂</p><h2>请求进来后发生了什么</h2><p class="hint">每个 model=auto 的请求按这五步选出模型，全程毫秒级、对调用方透明。</p></div><button id="gotoManual" class="link-btn" style="font-size:12px">完整说明 →</button></div>
+
+
+      <section class="panel"><div class="panel-head"><div><p class="eyebrow">运行监控</p><h2>最近请求</h2><p class="hint">最近的每笔路由决策：请求被分给哪个模型、为什么、耗时多少。<span id="recentKeyHint"></span></p></div><div class="actions"><select id="recentKeySelect" title="按调用方 key 指纹筛选（指纹=调用方 API key 前 8 位哈希，非明文）"><option value="">全部调用方</option></select><button id="refresh" class="secondary">刷新</button></div></div><div id="recent" class="recent"><p class="empty">暂无请求</p></div></section>
+
+      <details class="panel arch-panel"><summary>了解路由工作流程</summary><div class="panel-head"><div><p class="eyebrow">一图看懂</p><h2>请求进来后发生了什么</h2><p class="hint">每个 model=auto 的请求按这五步选出模型，全程毫秒级、对调用方透明。</p></div><button id="gotoManual" class="link-btn" style="font-size:12px">完整说明 →</button></div>
 
         <div class="arch-flow">
 
@@ -70,9 +76,7 @@
 
         <p class="arch-note">分类体系：4 大类（⚙️代码 · 🤖智能体 · 📋数据 · 💬写作与对话）30 小类，与 OpenRouter 业界任务口径对齐；路由打分另用通用/代码/推理/创意/抽取五族质量分（见手册）。想深入？<button id="gotoManual2" class="link-btn" style="font-size:12px">使用手册 →</button></p>
 
-      </section>
-
-      <section class="panel"><div class="panel-head"><div><p class="eyebrow">运行监控</p><h2>最近请求</h2><p class="hint">最近的每笔路由决策：请求被分给哪个模型、为什么、耗时多少。<span id="recentKeyHint"></span></p></div><div class="actions"><select id="recentKeySelect" title="按调用方 key 指纹筛选（指纹=调用方 API key 前 8 位哈希，非明文）"><option value="">全部调用方</option></select><button id="refresh" class="secondary">刷新</button></div></div><div id="recent" class="recent"><p class="empty">暂无请求</p></div></section>
+      </details>
 
     </section>
 
@@ -183,7 +187,7 @@
 
           <label><span class="lbl">开始保护的预算比例 <span class="help" data-help="预算使用达到该比例时开始降级控制，如 0.9 = 用到九成开始干预。">?</span></span><input id="budgetThreshold" type="number" min="0.1" max="1" step="0.05"></label>
 
-          
+
 
         </div>
 
@@ -201,6 +205,14 @@
 
     <section class="tab-page" data-tab="models" hidden>
 
+      <section class="panel model-registry-panel"><div class="panel-head"><div><p class="eyebrow">模型管理</p><h2>模型参数</h2></div><div class="actions"><span class="hint">单价单位为元/百万 Token；修改表格后需到「业务策略」页点「安全发布」才会生效。</span><button id="discoverModels" class="secondary">从上游发现模型</button><button id="interleavedEval" class="secondary">交错评测</button>
+          <button id="addModel" class="secondary">新增模型</button>
+          <div id="offlineBanner" class="offline-banner" style="display:none"></div>
+          </div>
+          </div><div class="table-wrap"><table><thead><tr><th>启用</th><th>模型</th><th>归属 <span class="help" data-help="自建=自有算力部署；生态=外部生态伙伴模型。">?</span></th><th>默认质量 <span class="help" data-help="该模型的质量分（0~1），越高越强，是路由的核心依据。来自本网真实环境实测校准。">?</span></th><th>用户成本指数 <span class="help" data-help="用户侧相对成本（0~1），越大用户结算越贵（按算力豆单价归一），用于路由打分。由下方「成本与定价」按单价自动计算，一般不手改。">?</span></th><th>算力消耗指数 <span class="help" data-help="平台侧算力资源消耗（0~1）：单位吞吐占用的自建算力（设备×卡×卡价÷吞吐），与用户侧豆价独立，两者可背离。越大越吃卡。无部署数据的模型按 0.5 中性值参与评分。">?</span></th><th>时延指数 <span class="help" data-help="相对时延（0~1），越大越慢，用于路由打分。">?</span></th><th>输入单价 <span class="help" data-help="真实输入价格（元/百万 Token），用于预算估算。">?</span></th><th>缓存单价 <span class="help" data-help="输入缓存命中价（元/百万 Token），通常为输入价的 2~5 折。">?</span></th><th>输出单价 <span class="help" data-help="真实输出价格（元/百万 Token），用于预算估算。">?</span></th><th>P95 端到端时延 <span class="help" data-help="实测 95 分位完整回答耗时（毫秒，从发出请求到收完最后一个字，含模型思考）。">?</span></th><th>校准 <span class="help" data-help="pilot=试点中；待校准=未跑够真实流量；已验证=已通过真实表现验证。">?</span></th><th>测评</th><th>健康 <span class="help" data-help="实时健康状态（正常/恢复探测/熔断）及时延、错误数。">?</span></th></tr></thead><tbody id="models"></tbody></table></div></section>
+
+      <section class="panel"><div class="panel-head"><div><p class="eyebrow">任务进度</p><h2>评测任务</h2><p class="hint">关闭弹窗不会停止评测，可随时回来查看。已结束任务保留 2 小时；服务重启后记录清空。</p></div><button id="refreshEvalTasks" class="secondary">刷新任务</button></div><div id="evalTaskList" aria-live="polite"><p class="empty">进入模型管理后加载任务。</p></div></section>
+
       <section class="panel profile-panel"><div class="panel-head"><div><p class="eyebrow">模型能力</p><h2>能力档案</h2><p class="hint">三层透视：官方 benchmark 榜单分（厂商/公开榜单发布）· 六维实测（本网真实环境打分，路由直接使用）· 30 小类实测（4 大类 30 小类口径，本网裁判打分）。实测反映模型在本网推理环境下的真实水平，可与官方榜互相印证。支持模板导入。</p></div><div class="actions"><button id="dlProfileTpl" class="secondary">下载导入模板（Excel）</button><label class="secondary btn-like" for="importProfileFile">上传导入（.csv / .json）<input id="importProfileFile" type="file" accept=".csv,text/csv,.json,application/json" hidden></label><span id="profileImportMsg" class="hint"></span></div></div>
 
       <div class="table-wrap"><table><colgroup><col><col><col></colgroup><thead><tr><th>模型</th><th>官方 Benchmark <span class="help" data-help="厂商或公开榜单发布的分数（如 GPQA-Diamond、SWE-bench、LiveCodeBench），0~1 归一。用于跨模型横向参照。">?</span></th><th>六维实测 <span class="help" data-help="本网真实环境实测的六维均分，即路由打分层直接使用的能力分。">?</span></th></tr></thead><tbody id="profileRows"><tr><td colspan="3" class="empty">连接后自动加载。</td></tr></tbody></table></div>
@@ -215,11 +227,7 @@
 
       <section class="panel capability-matrix-panel"><div class="panel-head"><div><p class="eyebrow">模型能力</p><h2>跑分一览</h2><p class="hint">六个维度（0~1）来自本网真实环境实测校准，路由每笔请求按任务维度取分打分。每列最高分自动高亮；单元格可直接修改（用于实测修正），改后需安全发布生效。未启用模型灰显。</p></div></div><div class="table-wrap"><table id="capTable"><thead><tr><th>模型</th><th>通用 <span class="help" data-help="无法归类到五类任务时的兜底分数。">?</span></th><th>代码 <span class="help" data-help="代码分析/SQL/工具调用/代码重构四类任务用此分。">?</span></th><th>推理 <span class="help" data-help="多步推理、数学、逻辑分析任务用此分。">?</span></th><th>抽取 <span class="help" data-help="结构化抽取、工单分类等任务用此分。">?</span></th><th>创意 <span class="help" data-help="文案创作、营销内容等任务用此分。">?</span></th><th>轻量 <span class="help" data-help="简单问答、格式转换等轻量任务用此分。">?</span></th></tr></thead><tbody id="capRows"></tbody></table></div></section>
 
-      <section class="panel model-registry-panel"><div class="panel-head"><div><p class="eyebrow">模型管理</p><h2>模型参数</h2></div><div class="actions"><span class="hint">单价单位为元/百万 Token；修改表格后需到「业务策略」页点「安全发布」才会生效。</span><button id="discoverModels" class="secondary">从上游发现模型</button><button id="interleavedEval" class="secondary">交错评测</button>
-          <button id="addModel" class="secondary">新增模型</button>
-          <div id="offlineBanner" class="offline-banner" style="display:none"></div>
-          </div>
-          </div><div class="table-wrap"><table><thead><tr><th>启用</th><th>模型</th><th>归属 <span class="help" data-help="自建=自有算力部署；生态=外部生态伙伴模型。">?</span></th><th>默认质量 <span class="help" data-help="该模型的质量分（0~1），越高越强，是路由的核心依据。来自本网真实环境实测校准。">?</span></th><th>用户成本指数 <span class="help" data-help="用户侧相对成本（0~1），越大用户结算越贵（按算力豆单价归一），用于路由打分。由下方「成本与定价」按单价自动计算，一般不手改。">?</span></th><th>算力消耗指数 <span class="help" data-help="平台侧算力资源消耗（0~1）：单位吞吐占用的自建算力（设备×卡×卡价÷吞吐），与用户侧豆价独立，两者可背离。越大越吃卡。无部署数据的模型按 0.5 中性值参与评分。">?</span></th><th>时延指数 <span class="help" data-help="相对时延（0~1），越大越慢，用于路由打分。">?</span></th><th>输入单价 <span class="help" data-help="真实输入价格（元/百万 Token），用于预算估算。">?</span></th><th>缓存单价 <span class="help" data-help="输入缓存命中价（元/百万 Token），通常为输入价的 2~5 折。">?</span></th><th>输出单价 <span class="help" data-help="真实输出价格（元/百万 Token），用于预算估算。">?</span></th><th>P95 端到端时延 <span class="help" data-help="实测 95 分位完整回答耗时（毫秒，从发出请求到收完最后一个字，含模型思考）。">?</span></th><th>校准 <span class="help" data-help="pilot=试点中；待校准=未跑够真实流量；已验证=已通过真实表现验证。">?</span></th><th>测评</th><th>健康 <span class="help" data-help="实时健康状态（正常/恢复探测/熔断）及时延、错误数。">?</span></th></tr></thead><tbody id="models"></tbody></table></div></section>
+
 
       <section class="panel deployment-panel"><div class="panel-head"><div><p class="eyebrow">成本管理</p><h2>成本与定价</h2></div><span class="hint">优先按「真实单价」计算用户成本指数（推荐）；没有真实单价的自建模型可用「部署资源估算」。生态模型由平台提供、不是我们部署的，无需填部署资源。修改后需到「业务策略」页安全发布。</span></div>
 
@@ -382,7 +390,8 @@
 
   <div id="discoverModal" class="modal-mask" style="display:none"><div class="modal-box"><div class="modal-head"><h3>从上游发现模型</h3><button class="modal-x" id="discoverClose">×</button></div><div id="discoverBody">加载中…</div></div></div>
       <div id="evalModal" class="modal-mask" style="display:none"><div class="modal-box"><div class="modal-head"><h3 id="evalTitle">模型测评</h3><button class="modal-x" id="evalClose">×</button></div><div id="evalBody"></div></div></div>
-  </main><div id="toast" role="status"></div><script type="module" src="/app.js"></script>
+  <dialog id="publishReview" class="publish-review" aria-labelledby="publishTitle"><form method="dialog"><div class="panel-head"><div><p class="eyebrow">发布前检查</p><h2 id="publishTitle">确认这次配置修改</h2><p id="changeCount" class="hint"></p></div></div><p id="publishRisk" class="review-risk"></p><div class="table-wrap"><table><thead><tr><th>修改项</th><th>修改前</th><th>修改后</th></tr></thead><tbody id="changeRows"></tbody></table></div><p id="changeEmpty" class="hint" hidden>没有路由配置变化；仅提交已填写的评审通道更新。</p><p class="hint review-note">确认后立即生效。若线上配置已发生变化，将拒绝覆盖并保留当前草稿。</p><div class="review-actions"><button value="cancel" class="secondary" autofocus>返回修改</button><button id="confirmPublish" value="publish">确认发布</button></div></form></dialog>
+  </main><aside id="draftBar" class="draft-bar" aria-label="未发布修改" hidden><div><strong>有未发布的修改</strong><p>修改仍在当前页面草稿中，线上配置尚未改变。</p></div><div class="actions"><button id="discardDraft" class="secondary">放弃修改</button><button id="reviewDraft">检查并发布 →</button></div></aside><div id="errorNotice" class="feedback-error" role="alert" hidden><span id="errorMessage"></span><button id="dismissError" aria-label="关闭错误提示">×</button></div><div id="toast" role="status" aria-live="polite"></div><script type="module" src="/app.js"></script>
 
 </body></html>
 

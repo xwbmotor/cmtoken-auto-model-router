@@ -2,6 +2,13 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+
+// Revisions identify the exact persisted bytes, independently of software version.
+// WeakMap keeps transport metadata out of router.json and routing calculations.
+const configRevisions = new WeakMap();
+const revisionOf = raw => `"${createHash('sha256').update(raw).digest('hex')}"`;
+export const getConfigRevision = config => configRevisions.get(config);
 
 export const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -310,22 +317,34 @@ export async function loadConfig() {
     }
   }
   config.version = SOFTWARE_VERSION;
+  configRevisions.set(config, revisionOf(raw));
   return config;
 }
 
 let saveChain = Promise.resolve();
 let historyCounter = 0;  //history 备份文件名唯一性计数器（时间戳可能同毫秒碰撞）
 
-export function saveConfig(config) {
+export function saveConfig(config, { expectedRevision } = {}) {
   //串行化：并发 saveConfig 排队执行，避免写同一个 temp 文件互相覆盖
-  const task = saveChain.then(() => persistConfig(config), () => persistConfig(config));
+  const task = saveChain.then(() => persistConfig(config, expectedRevision), () => persistConfig(config, expectedRevision));
   saveChain = task.catch(() => {});  //单次失败不阻塞后续保存
   return task;
 }
 
-async function persistConfig(config) {
+async function persistConfig(config, expectedRevision) {
   validateConfig(config);
   const path = configPath();
+  // Check inside the write queue: two requests with one revision cannot both win.
+  if (expectedRevision !== undefined) {
+    let current;
+    try { current = revisionOf(await readFile(path, 'utf8')); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (expectedRevision !== current) {
+      const error = new Error('线上配置已被其他操作修改。本次未发布，当前草稿已保留；请比较最新配置后重新修改。');
+      error.code = 'config_conflict';
+      throw error;
+    }
+  }
   await mkdir(dirname(path), { recursive: true });
   const next = { ...config, version: SOFTWARE_VERSION };
   try {
@@ -340,7 +359,9 @@ async function persistConfig(config) {
   }
   //唯一 temp 文件名（pid + 时间戳），避免并发 rename 冲突
   const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temp, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  const serialized = `${JSON.stringify(next, null, 2)}\n`;
+  await writeFile(temp, serialized, { encoding: 'utf8', mode: 0o600 });
   await rename(temp, path);
+  configRevisions.set(next, revisionOf(serialized));
   return next;
 }

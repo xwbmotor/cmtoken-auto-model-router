@@ -8,7 +8,7 @@
 # - strict：取消注释 ROUTER_ACCESS_KEY + MAAS_API_KEY，客户端持 ROUTER_ACCESS_KEY。
 services:
   auto-model-router:
-    image: cmt-auto-model-router:0.11.16
+    image: cmt-auto-model-router:0.12.0
     container_name: auto-model-router
     restart: unless-stopped
     hostname: auto-model-router
@@ -53,7 +53,7 @@ services:
       retries: 3
 
   classifier:
-    image: cmt-amr-classifier:0.9.7  # classifier 独立版本线；升级需同步改 Dockerfile.classifier 加 OCI revision LABEL，锁 0.9.7（升级时同步改）
+    image: cmt-amr-classifier:0.12.0  # 与本次发布源码一同构建，OCI revision 绑定发布提交
     container_name: amr-classifier
     restart: unless-stopped
     hostname: classifier

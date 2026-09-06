@@ -1,3 +1,6 @@
+import { reviewPublication } from './change-review.js';
+let configRevision;
+import { setupWorkspace } from './workspace.js';
 let config, savedConfig, metrics, lastSimulation, simulateTimer;
 const $ = (id) => document.getElementById(id);
 //—— 后台枚举 → 中文展示映射（只影响展示，不碰配置值）——
@@ -30,8 +33,21 @@ const STYLE_PRESETS = {
   'balanced-style':     { label: '均衡风格：四权重均衡（现网默认组合）。', qualityWeight: 1, costWeight: 0.22, providerCostWeight: 0.10, latencyWeight: 0.14, qualityFloor: 0.72 }
 };
 function headers(json = false) { const token = $('token').value.trim(); return { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(json ? { 'content-type': 'application/json' } : {}) }; } //token 留空时靠登录会话 cookie（HttpOnly），API 侧 Bearer/会话二选一
-async function api(path, options = {}) { const response = await fetch(path, { ...options, headers: { ...headers(Boolean(options.body)), ...(options.headers || {}) } }); const value = await response.json(); if (!response.ok) throw new Error(value.error?.message || `HTTP ${response.status}`); return value; }
-function toast(message, bad = false) { const node = $('toast'); node.textContent = message; node.style.background = bad ? '#b42318' : '#101828'; node.classList.add('show'); setTimeout(() => node.classList.remove('show'), 3000); }
+async function api(path, options = {}) {
+  const response = await fetch(path, { ...options, headers: { ...headers(Boolean(options.body)), ...(options.headers || {}) } });
+  if (response.status === 401) throw new Error('登录会话已失效，请重新登录。当前页面草稿暂时保留，请先记录修改。');
+  const value = await response.json().catch(() => { throw new Error(`服务返回异常（HTTP ${response.status}），请稍后重试`); });
+  if (!response.ok) { const error = new Error(value.error?.message || `HTTP ${response.status}`); error.code = value.error?.code; error.status = response.status; throw error; }
+  if (path === '/admin/api/config') configRevision = response.headers.get('ETag');
+  return value;
+}
+let toastTimer;
+function toast(message, bad = false) {
+  if (bad) { $('errorMessage').textContent = message; $('errorNotice').hidden = false; return; }
+  const node = $('toast'); clearTimeout(toastTimer); node.textContent = message; node.classList.add('show');
+  toastTimer = setTimeout(() => node.classList.remove('show'), 6000);
+}
+$('dismissError').onclick = () => { $('errorNotice').hidden = true; };
 const percentValue = (value) => `${Math.round(Number(value) * 100)}%`;
 //敏感度滑条：显示「档位 · 具体数值」，档位仅是快速读法，数值才是真实配置
 const sensitivity = (value) => Number(value) < .15 ? '低' : Number(value) < .3 ? '中' : Number(value) < .45 ? '高' : '很高';
@@ -143,20 +159,21 @@ function stableStringify(value) {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
   return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
 }
-function syncDirty() { if (!config || !savedConfig) return; readForm(); const dirty = stableStringify(config) !== stableStringify(savedConfig); const badge = $('dirtyBadge'); if (badge) badge.hidden = !dirty; const dot = $('tabDirtyDot'); if (dot) dot.hidden = !dirty; }
+function syncDirty() { if (!config || !savedConfig) return; readForm(); const dirty = stableStringify(config) !== stableStringify(savedConfig) || Boolean(readJudgeSecretForm()); const badge = $('dirtyBadge'); if (badge) badge.hidden = !dirty; const dot = $('tabDirtyDot'); if (dot) dot.hidden = !dirty; }
 //基线规范化：savedConfig 必须与 readForm 之后的 config 同形状（readForm 会补 pricingYuan…/performance 等默认键），
 //否则 diff 永不相等。凡重建基线（connect/发布成功）处，先 render 表单再 readForm 再 snapshot。
 function snapshotBaseline() { bindPolicy(); bindProfile(); renderModels(); renderProviderColumn(); renderProfile(); renderCapabilityMatrix(); renderDeployment(); readForm(); savedConfig = structuredClone(config); clearDirty(); }
 //—— 页面 Tab 切换 ——
 const TABS = ['overview','policy','models','insights','semantic','debug','help'];
-function applyTab(name) {
+function applyTab(name, record = true) {
   if (!TABS.includes(name)) name = 'overview';
   document.querySelectorAll('.tab-page').forEach(p => { p.hidden = p.dataset.tab !== name; });
-  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
-  history.replaceState(null, '', '#' + name);
+  document.querySelectorAll('#tabs button').forEach(b => { b.classList.toggle('active', b.dataset.tab === name); if (b.dataset.tab === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+  if (record && location.hash !== '#' + name) history.pushState(null, '', '#' + name);
   sessionStorage.setItem('routerTab', name);
   //切 tab 后回到页首：否则从长页面（如总览底部）跳手册时，视口仍停在中后段
   window.scrollTo({ top: 0 });
+  document.dispatchEvent(new Event('workspace:navigate'));
 }
 document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => applyTab(b.dataset.tab); });
 
@@ -188,6 +205,7 @@ if ($('unlockEdit')) $('unlockEdit').onclick = () => {
 if ($('relockEdit')) $('relockEdit').onclick = () => {
   if (isDirty() && !window.confirm('有未发布的修改，重新锁定将丢弃这些修改。继续吗？')) return;
   policyUnlocked = false;
+  $('judgeSecretBaseUrl').value=''; $('judgeSecretApiKey').value='';
   if (savedConfig) { config = structuredClone(savedConfig); snapshotBaseline(); scheduleSimulation(); }
   setPolicyLock(true);
   toast('已回到只读视图');
@@ -195,9 +213,10 @@ if ($('relockEdit')) $('relockEdit').onclick = () => {
 //发布成功后自动回锁：安全发布本身就是一次完整事务，结束后不需要继续编辑态
 const __origSave = $('save')?.onclick?.bind($('save'));
 if (__origSave) $('save').onclick = async () => { await __origSave(); if (!isDirty()) { policyUnlocked = false; setPolicyLock(true); } };
-function isDirty() { try { return config && savedConfig && stableStringify(config) !== stableStringify(savedConfig); } catch { return false; } }
+function isDirty() { try { return config && savedConfig && (stableStringify(config) !== stableStringify(savedConfig) || Boolean(readJudgeSecretForm())); } catch { return false; } }
 //初始 tab：URL hash > 上次停留 > overview
-applyTab((location.hash || '').slice(1) || sessionStorage.getItem('routerTab') || 'overview');
+applyTab((location.hash || '').slice(1) || sessionStorage.getItem('routerTab') || 'overview', false);
+window.addEventListener('popstate', () => applyTab(location.hash.slice(1) || 'overview', false));
 loadManual();
 if ($('gotoPolicy')) $('gotoPolicy').onclick = () => applyTab('policy');
 if ($('gotoInsights')) $('gotoInsights').onclick = () => applyTab('insights');
@@ -228,6 +247,10 @@ async function loadManual() {
       shadow.appendChild(st);
     }
     shadow.appendChild(document.importNode(layout, true));
+    const responsive = document.createElement('style');
+    responsive.textContent = ':host{display:block;min-width:0}main.doc{max-width:100%;overflow-wrap:anywhere}.manual-table-scroll{max-width:100%;overflow:auto} @media(max-width:760px){.layout{display:block}main.doc{padding:0}.doc pre{max-width:100%}.doc h2,.doc h3{scroll-margin-top:72px}}';
+    shadow.appendChild(responsive);
+    shadow.querySelectorAll('table').forEach(table => { const wrap=document.createElement('div'); wrap.className='manual-table-scroll'; table.before(wrap); wrap.append(table); });
     //生成目录（复刻 /manual 页内脚本逻辑）
     const toc = shadow.querySelector('nav.toc');
     const heads = Array.from(shadow.querySelectorAll('main.doc h2, main.doc h3'));
@@ -278,7 +301,7 @@ async function loadManual() {
 }
 if ($('gotoInsights')) $('gotoInsights').onclick = () => applyTab('insights');
 
-function clearDirty() { const badge = $('dirtyBadge'); if (badge) badge.hidden = true; }
+function clearDirty() { const dirty = Boolean(readJudgeSecretForm()); $('dirtyBadge').hidden = !dirty; $('tabDirtyDot').hidden = !dirty; }
 function applyPolicyLock() { setPolicyLock(!policyUnlocked); }
 //评审通道 masked 状态回填 + 清除按钮（key 只写不读：提交后输入框即清空）
 async function loadJudgeSecretStatus() {
@@ -338,7 +361,7 @@ function bindPolicy() {
   if (styleRadio) styleRadio.checked = true;
   updateRangeLabels();
 }
-function renderModels() { $('models').innerHTML = config.models.map((m, i) => `<tr data-index="${i}"><td><input class="enabled" type="checkbox" ${m.enabled ? 'checked' : ''}></td><td><strong>${escHtml(m.displayName || m.id)}</strong><br><small>${escHtml(m.id)}</small></td><td><select class="ownership"><option value="self_hosted" ${m.ownership === 'self_hosted' ? 'selected' : ''}>自建</option><option value="ecosystem" ${m.ownership === 'ecosystem' ? 'selected' : ''}>生态</option><option value="unknown" ${m.ownership === 'unknown' ? 'selected' : ''}>归属待定</option></select></td><td><input class="quality" type="number" min="0" max="1" step=".01" value="${m.quality.default}"></td><td><input class="cost" type="number" min="0" step=".01" value="${m.costIndex}"></td><td class="provider-cost">—</td><td><input class="latency" type="number" min="0" step=".01" value="${m.latencyIndex}"></td><td><input class="input-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.input ?? ''}"></td><td><input class="cached-price" type="number" min="0" step=".01" placeholder="无折扣" value="${m.pricingYuanPerMillionTokens?.inputCached ?? ''}"></td><td><input class="output-price" type="number" min="0" step=".01" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.output ?? ''}"></td><td><input class="p95" type="number" min="0" step="1" placeholder="待观测" value="${m.performance?.totalP95Ms ?? ''}"></td><td><span class="pill ${(m.reliabilityStatus || m.calibrationStatus) === 'verified' ? 'good' : 'muted'}">${(m.reliabilityStatus || m.calibrationStatus) === 'verified' ? '可靠' : (m.reliabilityStatus || m.calibrationStatus) === 'pilot' ? 'Pilot' : '待观测'}</span></td><td><button class="btn-mini" data-act="checkup">体检</button><button class="btn-mini" data-act="full">巡检</button><button class="btn-mini danger" data-act="remove" title="从注册表删除该模型（不影响上游模型本身）">删除</button></td><td class="health">—</td></tr>`).join(''); }
+function renderModels() { $('models').innerHTML = config.models.map((m, i) => `<tr data-index="${i}"><td><input class="enabled" type="checkbox" ${m.enabled ? 'checked' : ''}></td><td><strong>${escHtml(m.displayName || m.id)}</strong><br><small>${escHtml(m.id)}</small></td><td><select class="ownership"><option value="self_hosted" ${m.ownership === 'self_hosted' ? 'selected' : ''}>自建</option><option value="ecosystem" ${m.ownership === 'ecosystem' ? 'selected' : ''}>生态</option><option value="unknown" ${m.ownership === 'unknown' ? 'selected' : ''}>归属待定</option></select></td><td><input class="quality" type="number" min="0" max="1" step="any" value="${m.quality.default}"></td><td><input class="cost" type="number" min="0" step="any" value="${m.costIndex}"></td><td class="provider-cost">—</td><td><input class="latency" type="number" min="0" step="any" value="${m.latencyIndex}"></td><td><input class="input-price" type="number" min="0" step="any" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.input ?? ''}"></td><td><input class="cached-price" type="number" min="0" step="any" placeholder="无折扣" value="${m.pricingYuanPerMillionTokens?.inputCached ?? ''}"></td><td><input class="output-price" type="number" min="0" step="any" placeholder="待配置" value="${m.pricingYuanPerMillionTokens?.output ?? ''}"></td><td><input class="p95" type="number" min="0" step="1" placeholder="待观测" value="${m.performance?.totalP95Ms ?? ''}"></td><td><span class="pill ${(m.reliabilityStatus || m.calibrationStatus) === 'verified' ? 'good' : 'muted'}">${(m.reliabilityStatus || m.calibrationStatus) === 'verified' ? '可靠' : (m.reliabilityStatus || m.calibrationStatus) === 'pilot' ? 'Pilot' : '待观测'}</span></td><td><button class="btn-mini" data-act="checkup">体检</button><button class="btn-mini" data-act="full">巡检</button><button class="btn-mini danger" data-act="remove" title="从注册表删除该模型（不影响上游模型本身）">删除</button></td><td class="health">—</td></tr>`).join(''); }
 //算力消耗指数列（成本双指标之一）：来自 deployment 数据 (机×卡×卡价)/tps，独立于用户侧豆价 costIndex
 function providerIndexClient(m) { const d = m.deployment; if (!d || !d.machines || !d.tps) return null; const cw = Number((config.costModel?.cardPrice || {})[d.deviceType] || 1); const unit = Number(d.machines) * (Number(d.cardsPerMachine) || 1) * cw / Number(d.tps); return { unit }; }
 function renderProviderColumn() { const units = config.models.map(providerIndexClient).map((x) => x?.unit).filter(Number.isFinite); const anchor = units.length ? Math.max(...units) : null; document.querySelectorAll('#models tr').forEach((row, i) => { const m = config.models[i]; const cell = row.querySelector('.provider-cost'); if (!cell) return; const p = providerIndexClient(m); cell.textContent = (p && anchor) ? Math.min(1, p.unit / anchor).toFixed(3) : '—'; }); }
@@ -573,9 +596,10 @@ function renderRecentKeySelect(){ //key 指纹下拉：从最近请求里聚合�
 function renderMetrics(){ const c=metrics.counters; $('total').textContent=c.total; const ts = document.getElementById('totalSince'); if (ts) ts.textContent = c.firstStartedAt ? '累计口径（自 ' + new Date(c.firstStartedAt).toLocaleDateString('zh-CN') + ' 起跨发版持久化）' : ''; $('autoRate').textContent=percent(c.auto,c.total); const selfIds=new Set(config.models.filter(m=>m.ownership==='self_hosted').map(m=>m.id)); const self=Object.entries(c.selected).filter(([id])=>selfIds.has(id)).reduce((s,[,n])=>s+n,0); $('selfRate').textContent=percent(self,c.success); $('semanticRate').textContent=percent(c.semantic?.disagreed||0,c.semantic?.succeeded||0); $('overheadCost').textContent=(metrics.budget?.routingOverheadCostYuan!=null?`${Number(metrics.budget.routingOverheadCostYuan).toFixed(4)}元`:'—'); $('budgetRate').textContent=metrics.budget?.enabled?percentValue(metrics.budget.pressure):'未启用'; $('fallback').textContent=c.fallback; $('errorRate').textContent=percent(c.errors,c.total); document.querySelectorAll('#models tr').forEach(row=>{const m=config.models[Number(row.dataset.index)],h=metrics.health[m.id],cell=row.querySelector('.health'); cell.innerHTML=!h?'<span class="pill muted">无数据</span>':h.circuitState==='half_open'?'<span class="pill muted">恢复探测</span>':h.circuitOpenUntil>Date.now()?'<span class="pill bad">熔断</span>':`<span class="pill good">${h.ewmaLatencyMs}ms · ${h.failures}错</span>`}); renderRecentKeySelect(); $('recent').innerHTML=metrics.recent.length?metrics.recent.map(x=>{const reasonTag=x.reasoningApplied===false&&x.reasoningLevel&&x.reasoningLevel!=='off'?` · 推理${x.reasoningLevel}(建议未生效)`:` · 推理${x.reasoningLevel||'off'}`; return `<div class="recent-item"><time>${new Date(x.at).toLocaleTimeString()}</time><div><b>${escHtml(x.selected)}</b> <small>← ${escHtml(x.requested)}${x.keyFingerprint?` · <span class="key-fp" title="调用方 key 指纹：${escHtml(x.keyFingerprint)}（可在上方下拉按它筛选）">${escHtml(x.keyFingerprint)}</span>`:''} · ${taskCN(x.task)} · ${METHOD_CN[x.routeMethod]||x.routeMethod||'规则'}${reasonTag}${x.fallbackAttempt?` · fallback ${x.fallbackAttempt}`:''}</small></div><span class="pill ${x.ok?'good':'bad'}">${x.ok?`${x.latencyMs}ms`:'失败'}</span></div>`;}).join(''):'<p class="empty">暂无请求</p>'; }
 async function connect(){ try{ //不再把 ADMIN_TOKEN 写 sessionStorage（HttpOnly 会话已足够；Bearer 只留给外部脚本）
 [config,metrics]=await Promise.all([api('/admin/api/config'),api('/admin/api/metrics')]);snapshotBaseline(); $('status').textContent=`已连接 · v${config.version}`; $('status').className='pill good'; renderMetrics(); renderOverview(); renderTaskBoard(); renderMarketSignal(); applyPolicyLock(); await simulate();}catch(error){$('status').textContent='连接失败';$('status').className='pill bad';toast(error.message,true)} }
-//token 框不再回填存储的明文（已登录直接连，会话 cookie 生效） $('connect').onclick=connect;
+// Token only lives in the input; reconnect explicitly discards the current draft.
+$('connect').onclick=()=>{ if(isDirty()&&!confirm('重新连接将丢弃未发布修改，继续吗？'))return; $('judgeSecretBaseUrl').value=''; $('judgeSecretApiKey').value=''; return connect(); };
 //登出：清会话 cookie 后回登录页
-$('logout').onclick=async()=>{ try{ await fetch('/admin/api/logout', { method: 'POST' }); } catch {} window.location.href='/'; }; $('refresh').onclick=async()=>{try{metrics=await api('/admin/api/metrics');renderMetrics();renderOverview()}catch(e){toast(e.message,true)}}; if($('recentKeySelect')) $('recentKeySelect').onchange=async()=>{try{metrics=await api('/admin/api/recent-key-filter',{method:'POST',body:JSON.stringify({key:$('recentKeySelect').value||null})});metrics=await api('/admin/api/metrics');renderMetrics();renderOverview();toast($('recentKeySelect').value?`已筛选 key ${$('recentKeySelect').value}`:'已显示全部调用方')}catch(e){toast(e.message,true)}}; $('reload').onclick=()=>{if(!savedConfig)return;config=structuredClone(savedConfig);snapshotBaseline();renderMetrics();simulate();toast('已恢复到当前线上版本')}; $('refreshBoard').onclick = () => { renderTaskBoard(); renderMarketSignal(); };
+$('logout').onclick=async()=>{ if(isDirty()&&!confirm('退出登录将丢失未发布修改，继续吗？'))return; const response=await fetch('/admin/api/logout', { method: 'POST' }); if(!response.ok)throw new Error('退出失败，请重试；当前会话仍可能有效。'); savedConfig=structuredClone(config); $('judgeSecretBaseUrl').value=''; $('judgeSecretApiKey').value=''; $('token').value=''; window.location.href='/'; }; $('refresh').onclick=async()=>{try{metrics=await api('/admin/api/metrics');renderMetrics();renderOverview()}catch(e){toast(e.message,true)}}; if($('recentKeySelect')) $('recentKeySelect').onchange=async()=>{try{metrics=await api('/admin/api/recent-key-filter',{method:'POST',body:JSON.stringify({key:$('recentKeySelect').value||null})});metrics=await api('/admin/api/metrics');renderMetrics();renderOverview();toast($('recentKeySelect').value?`已筛选 key ${$('recentKeySelect').value}`:'已显示全部调用方')}catch(e){toast(e.message,true)}}; $('reload').onclick=()=>{if(!savedConfig)return;if(isDirty()&&!confirm('放弃全部未发布修改，恢复为已加载的线上版本？'))return;config=structuredClone(savedConfig);$('judgeSecretBaseUrl').value='';$('judgeSecretApiKey').value='';snapshotBaseline();renderMetrics();simulate();toast('已恢复到当前线上版本')}; $('refreshBoard').onclick = () => { renderTaskBoard(); renderMarketSignal(); };
 if ($('probeSemantic')) $('probeSemantic').onclick = async () => {
   const url = $('semanticHttpUrl')?.value?.trim();
   const box = $('semanticProbeResult');
@@ -618,10 +642,37 @@ for(const id of ['mode','activeTrafficPercent','autoModelId','exposeModelList','
 document.addEventListener('change',(ev)=>{const sel=ev.target;if(!sel||!sel.classList||!sel.classList.contains('ownership'))return;const tr=sel.closest('tr');if(!tr)return;const m=config.models[Number(tr.dataset.index)];if(!m)return;m.ownership=sel.value;if(m.ownership==='unknown'&&m.enabled){m.enabled=false;const cb=tr.querySelector('.enabled');if(cb)cb.checked=false;toast('归属待定的模型不能启用——已自动取消勾选（确认归属为自建/生态后方可启用）',true);}syncDirty();scheduleSimulation();}); const refreshCostPreview = () => { const cm = config.costModel || {}; const computed = (cm.source === 'pricing' ? computeCostIndexFromPricingClient(config.models, cm.pricingMix) : computeCostIndexClient(config.models, cm.cardPrice || {})) || {}; document.querySelectorAll('#deployment tr').forEach(row => { const m = config.models[Number(row.dataset.index)]; const cell = row.querySelector('.cost-preview'); if (computed[m.id] != null) { cell.textContent = computed[m.id]; cell.className = 'cost-preview pill good'; } else { cell.textContent = '待录入'; cell.className = 'cost-preview pill muted'; } }); document.querySelectorAll('#models tr').forEach(row => { const m = config.models[Number(row.dataset.index)]; if (computed[m.id] != null) row.querySelector('.cost').value = computed[m.id]; }); };
 $('deployment').addEventListener('input',()=>{readForm(); refreshCostPreview(); syncDirty(); scheduleSimulation();});
 for (const id of ['costSource','pricingMixInput','pricingMixOutput','beansPerYuan']) $(id).addEventListener('input',()=>{readForm(); refreshCostPreview(); syncDirty(); scheduleSimulation();});
-$('save').onclick=async()=>{try{const impact=await simulate(),qualityDrop=impact.proposed.averageQuality-impact.current.averageQuality,highRisk=impact.changedRate>=.4||qualityDrop<-.02||Number(config.routing.activeTrafficPercent)-Number(savedConfig.routing.activeTrafficPercent||0)>30;if(highRisk&&!window.confirm(`这次调整会改变 ${percentValue(impact.changedRate)} 的代表任务，预计质量变化 ${qualityDrop>=0?'+':''}${qualityDrop.toFixed(2)}。\n\n建议先小流量灰度。仍要发布吗？`))return;config=await api('/admin/api/config',{method:'PUT',body:JSON.stringify(config)});snapshotBaseline();
-  //评审通道独立提交（key 不进 config；端点+key 需同时填，失败单独提示不回滚 config）
-  const jsForm = readJudgeSecretForm();
-  if (jsForm) { if (!jsForm.baseUrl || !jsForm.apiKey) { toast('评审通道：端点与 Key 需同时填写', true); } else { try { await api('/admin/api/judge/secret', { method: 'PUT', body: JSON.stringify(jsForm) }); $('judgeSecretBaseUrl').value = ''; $('judgeSecretApiKey').value = ''; await loadJudgeSecretStatus(); } catch (e) { toast('评审通道保存失败：' + e.message, true); } } }$('status').textContent=`已连接 · v${config.version}`;toast(`配置已发布生效（v${config.version}），上一版本已自动备份`);await simulate()}catch(e){toast(e.message,true)}};
+$('save').onclick = async () => {
+  try {
+    if (!config) return toast('请先连接管理端', true);
+    const secret = readJudgeSecretForm();
+    if (secret && (!secret.baseUrl || !secret.apiKey)) { applyTab('semantic'); return toast('评审通道的端点与密钥需要同时填写，尚未发布任何修改。', true); }
+    const invalid = [...document.querySelectorAll('.tab-page input, .tab-page select')].find(input => !input.disabled && !input.checkValidity());
+    if (invalid) {
+      applyView('expert'); applyTab(invalid.closest('.tab-page').dataset.tab);
+      invalid.closest('details')?.setAttribute('open', '');
+      if (invalid.closest('#models')) { $('clearModelFilters').click(); $('modelColumnView').value='all'; $('modelColumnView').dispatchEvent(new Event('change')); }
+      invalid.focus(); invalid.reportValidity(); return toast('请修正标出的字段后再发布，数值需要满足允许范围。', true);
+    }
+    const impact = await simulate();
+    const qualityDrop = impact.proposed.averageQuality - impact.current.averageQuality;
+    const highRisk = impact.changedRate >= .4 || qualityDrop < -.02 || Number(config.routing.activeTrafficPercent) - Number(savedConfig.routing.activeTrafficPercent || 0) > 30;
+    if (!configRevision) return toast('无法确认当前配置版本，请重新连接后再发布。', true);
+    const publication = structuredClone(config);
+    if (!await reviewPublication(savedConfig, publication, { secretChanged: Boolean(secret), changedRate: impact.changedRate, qualityDrop, highRisk })) return;
+    config = await api('/admin/api/config', { method: 'PUT', headers: { 'If-Match': configRevision }, body: JSON.stringify(publication) });
+    snapshotBaseline();
+    $('status').textContent = `已连接 · v${config.version}`;
+    if (secret) {
+      try { await api('/admin/api/judge/secret', { method: 'PUT', body: JSON.stringify(secret) }); }
+      catch (error) { syncDirty(); return toast('路由配置已发布，但评审通道保存失败：' + error.message + '。通道输入已保留，请重试。', true); }
+      $('judgeSecretBaseUrl').value = ''; $('judgeSecretApiKey').value = ''; await loadJudgeSecretStatus();
+    }
+    clearDirty(); policyUnlocked = false; setPolicyLock(true);
+    toast(`配置已发布生效（v${config.version}），上一版本已自动备份`);
+    await simulate();
+  } catch (error) { toast(error.message, true); }
+};
 $('preview').onclick=async()=>{const body={model:'auto',messages:[{role:'user',content:$('prompt').value}],stream:$('stream').checked};if($('tools').checked)body.tools=[{type:'function',function:{name:'demo_tool',parameters:{type:'object'}}}];if($('jsonMode').checked)body.response_format={type:'json_object'};try{const d=await api('/admin/api/preview',{method:'POST',body:JSON.stringify(body)}),reasons=d.analysis.signals.map(s=>`  ${s.contribution>=0?'+':''}${s.contribution.toFixed(2)} ${s.label}`).join('\n'),review=d.semanticReview?.assessment?`\n语义复核：${d.semanticReview.status==='applied'?'已采用':'仅观察'} · ${tierCN(d.semanticReview.assessment.tier)}/${d.semanticReview.assessment.complexity.toFixed(2)}\n复核理由：${d.semanticReview.assessment.reason}\n复核后建议：${d.semanticReview.proposed?.model||d.suggestedModel}\n`:d.semanticReview?.error?`\n语义复核失败（已安全回退规则）：${d.semanticReview.error}\n`:'';$('decision').textContent=`建议模型：${d.suggestedModel}\n实际模型：${d.selectedModel}${d.shadow?'（当前未进入 Auto 生效流量）':''}\n推理强度：${d.reasoningLevel}\n判断方式：${METHOD_CN[d.analysis.routeMethod]||d.analysis.routeMethod||'规则'}\n任务：${taskCN(d.analysis.task)} · ${tierCN(d.analysis.tier)}\n难度：${d.analysis.complexity.toFixed(2)} · 判断置信度 ${percentValue(d.analysis.confidence)}${review}\n难度来源：\n${reasons}\n\n候选评分：\n${d.candidates.map(c=>`  ${c.model.padEnd(20)} score=${c.score.toFixed(3)} quality=${c.quality.toFixed(2)} floor=${c.effectiveQualityFloor.toFixed(2)}`).join('\n')}\n降级顺序：${d.fallbackOrder.join(' → ')}`}catch(e){$('decision').textContent=e.message}};
 connect(); setInterval(async()=>{if(config)try{metrics=await api('/admin/api/metrics');renderMetrics()}catch{}},10000);
 
@@ -653,8 +704,8 @@ function applyView(mode) {
   document.body.classList.toggle('simple-view', simple);
   document.querySelectorAll('.expert-tab').forEach(t => { t.style.display = simple ? 'none' : ''; });
   if (simple && ['models','semantic','debug'].includes(sessionStorage.getItem('routerTab'))) applyTab('overview');
-  $('btnSimple').classList.toggle('active', simple);
-  $('btnExpert').classList.toggle('active', !simple);
+  $('btnSimple').classList.toggle('active', simple); $('btnSimple').setAttribute('aria-pressed', String(simple));
+  $('btnExpert').classList.toggle('active', !simple); $('btnExpert').setAttribute('aria-pressed', String(!simple));
   localStorage.setItem('routerAdminView', mode);
 }
 $('btnSimple').onclick = () => applyView('simple');
@@ -823,7 +874,7 @@ $id('discoverModels')?.addEventListener('click', openDiscover);
 $id('interleavedEval')?.addEventListener('click', startInterleaved);
 $id('discoverClose')?.addEventListener('click', () => { $id('discoverModal').style.display = 'none'; const wk = $id('dcApiKey'); if (wk) wk.value = ''; }); // 二十八审 P2-1
 
-let evalTimer = null;
+let evalTimer = null, evalGeneration = 0;
 // v0.11.0 交错评测：多模型同窗口轮转+Judge 评分+置信区间（仅建议值）
 async function startInterleaved() {
   const enabled = config.models.filter((m) => m.enabled === true && m.ownership !== 'unknown'); // v0.11.11（二十六审 P1-2）：启用且归属已确认——禁用模型/归属待定不得进入交错评测
@@ -832,9 +883,8 @@ async function startInterleaved() {
   const pick = ids.slice(0, 4).join('、');
   if (!confirm('对以下模型跑交错评测？\n' + pick + '\n\n56 题×每模型轮转执行（预热 2 题不计分）+ Judge 四维评分 + bootstrap 95% 置信区间。\n真实调用上游与 Judge——预计 30-90 分钟。\n结果仅为建议值：不会自动改质量分/时延参数，采纳需在「模型参数」页确认后发布。')) return;
   try {
-    const r = await fetch('/admin/api/eval-jobs', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ type: 'interleaved', modelIds: ids.slice(0, 4) }) });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error?.message || r.status);
+    const d = await api('/admin/api/eval-jobs', { method: 'POST', body: JSON.stringify({ type: 'interleaved', modelIds: ids.slice(0, 4) }) });
+    loadEvalTasks();
     $id('evalTitle').textContent = '交错评测 · ' + d.modelIds.join(' vs ');
     $id('evalModal').style.display = 'flex';
     pollEval(d.id);
@@ -845,9 +895,8 @@ async function startEval(type, modelId) {
     ? '对 ' + modelId + ' 跑快速体检？（6 题冒烟，约 1-2 分钟，真实调用上游——就绪率+断言，不构成质量结论）'
     : '对 ' + modelId + ' 跑 56 题稳定性巡检？（就绪率+时延分布，约 10-60 分钟；不含质量评分——质量分以带裁判的 eval:gate 为准）')) return;
   try {
-    const r = await fetch('/admin/api/eval-jobs', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ type, modelId }) });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error?.message || r.status);
+    const d = await api('/admin/api/eval-jobs', { method: 'POST', body: JSON.stringify({ type, modelId }) });
+    loadEvalTasks();
     $id('evalTitle').textContent = (type === 'checkup' ? '快速体检 · ' : '稳定性巡检 · ') + modelId;
     $id('evalModal').style.display = 'flex';
     pollEval(d.id);
@@ -855,26 +904,31 @@ async function startEval(type, modelId) {
 }
 function pollEval(id) {
   clearInterval(evalTimer);
+  const generation = ++evalGeneration;
+  $id('evalBody').textContent = '正在加载任务进度…';
+  let polling = false;
   // v0.11.3：取消按钮（长任务可中止——服务端在题/Judge 循环边界响应）
   const cancelBtn = document.createElement('button');
   cancelBtn.className = 'btn-mini'; cancelBtn.style.cssText = 'margin-left:12px'; cancelBtn.textContent = '取消任务';
   cancelBtn.onclick = async () => {
     if (!confirm('确定取消当前评测任务？（已完成的调用照常计费）')) return;
     try {
-      const r = await fetch('/admin/api/eval-jobs?action=cancel', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ id }) });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error?.message || r.status);
+      const d = await api('/admin/api/eval-jobs?action=cancel', { method: 'POST', body: JSON.stringify({ id }) });
+      loadEvalTasks();
       if (d.alreadyFinished) toast('任务已结束，无需取消');
       else { toast('已请求取消——当前在途调用完成后停止'); cancelBtn.disabled = true; }
     } catch (e) { toast('取消失败：' + e.message, true); }
   };
   const head = $id('evalTitle');
   if (head && head.parentElement) { head.parentElement.querySelectorAll('.eval-cancel').forEach((x) => x.remove()); cancelBtn.classList.add('eval-cancel'); head.parentElement.insertBefore(cancelBtn, head.nextSibling); }
-  evalTimer = setInterval(async () => {
+  const update = async () => {
+    if (polling || generation !== evalGeneration) return;
+    polling = true;
     try {
-      const r = await fetch('/admin/api/eval-jobs?id=' + id, { headers: { authorization: `Bearer ${token}` } });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error?.message || r.status);
+      const j = await api('/admin/api/eval-jobs?id=' + encodeURIComponent(id));
+      if (generation !== evalGeneration) return;
+      cancelBtn.disabled = Boolean(j.finishedAt || j.cancelRequested);
+      cancelBtn.textContent = j.finishedAt ? '任务已结束' : j.cancelRequested ? '正在取消…' : '取消任务';
       const pct = j.total ? Math.round(j.done / j.total * 100) : 0;
       let html = '<div class="progress-wrap"><div class="progress-bar" style="width:' + pct + '%"></div></div><p>' + j.done + '/' + j.total + '（' + pct + '%）失败 ' + j.failed + '</p>';
       if (j.status === 'cancelled') { clearInterval(evalTimer); html += '<p style="color:#c33">任务已取消——以上为取消前已完成部分（' + j.done + '/' + j.total + '）。</p>'; $id('evalBody').innerHTML = html; return; }
@@ -916,16 +970,19 @@ function pollEval(id) {
           }
         }
         // v0.10.2：不再自动回填（样本量不支持），建议值人工确认后手工录入
-        html += '<button class="primary" onclick="document.getElementById(\'evalModal\').style.display=\'none\';location.reload()">完成并刷新</button>';
+        html += '<p class="hint">可以关闭窗口后继续编辑，已有草稿不会改变；结果可在评测任务中重新打开。</p>';
       } else if (j.status === 'failed') {
         clearInterval(evalTimer);
         html += '<p style="color:#c33">失败：' + escHtml(String(j.error || '未知错误')) + '</p>';
       }
       $id('evalBody').innerHTML = html;
-    } catch (e) { clearInterval(evalTimer); $id('evalBody').innerHTML = '<p style="color:#c33">' + escHtml(String(e.message)) + '</p>'; }
-  }, 2000);
+    } catch (e) { if (generation !== evalGeneration) return; clearInterval(evalTimer); $id('evalBody').textContent = '读取任务失败：' + e.message + '。关闭窗口后可在任务列表重新打开。'; }
+    finally { polling = false; }
+  };
+  evalTimer = setInterval(update, 2000);
+  update();
 }
-$id('evalClose')?.addEventListener('click', () => { clearInterval(evalTimer); $id('evalModal').style.display = 'none'; });
+$id('evalClose')?.addEventListener('click', () => { clearInterval(evalTimer); evalGeneration++; $id('evalModal').style.display = 'none'; loadEvalTasks(); });
 
 $id('models')?.addEventListener('click', (ev) => {
   const b = ev.target.closest('button[data-act]');
@@ -958,3 +1015,50 @@ $id('models')?.addEventListener('click', (ev) => {
 // 页面加载后拉一次下线提醒 + 刷新换算提示
 setTimeout(() => { refreshOfflineAlerts(); updateSelfBonusHint(); }, 800);
 
+
+// Keyboard and touch access to the same contextual help as mouse users.
+helpTooltip.id = 'fieldHelp'; helpTooltip.setAttribute('role', 'tooltip');
+function labelHelp(root = document) { root.querySelectorAll('.help').forEach(el => { el.tabIndex = 0; el.setAttribute('role', 'button'); el.setAttribute('aria-label', '查看说明'); el.setAttribute('aria-describedby', 'fieldHelp'); }); }
+labelHelp();
+new MutationObserver(records => records.forEach(record => record.addedNodes.forEach(node => { if(node.nodeType===1) labelHelp(node); }))).observe(document.querySelector('main'), { childList: true, subtree: true });
+document.addEventListener('focusin', e => { if(e.target.matches('.help')) showHelp(e.target); });
+document.addEventListener('focusout', e => { if(e.target.matches('.help')) helpTooltip.classList.remove('show'); });
+document.addEventListener('click', e => { const el=e.target.closest('.help'); if(el){e.preventDefault();showHelp(el);} });
+document.addEventListener('keydown', e => { if(e.key==='Escape')helpTooltip.classList.remove('show'); if(e.target.matches('.help')&&['Enter',' '].includes(e.key)){e.preventDefault();showHelp(e.target);} });
+setupWorkspace({ navigate: applyTab, isDirty, notify: toast });
+
+for(const id of ['judgeSecretBaseUrl','judgeSecretApiKey']) $(id).addEventListener('input', syncDirty);
+
+// Recover progress after closing a modal or refreshing the browser, without starting a new paid job.
+let taskListBusy = false;
+async function loadEvalTasks() {
+  const list = $('evalTaskList'); if (!list || taskListBusy || $('evalModal').style.display !== 'none') return;
+  taskListBusy = true; $('refreshEvalTasks').disabled = true;
+  try {
+    const data = await api('/admin/api/eval-jobs');
+    if ($('evalModal').style.display !== 'none') return;
+    const focusedJob = list.contains(document.activeElement) ? document.activeElement.dataset.jobId : null;
+    let restoreFocus;
+    const types = { checkup: '快速体检', full: '稳定性巡检', interleaved: '交错评测' };
+    const states = { running: '运行中', queued: '等待中', done: '已完成', failed: '失败', cancelled: '已取消' };
+    list.replaceChildren();
+    for (const job of data.jobs) {
+      const item = document.createElement('div'); item.className = 'eval-task';
+      const detail = document.createElement('div');
+      const title = document.createElement('strong'); title.textContent = `${types[job.type] || job.type} · ${(job.modelIds || [job.modelId]).join(' / ')}`;
+      const meta = document.createElement('p'); meta.className = 'hint';
+      meta.textContent = `${job.cancelRequested && !job.finishedAt ? '正在取消' : states[job.status] || job.status} · ${job.done || 0}/${job.total || 0} 已完成 · ${job.failed || 0} 失败 · ${new Date(job.startedAt).toLocaleString('zh-CN')}`;
+      detail.append(title, meta);
+      const open = document.createElement('button'); open.dataset.jobId = job.id; if (focusedJob === job.id) restoreFocus = open; open.className = 'secondary'; open.textContent = job.finishedAt ? '查看结果' : '查看进度';
+      open.onclick = () => { $('evalTitle').textContent = title.textContent; $('evalModal').style.display = 'flex'; pollEval(job.id); };
+      item.append(detail, open); list.append(item);
+    }
+    restoreFocus?.focus({ preventScroll: true });
+    if (!data.jobs.length) { const empty=document.createElement('p'); empty.className='empty'; empty.textContent='暂无评测任务。可从模型列表发起体检或交错评测。'; list.append(empty); }
+  } catch (error) { list.textContent = '任务列表加载失败：' + error.message + '。可点击刷新重试。'; }
+  finally { taskListBusy = false; $('refreshEvalTasks').disabled = false; }
+}
+$('refreshEvalTasks').onclick = loadEvalTasks;
+document.addEventListener('workspace:navigate', () => { if (location.hash === '#models') loadEvalTasks(); });
+setInterval(() => { if (!document.hidden && location.hash === '#models') loadEvalTasks(); }, 5000);
+if (location.hash === '#models') loadEvalTasks();

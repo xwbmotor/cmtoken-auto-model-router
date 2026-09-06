@@ -19,3 +19,7 @@ config/history
 compose.yaml
 Dockerfile
 .dockerignore
+
+# 部署镜像归档与界面验收证据不进入构建上下文
+reports/
+data/deploy-*/

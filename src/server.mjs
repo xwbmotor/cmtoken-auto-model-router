@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 
-import { loadConfig, projectRoot, saveConfig, validateConfig } from './config.mjs';
+import { loadConfig, projectRoot, saveConfig, validateConfig, getConfigRevision } from './config.mjs';
 import { promises as dnsPromises } from 'node:dns'; // v0.11.13（二十七审 P1-1）SSRF DNS pinning
 
 import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice, recommendReasoningLevel, isAutoRequest, autoModelId } from './router.mjs';
@@ -3124,7 +3124,7 @@ const server = http.createServer(async (req, res) => {
 
   }
 
-  if (req.method === 'GET' && url.pathname === '/admin/api/config') return json(res, 200, config);
+  if (req.method === 'GET' && url.pathname === '/admin/api/config') { res.setHeader('ETag', getConfigRevision(config)); res.setHeader('Cache-Control', 'no-store'); return json(res, 200, config); }
   // ── P1 模型发现：代理上游 GET /v1/models（30s 缓存），勾选注册用。key 永不出服务端。
   // v0.11.8：流水线向导第一步——管理员现场填端点+key 探测（POST，key 只用于本次请求，不落盘不回显不进日志）
   if (req.method === 'POST' && url.pathname === '/admin/api/discover-probe') {
@@ -3266,6 +3266,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET') {
       const id = url.searchParams.get('id');
+      if (!id) {
+        sweepEvalJobs();
+        const jobs = [...evalJobs.values()].sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt)).map(({ id, type, modelId, modelIds, status, startedAt, finishedAt, total, done, failed, cancelRequested }) => ({ id, type, modelId, modelIds, status, startedAt, finishedAt, total, done, failed, cancelRequested }));
+        return json(res, 200, { jobs, retentionHours: EVAL_JOB_TTL_MS / 3600000, survivesRestart: false });
+      }
       const job = getEvalJob(id);
       if (!job) return errorJson(res, 404, '任务不存在或已过期', 'eval_job_not_found');
       return json(res, 200, job);
@@ -3545,11 +3550,11 @@ const server = http.createServer(async (req, res) => {
 
       assertJudgeGuardStatePathStable(next?.judge);
 
-      config = await saveConfig(next); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); judgeLogUpdate(); judgeGuard.updateLimits(config.judge || {}); return json(res, 200, config);
+      config = await saveConfig(next, { expectedRevision: req.headers['if-match'] }); budgetTracker.updateConfig(config); decisionLog.updateConfig(config); semanticLog.updateConfig({ decisionLog: { ...(config.decisionLog || {}), filePrefix: 'semantic-reviews' } }); judgeLogUpdate(); judgeGuard.updateLimits(config.judge || {}); res.setHeader('ETag', getConfigRevision(config)); return json(res, 200, config);
 
     }
 
-    catch (error) { return errorJson(res, 400, error.message, 'invalid_config'); }
+    catch (error) { return errorJson(res, error.code === 'config_conflict' ? 412 : 400, error.message, error.code || 'invalid_config'); }
 
   }
 
