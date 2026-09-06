@@ -6,6 +6,24 @@ export function newHealthState() {
     ewmaLatencyMs: 0, circuitOpenUntil: 0, lastSuccessAt: 0, downSince: 0, halfOpenFailStreak: 0, lastFailureAt: 0 };
 }
 
+// Only provider/transport failures are evidence about shared model health.
+// A 429 has ambiguous account/provider scope, so it never opens a global circuit.
+export function classifyUpstreamFailure(error, { clientGone = false } = {}) {
+  if (clientGone || error?.message === 'client_disconnected') return { scope: 'client', countModelFailure: false, retryable: false };
+  const status = Number(error?.upstreamStatus);
+  if (status === 401) return { scope: 'credential', countModelFailure: false, retryable: false };
+  if (status === 402 || status === 403) return { scope: 'entitlement', countModelFailure: false, retryable: false };
+  if (status === 429) return { scope: 'rate_limit', countModelFailure: false, retryable: false };
+  if (status >= 400 && status < 500 && status !== 408) return { scope: 'request', countModelFailure: false, retryable: false };
+  if (error?.failureScope === 'configuration') return { scope: 'configuration', countModelFailure: false, retryable: false };
+  return { scope: 'provider', countModelFailure: true, retryable: error?.retryable !== false };
+}
+
+export function releaseCircuitAttempt(state) {
+  // A cancelled/unauthorized half-open probe provides no evidence of recovery.
+  if (state) state.probeInFlight = false;
+}
+
 export function updateHealthState(state, ok, latencyMs, cfg = { circuitBreakerFailures: 3, circuitBreakerCooldownMs: 30000 }) {
   // v0.10.5：EWMA 恢复与 server 原实现等价——成功与失败都更新（失败/超时时延同样形成动态时延惩罚）
   state.ewmaLatencyMs = state.ewmaLatencyMs ? Math.round(state.ewmaLatencyMs * 0.8 + latencyMs * 0.2) : latencyMs;

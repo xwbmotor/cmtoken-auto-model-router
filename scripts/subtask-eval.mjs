@@ -1,157 +1,68 @@
-// CODE 大类粒度验证：3 模型 × 4 小类（debugging/code-generation/code-review/sql-database）。
-// 裁判：glm-5.3（z.ai coding 端点，外部独立裁判）——judge 方案变更须经用户确认（工作原则）。
-//
-// 要回答的问题：路由打分层的 coding 单档是否够用，还是要按小类拆档？
-// 判定规则：同模型跨小类均分极差(max-min) < 0.1 → 单档足够；≥ 0.1 → 该小类值得拆档。
-//
-// 用法：npm run eval:subtask [-- --limit N --models a,b,c]
+// Subtask evidence collection. Scores are observations, not proof that a task
+// taxonomy should be split; small samples and incomplete coverage remain visible.
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { loadConfig, projectRoot } from '../src/config.mjs';
+import { coverageOf, createIntegrity, evaluateCase, evidenceHash, normalizeCases, resolveJudge, summarizeScores, validateEvidenceReport } from './evaluation-integrity.mjs';
 
+const DEFAULT_JUDGE = 'url=https://api.z.ai/api/coding/paas/v4|model=glm-5.3|key=GLMCODE_API_KEY';
 function parseArgs(argv) {
-  const args = { cases: 'config/subtask-eval.json', limit: Infinity, models: null, out: null };
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
-    if (a === '--cases' || a === '-c') args.cases = argv[++i];
-    else if (a === '--limit') args.limit = Number(argv[++i]);
-    else if (a === '--models') args.models = argv[++i].split(',');
-    else if (a === '--out') args.out = argv[++i];
+  const args = { cases: 'config/subtask-eval.json', limit: Infinity, models: null, out: null, report: null, judge: DEFAULT_JUDGE };
+  const fields = { '--cases': 'cases', '-c': 'cases', '--limit': 'limit', '--models': 'models', '--out': 'out', '--report': 'report', '--judge': 'judge' };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--help') { console.log('eval:subtask -- [--cases PATH] [--models a,b] [--limit N] [--judge SPEC|none] [--out PATH] [--report PATH]'); process.exit(0); }
+    const key = fields[argv[i]];
+    if (!key || argv[i + 1] == null) throw new Error(`未知参数或缺少值：${argv[i]}`);
+    args[key] = key === 'limit' ? Number(argv[++i]) : key === 'models' ? [...new Set(argv[++i].split(',').filter(Boolean))] : argv[++i];
   }
+  if (args.limit !== Infinity && (!Number.isInteger(args.limit) || args.limit <= 0)) throw new Error('--limit 必须是正整数');
   return args;
-}
-
-const TIMEOUT_MS = Number(process.env.EVAL_GATE_TIMEOUT_MS || 120000);
-
-async function generate(base, key, model, prompt) {
-  const res = await fetch(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: Number(process.env.SUBTASK_EVAL_MAX_TOKENS || 32768) }),
-    signal: AbortSignal.timeout(TIMEOUT_MS)
-  });
-  if (!res.ok) throw new Error(`生成失败 ${model}: HTTP ${res.status} ${(await res.text()).slice(0, 120)}`);
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || '';
-}
-
-const SUB_LABEL = { debugging: '调试', 'code-generation': '代码生成', 'code-review': '代码评审', 'sql-database': 'SQL' };
-
-const JUDGE_PROMPT = '你是模型输出质量评估裁判。根据评分要点，给下面的模型输出打分（0 到 1 之间的小数，1 为完全符合）。\n\n任务类型：{task}\n评分要点：{rubric}\n\n模型输出：\n{output}\n\n只返回一个 JSON 对象：{"score": 0.85, "reason": "一句话说明"}';
-
-function clamp01(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(1, n));
-}
-
-async function judgeOnce(ep, task, rubric, output) {
-  const prompt = JUDGE_PROMPT.replace('{task}', task).replace('{rubric}', rubric).replace('{output}', output);
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      const res = await fetch(`${ep.base}/chat/completions`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${ep.key}` },
-        body: JSON.stringify({ model: ep.model, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: 2048 }),
-        signal: AbortSignal.timeout(TIMEOUT_MS)
-      });
-      if (!res.ok) { if (attempt === 2) return { score: null, reason: `[裁判失效] HTTP ${res.status}` }; continue; }
-      const data = await res.json();
-      const text = data.choices?.[0]?.message?.content || '';
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) { if (attempt === 2) return { score: null, reason: '[裁判失效] 未返回 JSON' }; continue; }
-      const parsed = JSON.parse(match[0]);
-      return { score: clamp01(parsed.score), reason: parsed.reason || '' };
-    } catch {
-      if (attempt === 2) return { score: null, reason: '[裁判失效] 异常' };
-    }
-  }
-  return { score: null, reason: '[裁判失效]' };
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const config = await loadConfig();
-  const maasBase = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl).replace(/\/$/, '');
-  const maasKey = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
-  if (!maasKey) { console.error('缺少 MAAS_API_KEY'); process.exit(2); }
-
-  const judge = { name: 'glm-5.3(外部)', base: 'https://api.z.ai/api/coding/paas/v4', key: process.env.GLMCODE_API_KEY, model: 'glm-5.3' };
-  if (!judge.key) { console.error('缺少 GLMCODE_API_KEY（外部裁判）'); process.exit(2); }
-
+  const baseUrl = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl).replace(/\/$/, '');
+  const apiKey = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
+  if (!apiKey) throw new Error('缺少 MAAS_API_KEY / UPSTREAM_API_KEY');
+  const judge = resolveJudge(args.judge, { baseUrl, apiKey });
   const models = args.models || config.models.filter((m) => m.enabled).map((m) => m.id);
-  const all = JSON.parse(await readFile(resolve(projectRoot, args.cases), 'utf8')).cases;
-  const cases = all.slice(0, args.limit === Infinity ? all.length : args.limit);
-
-  console.log(`粒度验证：${models.length} 模型 × ${cases.length} 用例 · 裁判 ${judge.name}（单judge）`);
-  console.log(`被测：${models.join(' / ')}\n`);
-
+  if (!models.length || models.some((id) => !config.models.some((m) => m.id === id && m.enabled))) throw new Error('被测模型必须存在且已启用');
+  const maxTokens = Number(process.env.SUBTASK_EVAL_MAX_TOKENS || 32768);
+  const timeoutMs = Number(process.env.EVAL_GATE_TIMEOUT_MS || 120000);
+  const bank = JSON.parse(await readFile(resolve(projectRoot, args.cases), 'utf8')).cases;
+  const cases = normalizeCases(bank.slice(0, args.limit), maxTokens);
+  if (cases.some((c) => typeof c.sub !== 'string' || !c.sub)) throw new Error('小类用例缺少 sub');
+  const modelConfigHash = evidenceHash(config.models.filter((m) => models.includes(m.id)));
+  const modelConfigHashes = Object.fromEntries(config.models.filter((m) => models.includes(m.id)).map((m) => [m.id, evidenceHash(m)]));
+  const integrity = createIntegrity({ cases, kind: 'subtask', mode: 'model', models, judge, generation: { baseUrl, stream: false, maxTokens, timeoutMs, modelConfigHash, modelConfigHashes } });
+  const previous = args.report ? validateEvidenceReport(JSON.parse(await readFile(resolve(projectRoot, args.report), 'utf8')), integrity) : null;
+  const previousByKey = new Map((previous?.results || []).map((r) => [JSON.stringify([r.model, r.id]), r]));
+  console.log(`小类评测：${models.length} 模型 × ${cases.length}/${bank.length} 用例 · 裁判 ${judge?.model || '未配置'}`);
   const results = [];
-  let n = 0;
-  const total = models.length * cases.length;
-  for (const model of models) {
-    for (const c of cases) {
-      n += 1;
-      const tag = `[${String(n).padStart(3, '0')}/${total}]`;
-      try {
-        const output = await generate(maasBase, maasKey, model, c.prompt);
-        const v = await judgeOnce(judge, c.sub, c.rubric, output);
-        results.push({ id: c.id, sub: c.sub, model, score: v.score, reason: v.reason, outputHead: output.slice(0, 160) });
-        console.log(`${tag} ${c.id} ${model} → ${v.score == null ? 'null' : v.score.toFixed(2)}${v.score == null ? ` ${v.reason}` : ''}`);
-      } catch (error) {
-        results.push({ id: c.id, sub: c.sub, model, score: null, error: error.message, outputHead: '' });
-        console.log(`${tag} ${c.id} ${model} 生成失败：${error.message.slice(0, 80)}`);
-      }
+  for (let i = 0; i < cases.length; i++) {
+    const c = cases[i];
+    for (let j = 0; j < models.length; j++) {
+      const model = models[(i + j) % models.length];
+      const old = previousByKey.get(JSON.stringify([model, c.id]));
+      if (old?.status === 'scored') { results.push(old); continue; }
+      const row = await evaluateCase({ c, model, baseUrl, apiKey, judge, timeoutMs, previous: old });
+      results.push(row);
+      console.log(`${c.id} ${model} → ${row.status}${row.score == null ? ` (${row.reason})` : ` ${row.score.toFixed(2)}`}`);
     }
   }
-
-  // ---- 聚合 ----
-  const ok = results.filter((r) => r.score != null);
-  const byModelSub = {};
-  for (const r of ok) {
-    byModelSub[r.model] ||= {};
-    (byModelSub[r.model][r.sub] ||= []).push(r.score);
-  }
-
-  console.log('\n================ 粒度验证报告 ================');
-  console.log(`有效：${ok.length}/${total}（生成失败 ${results.filter((r) => r.error).length}，裁判失效 ${results.filter((r) => !r.error && r.score == null).length}）`);
-
-  const granularity = [];
-  for (const [model, subs] of Object.entries(byModelSub)) {
-    console.log(`\n${model}:`);
-    const avgs = {};
-    for (const [sub, arr] of Object.entries(subs)) {
-      const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
-      avgs[sub] = avg;
-      console.log(`  ${SUB_LABEL[sub] || sub}   ${String(arr.length).padStart(2)} 条  均分 ${avg.toFixed(3)}`);
-    }
-    const vals = Object.values(avgs);
-    const spread = Math.max(...vals) - Math.min(...vals);
-    const worst = Object.entries(avgs).sort((a, b) => a[1] - b[1])[0];
-    granularity.push({ model, spread: Number(spread.toFixed(3)), lowest: { sub: worst[0], avg: Number(worst[1].toFixed(3)) }, avgs: Object.fromEntries(Object.entries(avgs).map(([k, v]) => [k, Number(v.toFixed(3))])) });
-    console.log(`  → 跨小类极差 ${spread.toFixed(3)}（${spread < 0.1 ? '＜0.1 单档足够' : '≥0.1 有拆档价值'}），最弱 ${SUB_LABEL[worst[0]] || worst[0]} ${worst[1].toFixed(3)}`);
-  }
-
-  console.log('\n结论判定（判定规则：极差 <0.1 单档足够；≥0.1 有拆档价值）：');
-  const needSplit = granularity.filter((g) => g.spread >= 0.1);
-  if (!needSplit.length) console.log('  ✓ 所有模型跨小类极差 < 0.1 —— coding 单档打分足够，30 小类维持纯展示');
-  else for (const g of needSplit) console.log(`  ⚠ ${g.model} 极差 ${g.spread} ≥ 0.1（最弱 ${SUB_LABEL[g.lowest.sub]} ${g.lowest.avg}）—— 该维度有拆档价值`);
-
-  const outPath = args.out || resolve(projectRoot, 'data', 'subtask-eval', `subtask-eval-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  const granularity = models.map((model) => {
+    const rows = results.filter((r) => r.model === model);
+    const subs = summarizeScores(rows, 'sub');
+    const avgs = Object.fromEntries(Object.entries(subs).map(([sub, value]) => [sub, value.avg]));
+    const values = Object.values(avgs);
+    return { model, avgs, counts: Object.fromEntries(Object.entries(subs).map(([sub, value]) => [sub, value.count])), coverage: coverageOf(rows), spread: values.length > 1 ? Number((Math.max(...values) - Math.min(...values)).toFixed(3)) : null, note: '描述性均值；不据小样本极差直接判定拆档或排名' };
+  });
+  const outPath = resolve(projectRoot, args.out || args.report || `data/subtask-eval/subtask-eval-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
   await mkdir(dirname(outPath), { recursive: true });
-  // 追加合并：同 id+model 的旧结果被本次覆盖（增量重跑不丢历史批次）
-  let mergedResults = results;
-  let priorNote = '';
-  try {
-    const prev = JSON.parse(await readFile(outPath, 'utf8'));
-    if (Array.isArray(prev.results)) {
-      const key = new Set(results.map((r) => `${r.id}|${r.model}`));
-      mergedResults = [...prev.results.filter((r) => !key.has(`${r.id}|${r.model}`)), ...results];
-      priorNote = `（合并前序 ${prev.results.length} 条，覆盖 ${results.length} 条）`;
-    }
-  } catch {}
-  await writeFile(outPath, JSON.stringify({ at: new Date().toISOString(), judge: judge.name, models, granularity, results: mergedResults }, null, 2));
-  console.log(`\n报告已写入 ${outPath} 共 ${mergedResults.length} 条${priorNote}`);
+  await writeFile(outPath, JSON.stringify({ at: new Date().toISOString(), integrity, judge: judge?.model || null, models, scope: { selectedCases: cases.length, bankCases: bank.length }, coverage: coverageOf(results), granularity, results }, null, 2));
+  console.log(`报告已写入 ${outPath} · 有效评分 ${results.filter((r) => r.status === 'scored').length}/${results.length}`);
+  // An explicit --judge none collects generation results without a quality PASS.
 }
 
-main().catch((error) => { console.error('执行失败：', error.message); process.exit(2); });
+main().catch((error) => { console.error('小类评测执行失败：', error.message); process.exitCode = 2; });

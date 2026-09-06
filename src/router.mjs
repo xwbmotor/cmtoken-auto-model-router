@@ -15,6 +15,8 @@ export function costTierBand(config) {
 
 // 市场信号：决策日志聚合的活信号（份额/点名/失败率），样本不足自动休眠、幅度有界
 import { adjustFor as marketAdjustFor } from './market-signal-runtime.mjs';
+import { estimateRequestCapacity } from './request-capacity.mjs';
+export { estimateInputTokens } from './request-capacity.mjs';
 
 // 硬切改名（如「cmtoken-auto」）后：/v1/models 展示该名、请求判定按该名走 auto 路由；
 // 旧名 "auto" 退化为普通字符串——若与池内模型 ID 不重合则按「模型不存在」400。
@@ -175,11 +177,6 @@ function taskText(body) {
   return classifierText(body);
 }
 
-export function estimateInputTokens(text) {
-  const cjk = (text.match(/[\u3400-\u9fff]/g) || []).length;
-  return Math.max(1, Math.ceil(cjk / 1.6 + (text.length - cjk) / 4));
-}
-
 export function analyzeRequest(body, config) {
   const text = taskText(body);
   // 按请求全量文本
@@ -257,16 +254,23 @@ export function analyzeRequest(body, config) {
     if (task !== 'default' && matchedCount >= 2) { base -= 0.2 * (matchedCount - 1); factors.push('multi-task-conflict'); }
     return { value: Number(Math.min(0.9, Math.max(0.3, base)).toFixed(3)), factors };
   })();
-  return { task: finalTask, subTask, tier, complexity, confidence: confidence.value, confidenceFactors: confidence.factors, textLength: text.length, estimatedInputTokens: estimateInputTokens(text), requirements, signals };
+  return { task: finalTask, subTask, tier, complexity, confidence: confidence.value, confidenceFactors: confidence.factors, textLength: text.length, ...estimateRequestCapacity(body, config), requirements, signals };
 }
 
-export function mergeSemanticAssessment(base, semantic, applied = true) {
+export function mergeSemanticAssessment(base, semantic, applied = true, body = null) {
   if (!semantic) return { ...base, routeMethod: 'rules' };
   if (!applied) return { ...base, routeMethod: 'rules_semantic_shadow', semantic };
   const delta = Number((semantic.complexity - base.complexity).toFixed(3));
+  // Tool requests retain the agent contract. A changed semantic task must not inherit
+  // a subtask from the old task; callers with the request can derive a fresh subtask.
+  const task = base.requirements?.tools ? 'agent' : semantic.task;
+  const subTask = task === 'agent' ? (base.subTask || 'workflow-execution')
+    : body ? resolveSubTask(task, classifierText(body))
+      : task === base.task ? base.subTask : null;
   return {
     ...base,
-    task: semantic.task,
+    task,
+    subTask,
     tier: semantic.tier,
     complexity: semantic.complexity,
     confidence: semantic.confidence,
@@ -287,7 +291,7 @@ export function recommendReasoningLevel(analysis, config) {
 // 能力硬过滤（fail-closed）：请求要求 tools/json/vision 而模型该能力未显式声明（null/undefined）
 // 时拒绝——「未知能力」不能承接生产流量，否则带工具请求可能被发给不支持工具的模型白吃 4xx。
 // chat/stream 例外放行（所有对话模型基线能力，历史配置普遍未显式声明）。
-function capabilityEligible(model, requirements) {
+export function capabilityEligible(model, requirements) {
   const missing = [];
   for (const [capability, required] of Object.entries(requirements)) {
     if (!required) continue;
@@ -345,9 +349,10 @@ export function paretoFrontier(models) {
 // Oracle：事后最优——逐请求选"满足质量线的最低成本模型"（GraphRouter/MixLLM 评估协议的上界参照）。
 export function oracleChoice(body, config, runtime = {}) {
   const analysis = runtime.analysisOverride || { ...analyzeRequest(body, config), routeMethod: 'rules' };
+  const capacity = estimateRequestCapacity(body, config);
   const eligible = config.models.filter((m) => {
     if (m.enabled === false) return false;
-    if (m.contextWindow && analysis.estimatedInputTokens > m.contextWindow) return false;
+    if (m.contextWindow && capacity.estimatedContextTokens > m.contextWindow) return false;
     return !capabilityEligible(m, analysis.requirements).length;
   });
   if (!eligible.length) return null;
@@ -379,13 +384,15 @@ export function zeroRouterChoice(body, config, runtime = {}) {
 }
 
 export function routeRequest(body, config, runtime = {}) {
-  const analysis = runtime.analysisOverride || { ...analyzeRequest(body, config), routeMethod: 'rules' };
+  // A classifier/replay override cannot replace full-request capacity with user-only counts.
+  const analysis = { ...(runtime.analysisOverride || { ...analyzeRequest(body, config), routeMethod: 'rules' }), ...estimateRequestCapacity(body, config) };
   const now = runtime.now || Date.now();
   const health = runtime.health || {};
   const candidates = [];
   const rejected = [];
   // 相对质量损失上限按 tier 分档（simple 0.08 / standard 0.04 / complex 0.02），可被 routing.relQualityCap 覆盖
-  const relCapAnchor = Number(config.routing?.relQualityCap?.[analysis.tier] ?? (analysis.tier === 'simple' ? 0.08 : analysis.tier === 'complex' ? 0.02 : 0.04));
+  const relCap = config.routing?.relQualityCap;
+  const relCapAnchor = Number((typeof relCap === 'number' || typeof relCap === 'string' ? relCap : relCap?.[analysis.tier]) ?? (analysis.tier === 'simple' ? 0.08 : analysis.tier === 'complex' ? 0.02 : 0.04));
   for (const model of config.models) {
     const reasons = [];
     if (!model.enabled) reasons.push('disabled');
@@ -395,7 +402,7 @@ export function routeRequest(body, config, runtime = {}) {
     if (runtime.allowedModelIds && !runtime.allowedModelIds.has(model.id)) reasons.push('not_entitled');
     const circuit = health[model.id]?.circuitOpenUntil || 0;
     if (circuit > now) reasons.push('circuit_open');
-    if (model.contextWindow && analysis.estimatedInputTokens > model.contextWindow) reasons.push('context_too_long');
+    if (model.contextWindow && analysis.estimatedContextTokens > model.contextWindow) reasons.push('context_too_long');
     const requestedCompletionTokens = Number(body.max_completion_tokens || body.max_tokens || 0);
     if (requestedCompletionTokens > 0 && model.minimumCompletionTokensForReliableAnswer
       && requestedCompletionTokens < model.minimumCompletionTokensForReliableAnswer) reasons.push('completion_budget_too_low');
@@ -458,25 +465,31 @@ export function routeRequest(body, config, runtime = {}) {
   }
   if (!candidates.length) throw new Error('没有满足硬性能力和健康状态要求的候选模型');
   // 相对质量损失上限：与「本任务最强候选」的质量差超过 tier 档位即出局（先按质量带过滤再优化成本——
-  // 加权求和允许成本项淹没质量差，导致复杂任务低质量模型胜出）。全部超限退回绝对地板，仍无则全量兜底。
+  // 加权求和允许成本项淹没质量差，导致复杂任务低质量模型胜出）。无候选达到质量线时显式降级兜底。
   const maxQuality = Math.max(...candidates.map((x) => x.quality));
-  for (const x of candidates) x.qualityLoss = Number((maxQuality - x.quality).toFixed(4));
-  let qualified = candidates.filter((x) => x.qualityQualified && x.qualityLoss <= relCapAnchor);
-  if (!qualified.length) qualified = candidates.filter((x) => x.qualityQualified);
-  if (!qualified.length) qualified = candidates;
-  const pool = qualified;
+  for (const x of candidates) {
+    x.qualityLoss = Number((maxQuality - x.quality).toFixed(4));
+    x.qualityEligible = x.qualityQualified && x.qualityLoss <= relCapAnchor;
+  }
+  const qualified = candidates.filter((x) => x.qualityEligible);
+  const qualityDegraded = qualified.length === 0;
+  if (qualityDegraded && config.routing.allowQualityDegradation !== true) {
+    throw new Error('没有达到质量门槛的候选模型；如需可用性降级，必须显式设置 routing.allowQualityDegradation=true');
+  }
+  // Availability fallback is explicit. Normal retries stay inside the quality gate.
+  const pool = qualityDegraded ? [...candidates] : qualified;
   pool.sort((a, b) => b.score - a.score || a.costIndex - b.costIndex);
-  const ordered = [...pool, ...candidates.filter((x) => !pool.includes(x)).sort((a, b) => b.score - a.score)];
+  const ordered = [...pool];
   // 任务偏好分流：指定模型与最优模型的分差 ≤ 容差时选指定模型（quality 不受损前提下的定向分流，
   // 如并发余量大的模型接 extraction/creative；预算压力拉高成本权重时分差扩大，自然回落最优模型）
   // 任务偏好分流 收紧）：目标必须在 qualified 池内（不可绕过相对质量闸门/绝对质量线），
   // 且分差 >= 0 才参与容差判断（原实现 target 分数高于 best 时负分差天然满足「<= 容差」，
-  // 超限 fallback 模型可被偏好直接提升到首位）。fallback 保留在 ordered 尾部只作兜底。
+  // 超限 fallback 模型可被偏好直接提升到首位）。正常回退与偏好使用同一合格池。
   const prefs = config.routing?.taskPreferences || {};
   const pref = prefs[analysis.task];
   let preferenceApplied = false;
   let preferenceNote = null;
-  if (pref?.model && pool.length > 1) {
+  if (!qualityDegraded && pref?.model && pool.length > 1) {
     const best = pool[0];
     const target = pool.find((x) => x.model === pref.model);
     const diff = target ? best.score - target.score : null;
@@ -491,7 +504,10 @@ export function routeRequest(body, config, runtime = {}) {
   const activeTrafficPercent = Math.max(0, Math.min(100, Number(config.routing.activeTrafficPercent ?? 100)));
   const trafficBucket = Number(runtime.trafficBucket ?? Math.random() * 100);
   const rolloutApplied = config.routing.mode === 'active' && trafficBucket < activeTrafficPercent;
-  const selectedModel = rolloutApplied ? suggestedModel : config.routing.shadowModel;
+  let selectedModel = rolloutApplied ? suggestedModel : config.routing.shadowModel;
+  const selectedCandidate = candidates.find(c => c.model === selectedModel);
+  const safetyOverride = !selectedCandidate || (!qualityDegraded && !selectedCandidate.qualityEligible);
+  if (safetyOverride) selectedModel = suggestedModel;
   let reasoningLevel = recommendReasoningLevel(analysis, config);
   if (Number(runtime.budgetPressure || 0) >= Number(config.budget?.degradeThreshold ?? 0.9)) {
     reasoningLevel = reasoningLevel === 'high' ? 'standard' : 'off';
@@ -499,8 +515,12 @@ export function routeRequest(body, config, runtime = {}) {
   return {
     // 不再写死 'auto'——决策日志/市场信号按此归并 auto vs explicit。
     requestedModel: body.model || autoModelId(config), selectedModel, suggestedModel,
-    shadow: !rolloutApplied, rollout: { activeTrafficPercent, trafficBucket: Number(trafficBucket.toFixed(2)), rolloutApplied }, analysis, candidates: candidates.sort((a, b) => b.score - a.score),
+    shadow: !rolloutApplied, rollout: { activeTrafficPercent, trafficBucket: Number(trafficBucket.toFixed(2)), rolloutApplied,
+      ...(safetyOverride ? { safetyOverride: 'configured_shadow_model_not_eligible' } : {}) }, analysis, candidates: candidates.sort((a, b) => b.score - a.score),
     preference: preferenceApplied ? { task: analysis.task, model: pref.model, note: preferenceNote } : null,
-    reasoningLevel, rejected, fallbackOrder: ordered.map((x) => x.model), configVersion: config.version
+    reasoningLevel, rejected, fallbackOrder: ordered.map((x) => x.model),
+    qualifiedModelIds: qualified.map((x) => x.model), qualityDegraded,
+    ...(qualityDegraded ? { qualityDegradedReason: 'no_candidate_meets_quality_floor' } : {}),
+    configVersion: config.version
   };
 }

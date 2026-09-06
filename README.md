@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **OpenAI 协议全兼容**：`/v1/chat/completions`、`/v1/models`，流式、工具调用、JSON 模式零改造接入
+- **OpenAI Chat Completions 兼容接口**：`/v1/chat/completions`、`/v1/models`，支持流式、工具调用与 JSON 模式；具体能力受上游模型支持范围约束
 - **三层任务分类**：规则层（<1ms）→ 语义小模型复核（~20ms）→ 大模型升级，任务类型 + 三档难度
 - **评分选型**：`score = 质量 − 成本权重×用户成本指数 − 算力权重×算力消耗指数 − 时延权重×时延 − 不确定性 + 自建奖励 − 熔断惩罚`，权重管理端可调
 - **故障安全**：预算预占-结算-冲正、fallback 链、熔断器、优雅关停排空、决策/复核/评审三路独立事件流
@@ -55,7 +55,7 @@ src/                  服务端（零依赖 Node ESM）
 public/               管理端 Web UI（登录页 + 控制台）
 config/router.json    运行时配置（模型池、权重、预算）
 docs/                 使用说明、MaaS 集成手册、部署指南
-tests/                node:test 全量测试（213 项，发布门禁 0-skip）
+tests/                node:test 全量测试（实际数量以测试报告为准，发布门禁 0-skip）
 scripts/              分类器训练/评测、发布测试脚本
 ```
 
@@ -64,12 +64,17 @@ scripts/              分类器训练/评测、发布测试脚本
 ```bash
 npm test              # 全量测试
 npm run test:release  # 发布门禁：clean HEAD + tag 校验 + 0-skip，报告落 reports/
+npm run eval:matrix -- --input data/business-matrix.json --out data/business-matrix-report.json
 ```
 
 版本号唯一口径为 `package.json` semver + git tag；发布流程与镜像部署见 `docs/智能体交接说明.md`。
 
 ## 文档
 
+- [路由约束与评测基础](docs/router-foundations.md) —— 执行约束、指标变更及真实数据阶段边界
+- [评测完整性](docs/evaluation-integrity.md) —— Judge 输入、覆盖门禁和显式评分导入
+- [真实任务矩阵](docs/routing-matrix.md) —— 公平比较固定模型、当前路由、新策略与理想上界
+- [反馈关联与待审样本](docs/feedback-learning.md) —— 传输结果、人工评价和 Judge 分开使用
 - [使用说明](docs/使用说明.md) —— 功能导览与参数口径
 - [MaaS平台集成部署运营手册](docs/MaaS平台集成部署运营手册.md) —— 平台侧集成与运营
 - [路由设计说明](docs/路由设计说明.md) —— 路由算法设计细节

@@ -1,7 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 // v0.10.4：健康状态机行为测试（抽出的纯函数）+ full summary 结构测试
-import { newHealthState, updateHealthState, offlineAlertDue } from '../src/health.mjs';
+import { newHealthState, updateHealthState, offlineAlertDue, classifyUpstreamFailure, releaseCircuitAttempt } from '../src/health.mjs';
+
+test('tenant/request/rate-limit failures and cancellations do not poison global model health', () => {
+  for (const upstreamStatus of [400, 401, 402, 403, 404, 413, 422, 429]) {
+    const result = classifyUpstreamFailure({ upstreamStatus });
+    assert.equal(result.countModelFailure, false, String(upstreamStatus));
+    assert.equal(result.retryable, false, String(upstreamStatus));
+  }
+  assert.equal(classifyUpstreamFailure(new Error('client_disconnected')).countModelFailure, false);
+  assert.equal(classifyUpstreamFailure(new Error('fetch failed'), { clientGone: true }).countModelFailure, false);
+  for (const upstreamStatus of [408, 500, 502, 503, 504]) assert.equal(classifyUpstreamFailure({ upstreamStatus }).countModelFailure, true);
+  assert.equal(classifyUpstreamFailure(new Error('fetch failed')).countModelFailure, true);
+});
+test('neutral failed half-open probe releases its slot without asserting model recovery', () => {
+  const state = { ...newHealthState(), circuitState: 'half_open', probeInFlight: true, consecutiveFailures: 3 };
+  releaseCircuitAttempt(state);
+  assert.equal(state.probeInFlight, false);
+  assert.equal(state.circuitState, 'half_open');
+  assert.equal(state.consecutiveFailures, 3);
+});
 
 test('downSince 只在熔断首次打开时设置——单次失败不设置', () => {
   const s = newHealthState();

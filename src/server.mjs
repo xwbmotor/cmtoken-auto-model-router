@@ -13,7 +13,7 @@ import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { loadConfig, projectRoot, saveConfig, validateConfig, getConfigRevision } from './config.mjs';
 import { promises as dnsPromises } from 'node:dns'; // v0.11.13（二十七审 P1-1）SSRF DNS pinning
 
-import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice, recommendReasoningLevel, isAutoRequest, autoModelId } from './router.mjs';
+import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice, recommendReasoningLevel, isAutoRequest, autoModelId, capabilityEligible } from './router.mjs';
 
 import { resolveModelScope, scopeIntersectsConfig, scopeAllows, scopeCacheStats } from './model-scope.mjs';
 
@@ -41,7 +41,9 @@ import { createShutdownManager, installCrashHandlers } from './shutdown.mjs';
 import { createRateLimiter } from './rate-limiter.mjs';
 
 import { shouldPromoteVerified } from './calibration.mjs';
-import { newHealthState, updateHealthState, offlineAlertDue } from './health.mjs';
+import { newHealthState, updateHealthState, offlineAlertDue, classifyUpstreamFailure, releaseCircuitAttempt } from './health.mjs';
+import { sessionRoutingKey, chooseSessionModel } from './session-routing.mjs';
+import { createStreamTimingObserver, observeLatency } from './response-timing.mjs';
 import { bootstrap, bootstrapDiff } from './bootstrap.mjs';
 
 import { MarketSignal } from './market-signal.mjs';
@@ -861,7 +863,7 @@ function replayHeldout(dump, policyConfig) {
 
     const semantic = { task: row.clf, tier: row.tier, complexity: row.complexity, confidence: row.confidence, reason: 'replay' };
 
-    const fullAnalysis = mergeSemanticAssessment(baseAnalysis, semantic, true);
+    const fullAnalysis = mergeSemanticAssessment(baseAnalysis, semantic, true, body);
 
     const fullModel = routeRequest(body, policyConfig, { health: {}, analysisOverride: fullAnalysis, trafficBucket: 0 }).suggestedModel;
 
@@ -1305,53 +1307,12 @@ function maybePromoteVerified(model) {
 }
 
 function sessionModel(req, decision) {
-
-  const id = req.headers['x-session-id'];
-
+  if (decision.analysis?.task === 'explicit' || decision.shadow) return decision.selectedModel;
+  const id = sessionRoutingKey({ sessionId: req.headers['x-session-id'], authorization: req.headers.authorization,
+    upstream: process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl }, semanticBucketSecret);
   if (!id) return decision.selectedModel;
-
-  const current = sessions.get(id);
-
-  // 修
-
-  // 先问简单题再问复杂题也会被钉在旧模型上，逐问题路由被会话粘性吞掉）。
-
-  // 闸门三条件（与：
-
-  // 1. 旧模型仍是本请求的合格候选（在 fallbackOrder 中）
-
-  // 2. 任务类型/难度未变（同 task 且同 tier——复杂度升档必须允许重新路由）
-
-  // 3. 新旧最优分差小（best.score − sticky.score ≤ 阈值，默认 0.05——旧模型明显劣化时让位）
-
-  if (current && current.expiresAt > Date.now() && decision.fallbackOrder.includes(current.model)) {
-
-    const sameShape = current.task === decision.analysis.task && current.tier === decision.analysis.tier;
-
-    const stickyScore = decision.candidates?.find((c) => c.model === current.model)?.score;
-
-    const bestScore = decision.candidates?.[0]?.score;
-
-    const stickyGap = Number.isFinite(stickyScore) && Number.isFinite(bestScore)
-
-      ? bestScore - stickyScore
-
-      : null;
-
-    const maxStickyGap = Number(config.routing?.sessionStickinessMaxGap ?? 0.05);
-
-    if (sameShape && (stickyGap == null || stickyGap <= maxStickyGap + 1e-9)) {
-
-      return current.model; // 同型请求且旧模型仍接近最优：保持粘性（连续对话体验/上游前缀缓存）
-
-    }
-
-  }
-
-  sessions.set(id, { model: decision.selectedModel, expiresAt: Date.now() + config.routing.sessionStickinessTtlMs, task: decision.analysis.task, tier: decision.analysis.tier });
-
-  return decision.selectedModel;
-
+  req.routingSessionKey = id;
+  return chooseSessionModel(sessions.get(id), decision, config.routing);
 }
 
 // —— 调用方归因：key 指纹（sha256 前 8 位十六进制）——
@@ -1519,6 +1480,7 @@ async function callUpstream(body, model, signal, reasoningLevel = 'off', clientA
     const error = new Error('尚未设置 MAAS_API_KEY；请使用轮换后的新 Key');
 
     error.retryable = false;
+    error.failureScope = 'configuration';
 
     throw error;
 
@@ -2027,7 +1989,7 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 
     if (track && assessment?.escalatedFrom) counters.semantic.escalated = (counters.semantic.escalated || 0) + 1;
 
-    const semanticAnalysis = mergeSemanticAssessment(baseAnalysis, assessment, true);
+    const semanticAnalysis = mergeSemanticAssessment(baseAnalysis, assessment, true, body);
 
 
     // budgetPressure/trafficBucket——L2/L3 重判 task/tier 后第二次 routeRequest 拿全量模型池打分，
@@ -2319,7 +2281,7 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
 
     }
 
-    return { ...baseDecision, analysis: mergeSemanticAssessment(baseAnalysis, result.assessment, false), semanticReview: { status: 'shadow_complete', ...result.review } };
+    return { ...baseDecision, analysis: mergeSemanticAssessment(baseAnalysis, result.assessment, false, body), semanticReview: { status: 'shadow_complete', ...result.review } };
 
   } catch (error) {
 
@@ -2330,6 +2292,7 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
 }
 
 async function proxyCompletion(req, res) {
+  const requestStarted = Date.now();
 
   if (shutdownManager.draining) return errorJson(res, 503, '服务正在下线，请稍后重试', 'server_draining');
 
@@ -2381,21 +2344,30 @@ async function proxyCompletion(req, res) {
 
     try { decision = await resolveAutoDecision(body, { clientAuthHeader: req.headers.authorization, requestId: req.requestId, bucketKey: { sessionId: req.headers['x-session-id'] || null, keyFingerprint: keyFingerprint(req.headers.authorization), requestId: req.requestId } }); }
 
-    catch (error) { counters.errors += 1; scheduleCountersWrite(); return errorJson(res, 503, error.message); }
+    catch (error) { counters.errors += 1; counters.outcome.auto.error += 1; scheduleCountersWrite(); return errorJson(res, 503, error.message); }
 
   } else {
 
     counters.explicit += 1; scheduleCountersWrite();
+    const rejectExplicit = (status, message, type) => {
+      counters.errors += 1; counters.outcome.explicit.error += 1; scheduleCountersWrite();
+      return errorJson(res, status, message, type);
+    };
 
     const model = config.models.find((x) => x.id === body.model && x.enabled);
 
-    if (!config.routing.allowExplicitModel) return errorJson(res, 403, '当前策略不允许显式选择模型');
+    if (!config.routing.allowExplicitModel) return rejectExplicit(403, '当前策略不允许显式选择模型');
 
-    if (!model) return errorJson(res, 400, `模型不存在或未启用: ${body.model}`, 'invalid_request_error');
+    if (!model) return rejectExplicit(400, `模型不存在或未启用: ${body.model}`, 'invalid_request_error');
 
     // explicit：reasoningLevel 不再硬编码 off——按请求本身复杂度定档（点名思考型模型问复杂问题应保留思考）
 
     const explicitAnalysis = analyzeRequest(body, config);
+    if (model.contextWindow && explicitAnalysis.estimatedContextTokens > model.contextWindow) {
+      return rejectExplicit(400, '完整请求与输出预留超过所选模型的上下文窗口（启发式估算）', 'context_length_exceeded');
+    }
+    const missingCapabilities = capabilityEligible(model, explicitAnalysis.requirements);
+    if (missingCapabilities.length) return rejectExplicit(400, `所选模型不支持请求能力: ${missingCapabilities.join(', ')}`, 'unsupported_capability');
 
     const explicitLevel = recommendReasoningLevel(explicitAnalysis, config);
 
@@ -2404,6 +2376,7 @@ async function proxyCompletion(req, res) {
   }
 
   decision.selectedModel = sessionModel(req, decision);
+  decision.policyRevision = getConfigRevision(config) || null;
 
   // 思考预算守卫：选中的是思考型模型但客户端给的 max_tokens 低于其安全下限时强制关思考——
 
@@ -2450,6 +2423,14 @@ async function proxyCompletion(req, res) {
   let outcomeSettled = true; // 成功/失败落账闸（true=无在途 attempt，调用 no-op）
 
   let actxCtx = null; // { model, started, ttftMs, isStream } 当前 attempt 快照
+  const attemptOutcomes = [];
+  const responseTimings = counters.responseTimingsV2 ||= {};
+  const applyFailureHealth = (model, error) => {
+    const classification = classifyUpstreamFailure(error, { clientGone });
+    if (classification.countModelFailure) updateHealth(model, false, Date.now() - (actxCtx?.started || requestStarted));
+    else releaseCircuitAttempt(health[model]);
+    return classification;
+  };
 
   // —— 客户端断开哨兵 + 非流式交付守卫 ——
 
@@ -2459,7 +2440,7 @@ async function proxyCompletion(req, res) {
 
   // 异常路径（断流时 res.write 抛错或上游迭代器抛错进 catch），此守卫不重复落账（outcomeSettled 闸兜底）。
 
-  let clientGone = false;
+  let clientGone = Boolean(res.destroyed);
 
   const delivery = { delivered: false, usage: null, log: null, guardActive: false };
 
@@ -2491,6 +2472,28 @@ async function proxyCompletion(req, res) {
     if (requestLogWritten) return;
 
     requestLogWritten = true;
+    const completionLatencyMs = Date.now() - requestStarted;
+    const streamTiming = actxCtx?.streamTiming?.snapshot();
+    observeLatency(responseTimings, outcome.ok ? 'completion' : 'failedCompletion', completionLatencyMs);
+    outcome = { ...outcome, latencyMs: completionLatencyMs, completionLatencyMs,
+      responseHeaderLatencyMs: actxCtx?.headerLatencyMs ?? null,
+      ttftMs: streamTiming?.firstContentMs ?? null, firstOutputMs: streamTiming?.firstOutputMs ?? null,
+      timingVersion: 2, transportOk: Boolean(outcome.ok), taskSuccess: null,
+      attempts: attemptOutcomes.map(item => ({ ...item })),
+      totalAttemptCostYuan: attemptOutcomes.some(a => a.actualCostYuan == null && a.estimatedCostYuan == null) ? null
+        : attemptOutcomes.reduce((sum, a) => sum + (a.actualCostYuan ?? a.estimatedCostYuan), 0),
+      totalAttemptCostKind: attemptOutcomes.some(a => a.actualCostYuan == null && a.estimatedCostYuan == null) ? 'unknown'
+        : attemptOutcomes.every(a => a.actualCostYuan != null) ? 'actual' : 'estimated_or_mixed' };
+    record({ at: new Date().toISOString(), requested: decision.requestedModel, selected: outcome.model,
+      suggested: decision.suggestedModel, task: decision.analysis.task, complexity: decision.analysis.complexity,
+      routeMethod: decision.analysis.routeMethod, reasoningLevel: decision.reasoningLevel,
+      reasoningApplied: Boolean(config.models.find(m => m.id === outcome.model)?.reasoningControl?.verified) && decision.reasoningLevel !== 'off',
+      keyFingerprint: keyFingerprint(req.headers.authorization), ...outcome });
+    scheduleCountersWrite();
+    if (outcome.ok && req.routingSessionKey) sessions.set(req.routingSessionKey, {
+      model: outcome.model, expiresAt: Date.now() + config.routing.sessionStickinessTtlMs,
+      task: decision.analysis.task, tier: decision.analysis.tier, subTask: decision.analysis.subTask || null
+    });
 
     // 数据留存：回答原文入决策日志（logAnswerText 开时；judgeCtx.answerText 为交付路径
     // 提取的纯正文——非流式 choices[0].message.content / 流式 SSE delta 拼接）
@@ -2511,6 +2514,7 @@ async function proxyCompletion(req, res) {
     clientGone = true;
 
     if (!delivery.guardActive) {
+      controller?.abort(new Error('client_disconnected'));
 
       // attempt 前段（等上游响应头/读上游 body）客户端断开：无在途响应可交付，记客户端写失败
 
@@ -2564,12 +2568,18 @@ async function proxyCompletion(req, res) {
     if (settledAttempt) return;
 
     settledAttempt = true;
+    if (actxCtx?.attempt) {
+      actxCtx.attempt.actualCostYuan = actxCtx.attempt.upstreamStarted === false ? 0 : Number.isFinite(actualYuan) ? actualYuan : null;
+      actxCtx.attempt.costFromUsage = Boolean(fromUsage);
+      actxCtx.attempt.latencyMs = Date.now() - actxCtx.started;
+    }
 
     if (reserveId == null) return;
 
     const id = reserveId; reserveId = null;
 
-    budgetTracker.settle(id, actualYuan, fromUsage).catch(() => {});
+    if (actxCtx?.attempt?.upstreamStarted === false) budgetTracker.release(id).catch(() => {});
+    else budgetTracker.settle(id, actualYuan, fromUsage).catch(() => {});
 
   };
 
@@ -2599,7 +2609,8 @@ async function proxyCompletion(req, res) {
 
     if (ok) {
 
-      updateHealth(c.model, true, c.ttftMs);
+      const firstOutput = c.streamTiming?.snapshot().firstOutputMs;
+      updateHealth(c.model, true, firstOutput == null ? Date.now() - c.started : Math.max(0, firstOutput - (c.started - requestStarted)));
 
       maybePromoteVerified(c.model);
 
@@ -2609,15 +2620,12 @@ async function proxyCompletion(req, res) {
 
       markSelectedBy(c.model);
 
-      counters.ttft ??= { count: 0, sumMs: 0 };
-
-      counters.ttft.count += 1; counters.ttft.sumMs += c.ttftMs;
-
       if (c.isStream) { counters.stream ??= { completed: 0, aborted: 0 }; counters.stream.completed += 1; }
 
     } else {
 
-      updateHealth(c.model, false, Date.now() - c.started);
+      const failure = applyFailureHealth(c.model, err);
+      if (c.attempt) c.attempt.failureScope = failure.scope;
 
       counters.failures += 1; scheduleCountersWrite();
 
@@ -2628,6 +2636,7 @@ async function proxyCompletion(req, res) {
       if (err) logger.warn(c.isStream ? 'stream_aborted' : 'client_write_failed', { requestId: req.requestId, model: c.model, error: String(err.message || err) });
 
     }
+    if (c.attempt) c.attempt.ok = ok;
 
   };
 
@@ -2660,12 +2669,14 @@ async function proxyCompletion(req, res) {
   };
 
   let lastError;
+  let lastAttemptedModel = null;
 
   for (let i = 0; i < attempts.length; i += 1) {
 
     const model = attempts[i];
 
     if (!claimCircuitAttempt(model)) continue;
+    lastAttemptedModel = model;
 
     const started = Date.now();
 
@@ -2674,40 +2685,54 @@ async function proxyCompletion(req, res) {
     armTimer(); // 每次尝试独立计时（旧实现 timer 在循环外只设一次，attempt 2 继承剩余预算）
 
     try {
+      const selectedConfig = config.models.find((item) => item.id === model);
+      estimatedCostYuan = estimateCostYuan(body, decision.analysis, selectedConfig, config, decision.reasoningLevel);
+      const attempt = { model, estimatedCostYuan, actualCostYuan: null, ok: null, upstreamStarted: false };
+      attemptOutcomes.push(attempt);
+      actxCtx = { model, started, headerLatencyMs: null, isStream: body.stream === true, auto, attempt,
+        streamTiming: body.stream === true ? createStreamTimingObserver(requestStarted) : null };
+      reserveId = await budgetTracker.reserve(estimatedCostYuan);
+      settledAttempt = false; outcomeSettled = false;
+      if (clientGone) {
+        markOutcome(false, new Error('client_disconnected'));
+        settleAttempt(0, false); // No upstream call was made.
+        writeOutcomeLog({ ok: false, model, error: 'client_disconnected' });
+        clearTimeout(timer); return;
+      }
 
       // 飞轮：流式请求带上 stream_options.include_usage，上游会在最后一个 chunk 附带 usage
 
       if (body.stream === true) body.stream_options = { ...(body.stream_options || {}), include_usage: true };
 
+      attempt.upstreamStarted = true;
       const upstream = await callUpstream(body, model, controller.signal, decision.reasoningLevel, req.headers.authorization);
 
       const latency = Date.now() - started;
+      actxCtx.headerLatencyMs = latency;
+      observeLatency(responseTimings, 'headers', latency);
 
       if (!upstream.ok) {
-
-        const message = (await upstream.text()).slice(0, 2000);
-
-        logger.warn('upstream_error', { requestId: req.requestId, model, status: upstream.status, body: message });
-
         lastError = new Error(`上游 ${model} 调用失败（HTTP ${upstream.status}）`);
-
-        lastError.retryable = [408, 429, 500, 502, 503, 504].includes(upstream.status);
-
+        lastError.upstreamStatus = upstream.status;
+        lastError.retryable = upstream.status === 408 || upstream.status >= 500;
+        attempt.upstreamStatus = upstream.status;
+        // Status is already authoritative. A truncated/hanging error body must
+        // not turn a known tenant rejection into a global transport failure.
+        logger.warn('upstream_error', { requestId: req.requestId, model, status: upstream.status });
+        await upstream.body?.cancel().catch(() => {});
         throw lastError;
 
       }
 
       // 客户端已在等待上游期间断开：响应无处交付，记失败结账直接返回——
 
-      // 不 reserve、不 fallback（无人接收结果，重试只是烧钱）、不写死 socket
+      // 已预占的调用保守结算；无人接收结果时不再 fallback。
 
       if (clientGone) {
 
-        actxCtx = { model, started, ttftMs: Date.now() - started, isStream: body.stream === true, auto };
-
-        outcomeSettled = false;
-
         markOutcome(false, new Error('client_disconnected'));
+        settleAttempt(null, false);
+        await upstream.body?.cancel().catch(() => {});
 
         logger.warn('client_abandoned_upstream_wait', { requestId: req.requestId, model, latencyMs: Date.now() - started });
 
@@ -2727,21 +2752,7 @@ async function proxyCompletion(req, res) {
 
       // 记账纪律：首包到达 ≠ 成功。非流式：响应体整体读完才算成功（text 后记）；
 
-      // 流式：此处只留 TTFT 观测，成功/失败在流尾落账（markStreamOutcome），中断只记失败不双记。
-
-      const firstByteLatencyMs = latency;
-
-      const selectedConfig = config.models.find((item) => item.id === model);
-
-      estimatedCostYuan = estimateCostYuan(body, decision.analysis, selectedConfig, config, decision.reasoningLevel);
-
-      // 预算预占-结算：请求开始预占估算额，结束按实际 usage 冲正（无 usage 保留估算并标记 estimated）
-
-      reserveId = await budgetTracker.reserve(estimatedCostYuan);
-
-      settledAttempt = false; outcomeSettled = false; // 新 attempt：重置两道落账闸
-
-      actxCtx = { model, started, ttftMs: firstByteLatencyMs, isStream: body.stream === true, auto };
+      // 流式首段正文在 SSE 事件中观测，响应头延迟单独记录。
 
       // 有 usage 按实际 token 冲正；无 usage 保留估算并标记 estimated
 
@@ -2805,8 +2816,6 @@ async function proxyCompletion(req, res) {
 
       const logOutcome = { ok: true, model, latencyMs: latency, fallbackAttempt: i, estimatedCostYuan, actualCostYuan, usage };
 
-      record({ at: new Date().toISOString(), requested: decision.requestedModel, selected: model, suggested: decision.suggestedModel, task: decision.analysis.task, complexity: decision.analysis.complexity, routeMethod: decision.analysis.routeMethod, reasoningLevel: decision.reasoningLevel, reasoningApplied: Boolean(selectedModelConfig?.reasoningControl?.verified) && decision.reasoningLevel !== 'off', keyFingerprint: keyFingerprint(req.headers.authorization), estimatedCostYuan, actualCostYuan, latencyMs: latency, fallbackAttempt: i, ok: true });
-
       const headers = {
 
         'content-type': upstream.headers.get('content-type') || (body.stream ? 'text/event-stream' : 'application/json'),
@@ -2822,6 +2831,8 @@ async function proxyCompletion(req, res) {
         'x-router-cost-tier': config.routing?.costTier || 'custom',
 
         'x-router-policy-version': String(config.version),
+        'x-router-policy-revision': decision.policyRevision || 'unknown',
+        'x-router-quality-degraded': String(Boolean(decision.qualityDegraded)),
 
         'x-router-shadow': String(decision.shadow),
 
@@ -2873,8 +2884,18 @@ async function proxyCompletion(req, res) {
       for await (const chunk of upstream.body) {
 
         if (body.stream === true) armTimer(); // 流式闲置超时：有数据流动就续命
+        const before = actxCtx.streamTiming?.snapshot();
+        actxCtx.streamTiming?.push(chunk);
+        const after = actxCtx.streamTiming?.snapshot();
+        if (before?.firstContentMs === null && after?.firstContentMs != null) observeLatency(responseTimings, 'ttft', after.firstContentMs);
+        if (before?.firstOutputMs === null && after?.firstOutputMs != null) observeLatency(responseTimings, 'firstOutput', after.firstOutputMs);
 
-        if (!res.write(chunk)) await new Promise((resolve) => res.once('drain', resolve));
+        if (!res.write(chunk)) await new Promise((resolve, reject) => {
+          const cleanup = () => { res.off('drain', drained); res.off('close', closed); };
+          const drained = () => { cleanup(); resolve(); };
+          const closed = () => { cleanup(); reject(new Error('client_disconnected')); };
+          res.once('drain', drained); res.once('close', closed);
+        });
 
         tailChunks.push(Buffer.from(chunk)); tailBytes += chunk.length; trimTail();
 
@@ -2882,6 +2903,11 @@ async function proxyCompletion(req, res) {
 
       }
 
+      const timingBeforeFinish = actxCtx.streamTiming?.snapshot();
+      actxCtx.streamTiming?.finish();
+      const timingAfterFinish = actxCtx.streamTiming?.snapshot();
+      if (timingBeforeFinish?.firstContentMs === null && timingAfterFinish?.firstContentMs != null) observeLatency(responseTimings, 'ttft', timingAfterFinish.firstContentMs);
+      if (timingBeforeFinish?.firstOutputMs === null && timingAfterFinish?.firstOutputMs != null) observeLatency(responseTimings, 'firstOutput', timingAfterFinish.firstOutputMs);
       const sseTail = Buffer.concat(tailChunks).toString('utf8');
 
       if (isStream && !usage) usage = extractUsage('text/event-stream', sseTail);
@@ -2938,11 +2964,17 @@ async function proxyCompletion(req, res) {
     } catch (error) {
 
       lastError = error;
+      if (error.failureScope === 'configuration' && actxCtx?.attempt) actxCtx.attempt.upstreamStarted = false;
 
       delivery.guardActive = false; // 本 attempt 已死，close 守卫不再按交付状态落账（防旧 attempt 污染下一 attempt）
 
-      if (clientGone && !res.headersSent) { settleAttempt(null, false); outcomeSettled = true; clearTimeout(timer); return; } // 客户端已断：不再 fallback，直接结束（错误已无法送达）
-
+      if (clientGone && !res.headersSent) {
+        markOutcome(false, new Error('client_disconnected'));
+        releaseCircuitAttempt(health[model]);
+        settleAttempt(null, false);
+        writeOutcomeLog({ ok: false, model, error: 'client_disconnected' });
+        clearTimeout(timer); return;
+      }
       if (res.headersSent) {
 
         // mid-flight 中断（流式断流/非流式写回失败）：单次失败落账 + 预算保留估算
@@ -2965,9 +2997,9 @@ async function proxyCompletion(req, res) {
 
       outcomeSettled = true; // 该 attempt 已死，防后续误落成功账
 
-      updateHealth(model, false, Date.now() - started);
-
-      if (error.retryable !== false && i + 1 < attempts.length) { counters.fallback += 1; scheduleCountersWrite(); continue; }
+      const failureClass = applyFailureHealth(model, error);
+      if (actxCtx?.attempt) { actxCtx.attempt.failureScope = failureClass.scope; actxCtx.attempt.ok = false; }
+      if (failureClass.retryable && i + 1 < attempts.length) { counters.fallback += 1; scheduleCountersWrite(); continue; }
 
       break;
 
@@ -2981,14 +3013,12 @@ async function proxyCompletion(req, res) {
 
   counters.outcome[auto ? 'auto' : 'explicit'].error += 1; scheduleCountersWrite();
 
-  const failure = { at: new Date().toISOString(), requested: decision.requestedModel, selected: attempts.at(-1), suggested: decision.suggestedModel, task: decision.analysis.task, reasoningLevel: decision.reasoningLevel, reasoningApplied: false, keyFingerprint: keyFingerprint(req.headers.authorization), ok: false, error: lastError?.message };
 
-  record(failure);
-
-
-  writeOutcomeLog({ ok: false, model: attempts.at(-1), error: (lastError?.message || '').slice(0, 500) });
-
-  return errorJson(res, 502, lastError?.message || '所有候选模型均调用失败', 'upstream_error');
+  writeOutcomeLog({ ok: false, model: lastAttemptedModel, upstreamStatus: lastError?.upstreamStatus ?? null,
+    failureScope: classifyUpstreamFailure(lastError).scope, error: (lastError?.message || '').slice(0, 500) });
+  const upstreamStatus = Number(lastError?.upstreamStatus);
+  const status = upstreamStatus >= 400 && upstreamStatus < 500 ? upstreamStatus : 502;
+  return errorJson(res, status, lastError?.message || '所有候选模型均调用失败', 'upstream_error');
 
 }
 

@@ -1,6 +1,7 @@
 // Prometheus 文本格式（format version 0.0.4）渲染器，零依赖。
 // 输入是 server 内部状态的实时快照——单一数据源，不重复计数。
 // 用法：GET /metrics → renderPrometheusMetrics({ counters, health, budget, decisionLog, config, sessions, draining, inflight })
+import { LATENCY_BUCKETS_MS } from './response-timing.mjs';
 
 function esc(value) {
   return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
@@ -30,11 +31,22 @@ export function renderPrometheusMetrics(snapshot) {
   ]);
 
   // 独立观测 + 流式完成/中断计数（流尾单次落账）
-  const ttft = counters.ttft || { count: 0, sumMs: 0 };
-  metric(lines, 'router_ttft_ms', 'summary', '首 token 时延（流式 TTFT，毫秒）', [
-    `router_ttft_ms_count ${ttft.count}`,
-    `router_ttft_ms_sum ${ttft.sumMs}`,
-  ]);
+  // V2 excludes legacy header/non-stream observations; persisted V1 data is not
+  // relabelled as TTFT. Histogram buckets support P95/P99 in Prometheus.
+  const timingDefinitions = [
+    ['ttft', 'router_ttft_ms', '从请求进入到首个非空正文 delta（流式，包括后来中断的流）'],
+    ['firstOutput', 'router_first_output_ms', '从请求进入到首个正文/思考/工具输出'],
+    ['headers', 'router_upstream_headers_ms', '每次上游尝试的响应头到达时延'],
+    ['completion', 'router_completion_ms', '成功交付的完整请求时延（含路由与重试）'],
+    ['failedCompletion', 'router_failed_completion_ms', '失败请求结束时延（含路由与重试）']
+  ];
+  for (const [key, name, help] of timingDefinitions) {
+    const h = counters.responseTimingsV2?.[key] || { count: 0, sumMs: 0, buckets: [] };
+    metric(lines, name, 'histogram', help, [
+      ...LATENCY_BUCKETS_MS.map((le, i) => `${name}_bucket{le="${le}"} ${h.buckets?.[i] || 0}`),
+      `${name}_bucket{le="+Inf"} ${h.count}`, `${name}_count ${h.count}`, `${name}_sum ${h.sumMs}`
+    ]);
+  }
   const stream = counters.stream || { completed: 0, aborted: 0 };
   metric(lines, 'router_stream_total', 'counter', '流式请求完成/中断计数（流尾单次落账）', [
     `router_stream_total{outcome="completed"} ${stream.completed || 0}`,

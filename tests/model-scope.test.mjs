@@ -82,3 +82,25 @@ test('resolveModelScope：上游 200 时解析出 id 集合并按 key 缓存', a
     assert.deepEqual([...scope].sort(), ['m-a', 'm-b']);
   } finally { server.close(); }
 });
+
+test('scope cache separates old 32-bit collisions and the same credential on different upstreams', async () => {
+  const http = await import('node:http');
+  const servers = [];
+  try {
+    const baseUrls = [];
+    for (const prefix of ['first', 'second']) {
+      const server = http.createServer((req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data: [{ id: `${prefix}:${req.headers.authorization}` }] }));
+      });
+      servers.push(server);
+      await new Promise(r => server.listen(0, '127.0.0.1', r));
+      baseUrls.push(`http://127.0.0.1:${server.address().port}`);
+    }
+    // Aa and BB have identical length and identical old h*31+char hash.
+    for (const [baseUrl, credential, expected] of [[baseUrls[0], 'Aa', 'first:Bearer Aa'], [baseUrls[0], 'BB', 'first:Bearer BB'], [baseUrls[1], 'Aa', 'second:Bearer Aa']]) {
+      const scope = await resolveModelScope({ baseUrl, apiKey: credential, authorizationHeader: `Bearer ${credential}`, passthrough: true });
+      assert.deepEqual([...scope], [expected]);
+    }
+  } finally { await Promise.all(servers.map(server => new Promise(r => server.close(r)))); }
+});

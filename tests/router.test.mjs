@@ -176,3 +176,44 @@ test('预算压力拉高成本权重后容差分流自然失效回落最优模�
   const beyond = routeRequest({ model: 'auto', messages: [{ role: 'user', content }] }, synthetic);
   assert.equal(beyond.suggestedModel, 'syn-best'); // 分差 0.05 > 容差 0.001：回落最优模型
 });
+
+test('numeric and object quality caps agree, and retries never leave a nonempty qualified pool', () => {
+  const custom = structuredClone(config);
+  Object.assign(custom.routing, { relQualityCap: .01, qualityFloor: .7, qualityWeight: 1, costWeight: 1, providerCostWeight: 0, latencyWeight: 0, preferSelfHosted: false, costTier: null, taskPreferences: {} });
+  custom.models = custom.models.slice(0, 2);
+  Object.assign(custom.models[0], { quality: { default: .95 }, costIndex: .8, benchmarkScores: {} });
+  Object.assign(custom.models[1], { quality: { default: .88 }, costIndex: .1, benchmarkScores: {} });
+  const body = { messages: [{ role: 'user', content: '你好' }] };
+  for (const cap of [.01, '0.01', { simple: .01 }]) {
+    custom.routing.relQualityCap = cap;
+    const decision = routeRequest(body, custom);
+    assert.equal(decision.selectedModel, custom.models[0].id);
+    assert.deepEqual(decision.fallbackOrder, [custom.models[0].id]);
+    assert.deepEqual(decision.qualifiedModelIds, [custom.models[0].id]);
+    assert.equal(decision.candidates.find(c => c.model === custom.models[1].id).qualityEligible, false);
+    assert.equal(decision.qualityDegraded, false);
+  }
+  custom.routing.qualityFloor = .99;
+  assert.throws(() => routeRequest(body, custom), /没有达到质量门槛/);
+  custom.routing.allowQualityDegradation = true;
+  const degraded = routeRequest(body, custom);
+  assert.equal(degraded.qualityDegraded, true);
+  assert.equal(degraded.qualityDegradedReason, 'no_candidate_meets_quality_floor');
+  assert.deepEqual(degraded.qualifiedModelIds, []);
+  assert.equal(degraded.fallbackOrder.length, 2);
+});
+
+test('semantic task changes replace old subtasks, while tool requests retain the agent contract', () => {
+  const body = { messages: [{ role: 'user', content: '总结这段代码' }] };
+  const base = { ...analyzeRequest(body, config), task: 'coding', subTask: 'code-review' };
+  const semantic = { task: 'extraction', tier: 'simple', complexity: .2, confidence: .95 };
+  assert.equal(mergeSemanticAssessment(base, semantic, true).subTask, null);
+  assert.equal(mergeSemanticAssessment(base, semantic, true, body).subTask, 'summarization');
+  assert.equal(mergeSemanticAssessment(base, semantic, false, body).subTask, 'code-review');
+  const agent = { ...base, task: 'agent', subTask: 'web-search', requirements: { ...base.requirements, tools: true } };
+  const merged = mergeSemanticAssessment(agent, semantic, true, body);
+  assert.equal(merged.task, 'agent');
+  assert.equal(merged.subTask, 'web-search');
+  assert.equal(merged.requirements.tools, true);
+  assert.equal(merged.complexity, .2);
+});

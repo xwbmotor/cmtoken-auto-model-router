@@ -107,21 +107,31 @@ export class DecisionLog {
         suggestedModel: decision.suggestedModel,
         selectedModel: decision.selectedModel,
         shadow: decision.shadow,
+        rollout: decision.rollout || null,
         routeMethod: decision.analysis?.routeMethod || 'rules',
         //点名请求的真实任务类型（服务层把 task 记为 'explicit'，真实槽位在此）。
         //市场信号重建读这个字段产生点名加成；白名单漏掉=字段在持久化时丢失
         explicitTask: decision.explicitTask || null,
         reasoningLevel: decision.reasoningLevel,
+        policyRevision: decision.policyRevision || null,
+        qualifiedModelIds: decision.qualifiedModelIds || [],
+        qualityDegraded: Boolean(decision.qualityDegraded),
+        qualityDegradedReason: decision.qualityDegradedReason || null,
         analysis: decision.analysis ? {
           task: decision.analysis.task, tier: decision.analysis.tier,
           complexity: decision.analysis.complexity, confidence: decision.analysis.confidence,
           signals: decision.analysis.signals,
+          subTask: decision.analysis.subTask || null,
+          estimatedInputTokens: decision.analysis.estimatedInputTokens,
+          estimatedOutputTokens: decision.analysis.estimatedOutputTokens,
+          estimatedContextTokens: decision.analysis.estimatedContextTokens,
+          capacityEstimate: decision.analysis.capacityEstimate,
           //置信度归因因素落盘（原白名单漏掉——negation/meta-discussion 等因素
           //在内存里有、持久化时被丢弃，「决策日志可归因」的交付描述不成立）
           ...(Array.isArray(decision.analysis.confidenceFactors) && decision.analysis.confidenceFactors.length > 0
             ? { confidenceFactors: decision.analysis.confidenceFactors } : {})
         } : null,
-        candidates: (decision.candidates || []).map((c) => ({ model: c.model, score: c.score, quality: c.quality })),
+        candidates: (decision.candidates || []).map((c) => ({ model: c.model, score: c.score, quality: c.quality, qualityEligible: c.qualityEligible })),
         rejected: decision.rejected || [],
         fallbackOrder: decision.fallbackOrder || [],
         semanticReview: decision.semanticReview || null,

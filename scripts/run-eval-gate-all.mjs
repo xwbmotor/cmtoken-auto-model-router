@@ -6,7 +6,6 @@ import { appendFileSync } from 'node:fs';
 const JUDGE = 'url=https://api.z.ai/api/coding/paas/v4|model=glm-5.3|key=GLMCODE_API_KEY';
 const MODELS = [];
 const LOG = process.env.TEMP ? process.env.TEMP.replace(/\\/g, '/') + '/gate56-all.log' : '/tmp/gate56-all.log';
-import { writeFileSync, appendFileSync } from 'node:fs';
 function logSync(m) { appendFileSync(LOG, m + '\n'); }
 
 const args = process.argv.slice(2);
@@ -38,7 +37,7 @@ async function runOne(model, out) {
   });
 }
 
-for (const [model, out] of MODELS) {
-  await runOne(model, out);
-}
+const outcomes = [];
+for (const [model, out] of MODELS) outcomes.push(await runOne(model, out));
 logSync('\n\n=== 全部完成 ===');
+process.exitCode = outcomes.some((r) => r.code !== 0) ? 1 : 0;

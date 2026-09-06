@@ -14,6 +14,19 @@ async function fresh(config) {
   return { t, dir, ledger: () => readFile(join(dir, 'ledger.json'), 'utf8').then(JSON.parse) };
 }
 
+test('release cancels unstarted work without creating estimated or actual spend, and is idempotent', async () => {
+  const { t, dir } = await fresh(cfg());
+  try {
+    const unstarted = await t.reserve(5), running = await t.reserve(3);
+    await t.release(unstarted); await t.release(unstarted);
+    assert.equal(t.snapshot().estimatedSpendYuan, 3);
+    assert.equal(t.snapshot().settledSpendYuan, 0);
+    assert.equal(t.snapshot().pendingReserves, 1);
+    await t.settle(running, 2, true);
+    assert.equal(t.snapshot().settledSpendYuan, 2);
+  } finally { await t.pendingWrite.catch(() => {}); await rm(dir, { recursive: true, force: true }); }
+});
+
 test('reserve 预占进 estimatedSpendYuan，settle 按 usage 冲正（实际 > 预占）', async () => {
   const { t, dir, ledger } = await fresh(cfg());
   const id = await t.reserve(10);
@@ -109,4 +122,42 @@ test('ledger 落盘异步但最终一致（settle 不阻塞热路径）', async 
   assert.equal(disk.settledActualSpendYuan, 15);
   assert.equal(disk.estimatedSpendYuan, 0);
   await t.pendingWrite.catch(() => {}); await rm(dir, { recursive: true, force: true });
+});
+
+test('跨日保留旧在途预占，旧请求结算不能冲减新请求预占', async (context) => {
+  context.mock.timers.enable({ apis: ['Date'], now: new Date('2026-09-06T15:59:50Z') });
+  const { t, dir, ledger } = await fresh(cfg());
+  try {
+    const old = await t.reserve(10);
+    context.mock.timers.tick(20000); // Asia/Shanghai midnight
+    const next = await t.reserve(20);
+    assert.equal(t.snapshot().date, '2026-09-07');
+    assert.equal(t.snapshot().estimatedSpendYuan, 30);
+    await t.settle(old, 12, true);
+    assert.equal(t.snapshot().estimatedSpendYuan, 20);
+    assert.equal(t.snapshot().settledActualSpendYuan, 12);
+    assert.equal(t.pressure(), .32);
+    await t.settle(next, null, false);
+    assert.equal(t.snapshot().estimatedSpendYuan, 0);
+    assert.equal(t.snapshot().settledEstimatedSpendYuan, 20);
+    await t.pendingWrite;
+    assert.equal((await ledger()).settledActualSpendYuan, 12);
+  } finally { await t.pendingWrite; await rm(dir, { recursive: true, force: true }); }
+});
+
+test('跨日直接结算也先换日，重复结算不会多计', async (context) => {
+  context.mock.timers.enable({ apis: ['Date'], now: new Date('2026-09-06T15:59:50Z') });
+  const { t, dir } = await fresh(cfg());
+  try {
+    const old = await t.reserve(7);
+    context.mock.timers.tick(20000);
+    await t.settle(old, null, false);
+    await t.settle(old, 9, true);
+    const s = t.snapshot();
+    assert.equal(s.date, '2026-09-07');
+    assert.equal(s.estimatedSpendYuan, 0);
+    assert.equal(s.settledEstimatedSpendYuan, 7);
+    assert.equal(s.settledActualSpendYuan ?? 0, 0);
+    assert.equal(s.pendingReserves, 0);
+  } finally { await t.pendingWrite; await rm(dir, { recursive: true, force: true }); }
 });

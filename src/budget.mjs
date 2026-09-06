@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { estimateOutputTokens } from './request-capacity.mjs';
 
 function dateKey(timeZone = 'Asia/Shanghai', now = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
@@ -11,7 +12,7 @@ export function estimateCostYuan(body, analysis, model, config, reasoningLevel =
   const inputPrice = Number(pricing?.input);
   const outputPrice = Number(pricing?.output);
   if (!Number.isFinite(inputPrice) || !Number.isFinite(outputPrice)) return null;
-  const outputTokens = Math.max(1, Number(body.max_completion_tokens || body.max_tokens || config.budget?.defaultEstimatedOutputTokens || 800));
+  const outputTokens = estimateOutputTokens(body, config);
   const reasoningRatio = reasoningLevel === 'high' ? 0.5 : reasoningLevel === 'standard' ? 0.15 : 0;
   const reasoningPrice = Number.isFinite(Number(pricing?.reasoning)) ? Number(pricing.reasoning) : outputPrice;
   // 缓存命中：预估时按 cacheHitRatio 的输入量用缓存价，其余按全价（无法预知实际命中率时的期望口径）
@@ -59,6 +60,21 @@ export class BudgetTracker {
     return id;
   }
 
+  // Cancel a reservation only when no upstream generation was started.
+  // This is not an estimated/usage settlement and must not create spend.
+  async release(id) {
+    this.rollover();
+    if (!this.reserves.has(id)) return;
+    const reserved = this.reserves.get(id);
+    this.reserves.delete(id);
+    if (reserved === null) this.state.unpricedRequests = Math.max(0, this.state.unpricedRequests - 1);
+    else {
+      this.state.estimatedSpendYuan = Number(Math.max(0, this.state.estimatedSpendYuan - reserved).toFixed(6));
+      this.state.pricedRequests = Math.max(0, this.state.pricedRequests - 1);
+    }
+    this.scheduleWrite();
+  }
+
   // 结算 重写； 修：用实际额原子替换预占额。台账三项分解：
   // estimatedSpendYuan：未结算预占（所有结算路径都冲减， 无 usage 分支漏冲=双重占用已修）
   // settledActualSpendYuan：已按实际 usage 结算的累计（只增）
@@ -66,6 +82,7 @@ export class BudgetTracker {
   // 冲正只做一次差额：estimated -= reserved（回滚预占），settled += actual。
   // 修 bug：原实现「先减 reserved，再 consume(actual-reserved)」——预占10实际15 记成 5（系统性少记）。
   async settle(id, actualYuan, fromUsage) {
+    this.rollover();
     const reserved = this.reserves.get(id);
     if (reserved === undefined) return;
     this.reserves.delete(id);
@@ -136,7 +153,13 @@ export class BudgetTracker {
 
   rollover() {
     const date = dateKey(this.config.budget?.timeZone);
-    if (this.state.date !== date) this.state = { date, estimatedSpendYuan: 0, pricedRequests: 0, unpricedRequests: 0 };
+    if (this.state.date !== date) {
+      // Costs belong to the settlement day. Carry unfinished reservations into the new
+      // day, so an old request cannot subtract a newly admitted request's reservation.
+      // This ledger estimates spending pressure; it does not enforce a hard quota.
+      const pending = [...this.reserves.values()].reduce((sum, value) => sum + (value ?? 0), 0);
+      this.state = { date, estimatedSpendYuan: Number(pending.toFixed(6)), pricedRequests: 0, unpricedRequests: 0 };
+    }
   }
 
   pressure() {

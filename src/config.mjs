@@ -64,6 +64,7 @@ export function validateConfig(config) {
     if ((config.models || []).some((m) => m.id === config.routing.autoModelId)) throw new Error(`routing.autoModelId（${config.routing.autoModelId}）不得与池内模型 ID 冲突`);
   }
   if (config.routing.exposeModelList !== undefined && !['auto-only', 'all'].includes(config.routing.exposeModelList)) throw new Error('routing.exposeModelList 必须是 auto-only（默认，仅暴露 auto 入口）或 all（含池内模型）');
+  if (config.routing.allowQualityDegradation !== undefined && typeof config.routing.allowQualityDegradation !== 'boolean') throw new Error('routing.allowQualityDegradation 必须是布尔值');
   const bounded = [['qualityFloor', 0, 1], ['qualityWeight', 0, 3], ['costWeight', 0, 1], ['latencyWeight', 0, 1], ['selfHostedBonus', 0, 1], ['activeTrafficPercent', 0, 100], ['complexQualityMargin', 0, 0.3], ['providerCostWeight', 0, 1], ['subtaskSmoothK', 1, 1000], ['subtaskMinSamples', 0, 1000], ['subtaskMaxAdjust', 0, 1], ['sessionStickinessMaxGap', 0, 1]];
   for (const [name, min, max] of bounded) {
     if (config.routing[name] === undefined) continue; //未配置视为默认值（如 providerCostWeight 缺省=0），向后兼容旧配置

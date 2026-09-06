@@ -7,16 +7,21 @@
 // - 交集为空也回退全量：防「上游模型命名与 router 配置不一致」导致候选全灭；
 // - strict 模式（ROUTER_ACCESS_KEY）没有租户语义，恒回退全量。
 
+import { createHmac, randomBytes } from 'node:crypto';
+
 const SCOPE_TTL_MS = Number(process.env.MODEL_SCOPE_TTL_MS || 60_000);
 const SCOPE_TIMEOUT_MS = Number(process.env.MODEL_SCOPE_TIMEOUT_MS || 3000);
 
 const cache = new Map(); // keyHash -> { at, ids: Set<string>|null }
+const cacheSecret = randomBytes(32);
 
-function hashKey(authorizationHeader) {
+function hashKey(baseUrl, apiKey, authorizationHeader) {
   const raw = String(authorizationHeader || '').replace(/^Bearer\s+/i, '');
-  let h = 0;
-  for (let i = 0; i < raw.length; i += 1) { h = (h * 31 + raw.charCodeAt(i)) | 0; }
-  return `k${(h >>> 0).toString(36)}${raw.length}`;
+  // Scope is bound to both the upstream endpoint and effective credential. Keep only
+  // a full cryptographic fingerprint in the cache, not a collision-prone 32-bit hash.
+  return createHmac('sha256', cacheSecret)
+    .update(JSON.stringify([String(baseUrl || '').replace(/\/$/, ''), String(apiKey || ''), raw]))
+    .digest('hex');
 }
 
 function parseModelIds(payload) {
@@ -46,7 +51,7 @@ async function fetchScope(baseUrl, apiKey) {
 export async function resolveModelScope({ baseUrl, apiKey, authorizationHeader, passthrough }) {
   if (!passthrough) return null; // strict 模式：ROUTER_ACCESS_KEY 无租户语义
   if (!authorizationHeader) return null;
-  const keyHash = hashKey(authorizationHeader);
+  const keyHash = hashKey(baseUrl, apiKey, authorizationHeader);
   const now = Date.now();
   const hit = cache.get(keyHash);
   if (hit && now - hit.at < SCOPE_TTL_MS) return hit.ids;

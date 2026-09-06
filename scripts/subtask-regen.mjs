@@ -1,89 +1,49 @@
-// 补跑报告里的失败条（score==null）：读 --report，只重跑失败项，结果按 (model,id) 覆盖合并回写报告文件本身
-// 用法：npm run eval:regen -- --report data/subtask-eval/full30.json
+// Resume only evidence-compatible subtask reports. Historical scores require a
+// complete rerun, not new metadata or a rerun of only their failed rows.
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { loadConfig, projectRoot } from '../src/config.mjs';
+import { caseEvidence, coverageOf, evaluateCase, evidenceHash, normalizeCases, summarizeScores, validateEvidenceReport } from './evaluation-integrity.mjs';
 
-const MAXT = Number(process.env.REGEN_MAX_TOKENS || 32768);
-const argReport = process.argv.includes('--report') ? process.argv[process.argv.indexOf('--report') + 1] : null;
-if (!argReport) { console.error('用法: node subtask-regen.mjs --report <报告路径>'); process.exit(2); }
-const reportPath = resolve(projectRoot, argReport);
-
-const config = await loadConfig();
-const base = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl).replace(/\/$/, '');
-const key = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
-const JUDGE = { base: 'https://api.z.ai/api/coding/paas/v4', key: process.env.GLMCODE_API_KEY, model: 'glm-5.3' };
-
-const caseById = new Map(JSON.parse(await readFile(resolve(projectRoot, 'config/subtask-eval.json'), 'utf8')).cases.map((c) => [c.id, c]));
-const report = JSON.parse(await readFile(reportPath, 'utf8'));
-const fails = report.results.filter((r) => r.score == null);
-console.log(`重跑 --report ${argReport} × ${fails.length} 条 · max_tokens=${MAXT} · judge ${JUDGE.model}`);
-
-async function genOne(model, c) {
-  const res = await fetch(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: c.prompt }], stream: false, max_tokens: MAXT }),
-    signal: AbortSignal.timeout(300000)
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const d = await res.json();
-  const m = d.choices?.[0]?.message || {};
-  return { output: m.content || '', finish: d.choices?.[0]?.finish_reason, reasoningLen: (m.reasoning || m.reasoning_content || '').length };
-}
-
-async function judgeOne(c, output) {
-  const prompt = `你是模型输出质量评估裁判。根据评分要点，给下面的模型输出打分（0 到 1 之间的小数，1 为完全符合）。\n\n任务类型：${c.sub}\n评分要点：${c.rubric}\n\n模型输出：\n${output}\n\n只返回一个 JSON 对象：{"score": 0.85, "reason": "一句话说明"}`;
-  const jr = await fetch(`${JUDGE.base}/chat/completions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${JUDGE.key}` },
-    body: JSON.stringify({ model: JUDGE.model, messages: [{ role: 'user', content: prompt }], stream: false, max_tokens: 2048 }),
-    signal: AbortSignal.timeout(120000)
-  });
-  const jd = await jr.json();
-  const match = (jd.choices?.[0]?.message?.content || '').match(/\{[\s\S]*\}/);
-  if (!match) return { score: null, reason: '裁判未返回 JSON' };
-  const parsed = JSON.parse(match[0]);
-  return { score: Number.isFinite(Number(parsed.score)) ? Number(parsed.score) : null, reason: parsed.reason || '' };
-}
-
-let done = 0;
-for (const r of fails) {
-  const c = caseById.get(r.id);
-  if (!c) { console.log(`${r.id} 不在用例集中，跳过`); continue; }
-  try {
-    const g = await genOne(r.model, c);
-    if (!g.output) { console.log(`[${++done}/${fails.length}] ${r.id} ${r.model} 仍无 content（finish=${g.finish}）`); continue; }
-    const j = await judgeOne(c, g.output);
-    if (j.score != null) {
-      Object.assign(r, { score: j.score, reason: j.reason, finish: g.finish, contentLen: g.output.length, reasoningLen: g.reasoningLen, outputHead: g.output.slice(0, 160), regenAt: new Date().toISOString() });
-      console.log(`[${++done}/${fails.length}] ${r.id} ${r.model} → ${j.score.toFixed(2)} ${j.reason.slice(0, 40)}`);
-    } else {
-      console.log(`[${++done}/${fails.length}] ${r.id} ${r.model} 裁判失败：${j.reason}`);
-    }
-  } catch (e) {
-    console.log(`[${++done}/${fails.length}] ${r.id} ${r.model} 失败：${e.message.slice(0, 80)}`);
+async function main() {
+  const args = process.argv.slice(2);
+  if (args.length !== 2 || args[0] !== '--report') throw new Error('用法：eval:regen -- --report <新协议报告路径>');
+  const reportPath = resolve(projectRoot, args[1]);
+  const report = validateEvidenceReport(JSON.parse(await readFile(reportPath, 'utf8')));
+  if (report.integrity.kind !== 'subtask') throw new Error('只支持 subtask 报告');
+  const config = await loadConfig();
+  const baseUrl = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl).replace(/\/$/, '');
+  const apiKey = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
+  if (!apiKey) throw new Error('缺少 MAAS_API_KEY / UPSTREAM_API_KEY');
+  const meta = report.integrity;
+  if (meta.generation.baseUrl !== baseUrl) throw new Error('业务上游地址已变化，不能与原报告混合补跑');
+  if (meta.generation.modelConfigHash !== evidenceHash(config.models.filter((m) => meta.models.includes(m.id)))) throw new Error('被测模型配置已变化，不能与原报告混合补跑');
+  if (process.env.REGEN_MAX_TOKENS && Number(process.env.REGEN_MAX_TOKENS) !== meta.generation.maxTokens) throw new Error('补跑不能改变 maxTokens；需要新参数时请完整运行 eval:subtask');
+  const judgeKey = meta.judge?.keyEnv ? process.env[meta.judge.keyEnv] : meta.judge?.baseUrl === baseUrl ? apiKey : null;
+  const judge = meta.judge ? { ...meta.judge, apiKey: judgeKey } : null;
+  if (judge && !judge.apiKey) throw new Error('缺少报告原 Judge 的凭据环境变量');
+  const previousReportHash = evidenceHash(report);
+  const failures = report.results.filter((r) => r.status !== 'scored');
+  console.log(`补跑 ${failures.length} 条；保持原题、Judge 和生成参数，Judge 失败复用原回答`);
+  for (const row of failures) {
+    if (!config.models.some((m) => m.enabled && m.id === row.model)) throw new Error(`被测模型未启用：${row.model}`);
+    const c = normalizeCases([caseEvidence(row)], meta.generation.maxTokens)[0];
+    const next = await evaluateCase({ c, model: row.model, baseUrl, apiKey, judge, timeoutMs: meta.generation.timeoutMs, previous: row });
+    delete row.error;
+    Object.assign(row, next);
+    console.log(`${row.id} ${row.model} → ${row.status}`);
   }
+  report.at = new Date().toISOString();
+  report.previousReportHash = previousReportHash;
+  report.coverage = coverageOf(report.results);
+  report.granularity = meta.models.map((model) => {
+    const rows = report.results.filter((r) => r.model === model);
+    const subs = summarizeScores(rows, 'sub');
+    return { model, avgs: Object.fromEntries(Object.entries(subs).map(([sub, v]) => [sub, v.avg])), counts: Object.fromEntries(Object.entries(subs).map(([sub, v]) => [sub, v.count])), coverage: coverageOf(rows), note: '描述性均值；补跑历史保留在 previousAttempts' };
+  });
+  delete report.summary;
+  validateEvidenceReport(report);
+  await writeFile(reportPath, JSON.stringify(report, null, 2));
+  console.log(`已回写 ${reportPath} · 有效评分 ${report.coverage.scored}/${report.coverage.total}`);
 }
-
-// 重新聚合并回写报告
-const byModel = {};
-for (const x of report.results) {
-  byModel[x.model] ||= { scored: 0, sum: 0, fail: 0, bySub: {} };
-  if (x.score == null) byModel[x.model].fail += 1;
-  else { byModel[x.model].scored += 1; byModel[x.model].sum += x.score; (byModel[x.model].bySub[x.sub] ||= []).push(x.score); }
-}
-report.summary = {};
-for (const [m, v] of Object.entries(byModel)) {
-  report.summary[m] = {
-    total: v.scored + v.fail, scored: v.scored, failed: v.fail,
-    avg: Number((v.sum / Math.max(1, v.scored)).toFixed(3)),
-    subtasks: Object.fromEntries(Object.entries(v.bySub).map(([s, arr]) => [s, { n: arr.length, avg: Number((arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(3)) }]))
-  };
-  const avgs = Object.values(report.summary[m].subtasks).map((x) => x.avg);
-  const spread = Math.max(0, ...avgs) - Math.min(...avgs);
-  report.summary[m].spread = Number(spread.toFixed(3));
-}
-await writeFile(reportPath, JSON.stringify(report, null, 2));
-const still = report.results.filter((r) => r.score == null).length;
-console.log(`\n已回写 ${argReport} · 剩余失败 ${still} 条`);
+main().catch((error) => { console.error('补跑失败：', error.message); process.exitCode = 2; });
