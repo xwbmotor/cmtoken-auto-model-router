@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 
-import { loadConfig, projectRoot, saveConfig, validateConfig, getConfigRevision } from './config.mjs';
+import { loadConfig, projectRoot, saveConfig, validateConfig, getConfigRevision, refreshCostIndexes } from './config.mjs';
 import { promises as dnsPromises } from 'node:dns'; // v0.11.13（二十七审 P1-1）SSRF DNS pinning
 
 import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice, recommendReasoningLevel, isAutoRequest, autoModelId, capabilityEligible } from './router.mjs';
@@ -3592,7 +3592,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readJson(req);
 
-      const proposedConfig = validateConfig(body.proposedConfig);
+      const proposedConfig = refreshCostIndexes(validateConfig(body.proposedConfig));
 
       const current = simulatePolicy(config);
 

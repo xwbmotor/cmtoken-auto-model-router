@@ -24,6 +24,7 @@ test('交错评测：禁用/归属待定模型后端拒绝（黑盒）', async (
     { ...m0, id: 'unknown-model', displayName: 'UNK', enabled: false, ownership: 'unknown' }, // config 校验要求 unknown 必须 disabled——本来就是不允许上线的形态
   ];
   cfg.routing.defaultExplicitModel = 'ok-model'; cfg.routing.shadowModel = 'ok-model';
+  delete cfg.routing.loadBalancing; // Synthetic model pool must not inherit production model IDs.
   cfg.routing.taskPreferences = {}; // 模板引用的原模型已删
   if (cfg.semanticRouter) { cfg.semanticRouter.model = 'ok-model'; if (cfg.semanticRouter.openaiChat) cfg.semanticRouter.openaiChat.model = 'ok-model'; }
   cfg.decisionLog = { ...(cfg.decisionLog || {}), enabled: false, dirPath: dir };
@@ -60,6 +61,7 @@ test('discover-probe SSRF：IP/localhost/非清单域名/带凭据 URL 全拒绝
   const cfg = JSON.parse(readFileSync(join(process.cwd(), 'config', 'router.json'), 'utf8'));
   cfg.models = [{ ...cfg.models[0], id: 'm1', displayName: 'M', enabled: false, ownership: 'unknown' }];
   cfg.routing.defaultExplicitModel = 'm1'; cfg.routing.shadowModel = 'm1';
+  delete cfg.routing.loadBalancing; // Synthetic model pool must not inherit production model IDs.
   cfg.routing.taskPreferences = {}; cfg.routing.maxAttempts = 1;
   if (cfg.semanticRouter) { cfg.semanticRouter.model = 'm1'; if (cfg.semanticRouter.openaiChat) cfg.semanticRouter.openaiChat.model = 'm1'; }
   cfg.decisionLog = { ...(cfg.decisionLog || {}), enabled: false, dirPath: dir };

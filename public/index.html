@@ -241,7 +241,7 @@
 
       </div>
 
-      <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>模型</th><th>卡型 <span class="help" data-help="自建部署所用昇腾芯片型号，相对权重在成本模型里配置。">?</span></th><th>设备数 <span class="help" data-help="该实例部署的服务器/设备台数。">?</span></th><th>单机卡数 <span class="help" data-help="每台设备上的昇腾卡数。">?</span></th><th>实例数 <span class="help" data-help="部署的推理服务实例数（vLLM/SGLang 进程数）。">?</span></th><th>单实例并发 <span class="help" data-help="每个实例能同时处理的请求数。">?</span></th><th>总并发 <span class="help" data-help="实例数×单实例并发，该模型能承载的总并发请求量。">?</span></th><th>吞吐 TPS <span class="help" data-help="该实例实测吞吐（tokens/秒）。吞吐越高，单位成本越低。">?</span></th><th>→ 成本指数</th></tr></thead><tbody id="deployment"></tbody></table></div></section>
+      <div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>模型</th><th>卡型 <span class="help" data-help="自建部署所用昇腾芯片型号，相对权重在成本模型里配置。">?</span></th><th>设备数 <span class="help" data-help="该模型全部实例合计占用的服务器/设备台数。">?</span></th><th>单机卡数 <span class="help" data-help="每台设备上的昇腾卡数。">?</span></th><th>实例数 <span class="help" data-help="部署的推理服务实例数（vLLM/SGLang 进程数）。">?</span></th><th>单实例并发 <span class="help" data-help="每个实例能同时处理的请求数。">?</span></th><th>总并发 <span class="help" data-help="实例数×单实例并发，该模型能承载的总并发请求量。">?</span></th><th>吞吐 TPS <span class="help" data-help="单实例输出吞吐（tokens/秒）。全池输出吞吐按实例数乘本值估算，平台成本使用全池设备资源除以全池吞吐。">?</span></th><th>→ 成本指数</th></tr></thead><tbody id="deployment"></tbody></table></div></section>
 
     </section>
 

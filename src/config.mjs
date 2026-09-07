@@ -272,7 +272,7 @@ export function computeCostIndex(models, costModel) {
     if (!d || !d.machines || !d.tps) continue;
     const cardWeight = Number(cardPrice[d.deviceType] || 1);
     const hardwareWeight = Number(d.machines) * (Number(d.cardsPerMachine) || 1) * cardWeight;
-    const unitCost = hardwareWeight / Number(d.tps);
+    const unitCost = hardwareWeight / (Number(d.tps) * Number(d.instances ?? 1));
     costs.push({ id: model.id, unitCost });
   }
   if (!costs.length) return null;
@@ -284,7 +284,7 @@ export function computeCostIndex(models, costModel) {
 }
 
 //平台侧成本指数（成本双指标之二）：与用户侧结算价（pricing 口径 costIndex）分开，
-//度量平台自有算力的资源消耗强度 = 单位吞吐占用的硬件资源（机数×卡数×卡价权重 / 单实例吞吐）。
+//度量平台自有算力的资源消耗强度 = 单位吞吐占用的硬件资源（总机数×卡数×卡价权重 / (实例数×单实例输出吞吐)）。
 //用户侧看豆价（每豆换多少 token），平台侧看卡（同样吞吐谁吃卡少）；两者背离正是调度要同时管的事。
 export function computeCostIndexProvider(models, costModel) {
   const cardPrice = costModel?.cardPrice || {};
@@ -294,7 +294,7 @@ export function computeCostIndexProvider(models, costModel) {
     if (!d || !d.machines || !d.tps) continue;
     const cardWeight = Number(cardPrice[d.deviceType] || 1);
     const hardwareWeight = Number(d.machines) * (Number(d.cardsPerMachine) || 1) * cardWeight;
-    costs.push({ id: model.id, unitCost: hardwareWeight / Number(d.tps) });
+    costs.push({ id: model.id, unitCost: hardwareWeight / (Number(d.tps) * Number(d.instances ?? 1)) });
   }
   if (costs.length < 2) return null;
   const anchor = Math.max(...costs.map((c) => c.unitCost));
@@ -304,9 +304,8 @@ export function computeCostIndexProvider(models, costModel) {
   return result;
 }
 
-export async function loadConfig() {
-  const raw = await readFile(configPath(), 'utf8');
-  const config = validateConfig(JSON.parse(raw));
+// Same derived costs for startup, draft preview, and persisted configuration.
+export function refreshCostIndexes(config) {
   if (config.costModel?.enabled) {
     const source = config.costModel.source || 'deployment';
     const computed = source === 'pricing'
@@ -326,6 +325,13 @@ export async function loadConfig() {
       }
     }
   }
+  return config;
+}
+
+export async function loadConfig() {
+  const raw = await readFile(configPath(), 'utf8');
+  const config = validateConfig(JSON.parse(raw));
+  refreshCostIndexes(config);
   config.version = SOFTWARE_VERSION;
   configRevisions.set(config, revisionOf(raw));
   return config;
@@ -356,7 +362,7 @@ async function persistConfig(config, expectedRevision) {
     }
   }
   await mkdir(dirname(path), { recursive: true });
-  const next = { ...config, version: SOFTWARE_VERSION };
+  const next = refreshCostIndexes(structuredClone({ ...config, version: SOFTWARE_VERSION }));
   try {
     const previous = await readFile(path, 'utf8');
     const historyDir = resolve(dirname(path), 'history');
