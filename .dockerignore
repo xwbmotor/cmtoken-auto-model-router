@@ -23,3 +23,7 @@ Dockerfile
 # 部署镜像归档与界面验收证据不进入构建上下文
 reports/
 data/deploy-*/
+
+# 本地 Python 环境与离线分析输入不进入构建上下文
+.venv/
+data/algorithm-audit-*/
