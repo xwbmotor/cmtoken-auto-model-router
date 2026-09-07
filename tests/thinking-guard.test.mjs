@@ -5,6 +5,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { routeRequest } from '../src/router.mjs';
+import { completionBudgetEligible } from '../src/completion-budget.mjs';
+
+test('thinking reserve is waived only for a proven disabled thinking switch', () => {
+  const model = { minimumCompletionTokensForReliableAnswer: 16384, reasoningControl: {
+    verified: true, parameter: 'chat_template_kwargs.enable_thinking', values: { off: false, standard: true }
+  } };
+  const config = { reasoningControl: { enabled: true } };
+  const body = { max_tokens: 64 };
+  assert.equal(completionBudgetEligible(body, model, config, 'off'), true);
+  assert.equal(completionBudgetEligible(body, model, config, 'standard'), false);
+  assert.equal(completionBudgetEligible({ ...body, chat_template_kwargs: { enable_thinking: true } }, model, config, 'off'), false);
+  assert.equal(completionBudgetEligible({ ...body, chat_template_kwargs: { enable_thinking: false } }, model, config, 'high'), true);
+  assert.equal(completionBudgetEligible(body, model, {}, 'off'), false);
+  assert.equal(completionBudgetEligible(body, { ...model, reasoningControl: { ...model.reasoningControl, verified: false } }, config, 'off'), false);
+});
 
 const baseConfig = {
   models: [

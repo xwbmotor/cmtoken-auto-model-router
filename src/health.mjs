@@ -15,6 +15,7 @@ export function classifyUpstreamFailure(error, { clientGone = false } = {}) {
   if (status === 402 || status === 403) return { scope: 'entitlement', countModelFailure: false, retryable: false };
   if (status === 429) return { scope: 'rate_limit', countModelFailure: false, retryable: false };
   if (status >= 400 && status < 500 && status !== 408) return { scope: 'request', countModelFailure: false, retryable: false };
+  if (error?.failureScope === 'capacity') return { scope: 'capacity', countModelFailure: false, retryable: false };
   if (error?.failureScope === 'configuration') return { scope: 'configuration', countModelFailure: false, retryable: false };
   return { scope: 'provider', countModelFailure: true, retryable: error?.retryable !== false };
 }

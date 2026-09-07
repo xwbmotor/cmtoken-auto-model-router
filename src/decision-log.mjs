@@ -131,7 +131,7 @@ export class DecisionLog {
           ...(Array.isArray(decision.analysis.confidenceFactors) && decision.analysis.confidenceFactors.length > 0
             ? { confidenceFactors: decision.analysis.confidenceFactors } : {})
         } : null,
-        candidates: (decision.candidates || []).map((c) => ({ model: c.model, score: c.score, quality: c.quality, qualityEligible: c.qualityEligible })),
+        candidates: (decision.candidates || []).map((c) => ({ model: c.model, score: c.score, quality: c.quality, qualityEligible: c.qualityEligible, load: c.load || null })),
         rejected: decision.rejected || [],
         fallbackOrder: decision.fallbackOrder || [],
         semanticReview: decision.semanticReview || null,

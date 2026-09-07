@@ -8,7 +8,7 @@
 # - strict：取消注释 ROUTER_ACCESS_KEY + MAAS_API_KEY，客户端持 ROUTER_ACCESS_KEY。
 services:
   auto-model-router:
-    image: cmt-auto-model-router:0.13.0
+    image: cmt-auto-model-router:0.14.0
     container_name: auto-model-router
     restart: unless-stopped
     hostname: auto-model-router
@@ -53,7 +53,7 @@ services:
       retries: 3
 
   classifier:
-    image: cmt-amr-classifier:0.13.0  # 与本次发布源码一同构建，OCI revision 绑定发布提交
+    image: cmt-amr-classifier:0.14.0  # 与本次发布源码一同构建，OCI revision 绑定发布提交
     container_name: amr-classifier
     restart: unless-stopped
     hostname: classifier

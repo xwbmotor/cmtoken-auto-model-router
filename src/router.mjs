@@ -1,3 +1,4 @@
+import { completionBudgetEligible } from './completion-budget.mjs';
 // 成本档位带定义：档位=[min,max]（基于 costIndex 0~1，锚点=池内最贵模型单价）。
 // 语义档位（OpenRouter cost_tier 思路）：预算/均衡/质量/顶配——带内双向过滤，
 // 高档位同样排除过于便宜的模型（band 不是 ceiling）。null=未启用档位（兼容旧配置）。
@@ -15,6 +16,7 @@ export function costTierBand(config) {
 
 // 市场信号：决策日志聚合的活信号（份额/点名/失败率），样本不足自动休眠、幅度有界
 import { adjustFor as marketAdjustFor } from './market-signal-runtime.mjs';
+import { loadAssessment } from './model-load.mjs';
 import { estimateRequestCapacity } from './request-capacity.mjs';
 export { estimateInputTokens } from './request-capacity.mjs';
 
@@ -403,9 +405,7 @@ export function routeRequest(body, config, runtime = {}) {
     const circuit = health[model.id]?.circuitOpenUntil || 0;
     if (circuit > now) reasons.push('circuit_open');
     if (model.contextWindow && analysis.estimatedContextTokens > model.contextWindow) reasons.push('context_too_long');
-    const requestedCompletionTokens = Number(body.max_completion_tokens || body.max_tokens || 0);
-    if (requestedCompletionTokens > 0 && model.minimumCompletionTokensForReliableAnswer
-      && requestedCompletionTokens < model.minimumCompletionTokensForReliableAnswer) reasons.push('completion_budget_too_low');
+    if (!completionBudgetEligible(body, model, config, recommendReasoningLevel(analysis, config))) reasons.push('completion_budget_too_low');
     // 成本档位带（OpenRouter cost_tier 语义）：tier 是「带」不是「上限」——
     // 高档位排除过于便宜的模型（防止低端拉低质量），低档位排除超出预算带的模型。
     const tierBand = costTierBand(config);
@@ -446,11 +446,13 @@ export function routeRequest(body, config, runtime = {}) {
     const baseScore = scoreFn({ model, quality, config, uncertainty, dynamicPenalty, selfBonus, effectiveCostWeight });
     // 市场信号微调（有界 ±maxAdjust，默认 0.05）：静态跑分是先验，真实使用是后验，两者互补
     const marketAdjust = marketAdjustFor(config, analysis.task, model.id, runtime);
-    const score = baseScore + marketAdjust;
+    const load = loadAssessment(model, config.routing, runtime.modelLoad);
+    const score = baseScore + marketAdjust - load.penalty;
     candidates.push({
       model: model.id,
       ownership: model.ownership,
       quality,
+      load,
       score: Number(score.toFixed(4)),
       baseScore: Number(baseScore.toFixed(4)),
       marketAdjust: Number(marketAdjust.toFixed(4)),
@@ -477,7 +479,12 @@ export function routeRequest(body, config, runtime = {}) {
     throw new Error('没有达到质量门槛的候选模型；如需可用性降级，必须显式设置 routing.allowQualityDegradation=true');
   }
   // Availability fallback is explicit. Normal retries stay inside the quality gate.
-  const pool = qualityDegraded ? [...candidates] : qualified;
+  const pool = (qualityDegraded ? [...candidates] : qualified).filter(x => !x.load.saturated);
+  if (!pool.length) {
+    const error = new Error('合格模型在本路由进程中的并发额度已用满，请稍后重试');
+    error.code = 'model_capacity_exhausted';
+    throw error;
+  }
   pool.sort((a, b) => b.score - a.score || a.costIndex - b.costIndex);
   const ordered = [...pool];
   // 任务偏好分流：指定模型与最优模型的分差 ≤ 容差时选指定模型（quality 不受损前提下的定向分流，
@@ -506,7 +513,7 @@ export function routeRequest(body, config, runtime = {}) {
   const rolloutApplied = config.routing.mode === 'active' && trafficBucket < activeTrafficPercent;
   let selectedModel = rolloutApplied ? suggestedModel : config.routing.shadowModel;
   const selectedCandidate = candidates.find(c => c.model === selectedModel);
-  const safetyOverride = !selectedCandidate || (!qualityDegraded && !selectedCandidate.qualityEligible);
+  const safetyOverride = !selectedCandidate || (!qualityDegraded && !selectedCandidate.qualityEligible) || selectedCandidate?.load.saturated;
   if (safetyOverride) selectedModel = suggestedModel;
   let reasoningLevel = recommendReasoningLevel(analysis, config);
   if (Number(runtime.budgetPressure || 0) >= Number(config.budget?.degradeThreshold ?? 0.9)) {
@@ -519,7 +526,7 @@ export function routeRequest(body, config, runtime = {}) {
       ...(safetyOverride ? { safetyOverride: 'configured_shadow_model_not_eligible' } : {}) }, analysis, candidates: candidates.sort((a, b) => b.score - a.score),
     preference: preferenceApplied ? { task: analysis.task, model: pref.model, note: preferenceNote } : null,
     reasoningLevel, rejected, fallbackOrder: ordered.map((x) => x.model),
-    qualifiedModelIds: qualified.map((x) => x.model), qualityDegraded,
+    qualifiedModelIds: qualified.filter(x => !x.load.saturated).map((x) => x.model), qualityDegraded,
     ...(qualityDegraded ? { qualityDegradedReason: 'no_candidate_meets_quality_floor' } : {}),
     configVersion: config.version
   };

@@ -1,3 +1,5 @@
+import { completionBudgetEligible } from './completion-budget.mjs';
+import { createModelLoadTracker, loadAssessment } from './model-load.mjs';
 import http from 'node:http';
 
 import { readFile } from 'node:fs/promises';
@@ -65,6 +67,7 @@ const serverKeepAliveMs = Number(process.env.HTTP_KEEPALIVE_MS || 300000); // 5 
 const serverHeadersTimeoutMs = Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 310000); // 比 keepAlive 略高
 
 let config = await loadConfig();
+const modelLoad = createModelLoadTracker();
 
 
 assertSemanticBucketSecretForMode(config.semanticRouter?.mode);
@@ -965,7 +968,7 @@ function simulatePolicy(policyConfig) {
 
     const latencyMs = model?.avgLatencyMs ?? Math.round(Number(candidate?.latencyIndex || 0) * 43787);
 
-    return { id: sample.id, label: sample.label, task: decision.analysis.task, subTask: decision.analysis.subTask || '', complexity: decision.analysis.complexity, tier: decision.analysis.tier, model: decision.suggestedModel, quality: candidate?.quality || 0, costIndex: Number(candidate?.costIndex || 0), costIndexProvider: Number(model?.costIndexProvider ?? 0.5), latencyIndex: Number(candidate?.latencyIndex || 0), costYuan: costYuan == null ? null : Number(costYuan), latencyMs, signals: decision.analysis.signals, requirements: decision.analysis.requirements };
+    return { id: sample.id, label: sample.label, task: decision.analysis.task, subTask: decision.analysis.subTask || '', complexity: decision.analysis.complexity, tier: decision.analysis.tier, model: decision.suggestedModel, quality: candidate?.quality || 0, costIndex: Number(candidate?.costIndex || 0), costIndexProvider: Number(model?.costIndexProvider ?? 0.5), latencyIndex: Number(candidate?.latencyIndex || 0), costYuan: costYuan == null ? null : Number(costYuan), latencyMs, signals: decision.analysis.signals, requirements: decision.analysis.requirements, rejected: decision.rejected, candidates: decision.candidates };
 
   });
 
@@ -1349,7 +1352,7 @@ function sessionFingerprintOf(sessionId) {
 
 function upstreamRequestBody(body, model, reasoningLevel) {
 
-  const payload = { ...body, model };
+  const payload = { ...structuredClone(body), model };
 
   const modelConfig = config.models.find((item) => item.id === model);
 
@@ -1998,7 +2001,7 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 
     // 对比同样要用同口径候选池，否则分歧率统计失真。
 
-    const proposed = routeRequest(body, config, { health, analysisOverride: semanticAnalysis, budgetPressure: budgetTracker.pressure(), trafficBucket: baseDecision.rollout.trafficBucket, ...(allowedModelIds ? { allowedModelIds } : {}) });
+    const proposed = routeRequest(body, config, { health, modelLoad: modelLoad.snapshot(), analysisOverride: semanticAnalysis, budgetPressure: budgetTracker.pressure(), trafficBucket: baseDecision.rollout.trafficBucket, ...(allowedModelIds ? { allowedModelIds } : {}) });
 
     const disagreed = assessment.tier !== baseAnalysis.tier || assessment.task !== baseAnalysis.task || proposed.suggestedModel !== baseDecision.suggestedModel;
 
@@ -2179,7 +2182,7 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
 
   const baseAnalysis = { ...analyzeRequest(body, config), routeMethod: 'rules' };
 
-  const runtime = { health, analysisOverride: baseAnalysis, budgetPressure: budgetTracker.pressure(), ...(preview ? { trafficBucket: 0 } : {}) };
+  const runtime = { health, modelLoad: modelLoad.snapshot(), analysisOverride: baseAnalysis, budgetPressure: budgetTracker.pressure(), ...(preview ? { trafficBucket: 0 } : {}) };
 
   // 套餐动态候选池：按客户端 key 解析 v1/models 可用集，交集非空才启用过滤（防命名不匹配全灭），失败回退全量
 
@@ -2344,7 +2347,7 @@ async function proxyCompletion(req, res) {
 
     try { decision = await resolveAutoDecision(body, { clientAuthHeader: req.headers.authorization, requestId: req.requestId, bucketKey: { sessionId: req.headers['x-session-id'] || null, keyFingerprint: keyFingerprint(req.headers.authorization), requestId: req.requestId } }); }
 
-    catch (error) { counters.errors += 1; counters.outcome.auto.error += 1; scheduleCountersWrite(); return errorJson(res, 503, error.message); }
+    catch (error) { counters.errors += 1; counters.outcome.auto.error += 1; scheduleCountersWrite(); return errorJson(res, 503, error.message, error.code || 'routing_unavailable'); }
 
   } else {
 
@@ -2370,6 +2373,7 @@ async function proxyCompletion(req, res) {
     if (missingCapabilities.length) return rejectExplicit(400, `所选模型不支持请求能力: ${missingCapabilities.join(', ')}`, 'unsupported_capability');
 
     const explicitLevel = recommendReasoningLevel(explicitAnalysis, config);
+    if (!completionBudgetEligible(body, model, config, explicitLevel)) return rejectExplicit(400, '输出预算低于思考预留；请增加预算，或使用已验证的参数显式关闭思考', 'completion_budget_too_low');
 
     decision = { requestedModel: body.model, selectedModel: body.model, suggestedModel: body.model, shadow: false, analysis: { ...explicitAnalysis, task: 'explicit', tier: 'explicit', routeMethod: 'explicit' }, explicitTask: explicitAnalysis.task, reasoningLevel: explicitLevel, candidates: [], rejected: [], fallbackOrder: [body.model], configVersion: config.version };
 
@@ -2377,28 +2381,6 @@ async function proxyCompletion(req, res) {
 
   decision.selectedModel = sessionModel(req, decision);
   decision.policyRevision = getConfigRevision(config) || null;
-
-  // 思考预算守卫：选中的是思考型模型但客户端给的 max_tokens 低于其安全下限时强制关思考——
-
-  // 否则思考与正文共享预算，思考烧完 content 为空（finish=length）；保住正文输出优先于深度思考
-
-  const selectedModelConfig = config.models.find((item) => item.id === decision.selectedModel);
-
-  if (decision.reasoningLevel !== 'off' && selectedModelConfig?.reasoningControl?.verified) {
-
-    const requestedCompletionTokens = Number(body.max_completion_tokens || body.max_tokens || 0);
-
-    const minForThinking = Number(selectedModelConfig.minimumCompletionTokensForReliableAnswer || 0);
-
-    if (requestedCompletionTokens > 0 && minForThinking > 0 && requestedCompletionTokens < minForThinking) {
-
-      decision.reasoningLevel = 'off';
-
-      decision.reasoningGuard = `思考预算不足（${requestedCompletionTokens} < ${minForThinking}）：已强制关闭思考保正文输出`;
-
-    }
-
-  }
 
   counters.suggested[decision.suggestedModel] = (counters.suggested[decision.suggestedModel] || 0) + 1; scheduleCountersWrite();
 
@@ -2675,7 +2657,14 @@ async function proxyCompletion(req, res) {
 
     const model = attempts[i];
 
-    if (!claimCircuitAttempt(model)) continue;
+    const attemptModelConfig = config.models.find(item => item.id === model);
+    const releaseLoad = modelLoad.acquire(attemptModelConfig, config.routing);
+    if (!releaseLoad) {
+      if (!lastError) { lastError = new Error('所选合格模型的本进程并发额度已用满'); lastError.code = 'model_capacity_exhausted'; lastError.failureScope = 'capacity'; }
+      continue;
+    }
+    if (!claimCircuitAttempt(model)) { releaseLoad(); continue; }
+    res.once('close', releaseLoad);
     lastAttemptedModel = model;
 
     const started = Date.now();
@@ -3003,7 +2992,7 @@ async function proxyCompletion(req, res) {
 
       break;
 
-    }
+    } finally { res.off('close', releaseLoad); releaseLoad(); }
 
   }
 
@@ -3017,8 +3006,9 @@ async function proxyCompletion(req, res) {
   writeOutcomeLog({ ok: false, model: lastAttemptedModel, upstreamStatus: lastError?.upstreamStatus ?? null,
     failureScope: classifyUpstreamFailure(lastError).scope, error: (lastError?.message || '').slice(0, 500) });
   const upstreamStatus = Number(lastError?.upstreamStatus);
-  const status = upstreamStatus >= 400 && upstreamStatus < 500 ? upstreamStatus : 502;
-  return errorJson(res, status, lastError?.message || '所有候选模型均调用失败', 'upstream_error');
+  const status = lastError?.code === 'model_capacity_exhausted' ? 503 : upstreamStatus >= 400 && upstreamStatus < 500 ? upstreamStatus : 502;
+  if (status === 503) res.setHeader('retry-after', '1');
+  return errorJson(res, status, lastError?.message || '所有候选模型均调用失败', lastError?.code || 'upstream_error');
 
 }
 
@@ -3094,7 +3084,7 @@ const server = http.createServer(async (req, res) => {
 
     const disk = await decisionLog.diskUsage();
 
-    const body = renderPrometheusMetrics({ counters: { ...counters, judge: { ...judgeCounters, gaugeCircuit: judgeGuard.snapshot().circuit === 'open' ? 2 : (judgeGuard.snapshot().circuit === 'half-open' ? 1 : 0), guardCalls: judgeGuard.snapshot().calls, guardTokens: judgeGuard.snapshot().tokens } }, health, budget: budgetTracker.snapshot(), decisionLog: { ...decisionLog.snapshot(), diskUsage: disk }, config, sessions: sessions.size, draining: shutdownManager.draining, inflight: shutdownManager.inflightCount() });
+    const body = renderPrometheusMetrics({ counters: { ...counters, judge: { ...judgeCounters, gaugeCircuit: judgeGuard.snapshot().circuit === 'open' ? 2 : (judgeGuard.snapshot().circuit === 'half-open' ? 1 : 0), guardCalls: judgeGuard.snapshot().calls, guardTokens: judgeGuard.snapshot().tokens } }, health, modelLoad: modelLoad.snapshot(), budget: budgetTracker.snapshot(), decisionLog: { ...decisionLog.snapshot(), diskUsage: disk }, config, sessions: sessions.size, draining: shutdownManager.draining, inflight: shutdownManager.inflightCount() });
 
     res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
 
@@ -3913,7 +3903,7 @@ function subCategoryOf(task, subTask) {
 
     // 真正执行闸一致（进程 counters 重启清零，guard 从磁盘恢复；两者并列展示，不互相覆盖）。
 
-    return json(res, 200, { counters, judge: judgeRuntime.enabled ? { ...judgeCounters, gaugeCircuit: judgeGuard.snapshot().circuit === 'open' ? 2 : (judgeGuard.snapshot().circuit === 'half-open' ? 1 : 0), guard: judgeGuard.snapshot() } : null, health, recent: visibleRecent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: sessions.size });
+    return json(res, 200, { counters, judge: judgeRuntime.enabled ? { ...judgeCounters, gaugeCircuit: judgeGuard.snapshot().circuit === 'open' ? 2 : (judgeGuard.snapshot().circuit === 'half-open' ? 1 : 0), guard: judgeGuard.snapshot() } : null, health, modelLoad: Object.fromEntries(config.models.map(m => [m.id, loadAssessment(m, config.routing, modelLoad.snapshot())])), recent: visibleRecent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: sessions.size });
 
   }
 

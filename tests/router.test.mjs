@@ -49,7 +49,7 @@ test('open circuit removes model from candidates', () => {
 test('rejects a reasoning model when completion budget is known to be insufficient', () => {
   const custom = structuredClone(config); // 合成注入门槛：不依赖某个线上模型恰好配置了该字段
   custom.models.find((m) => m.id === 'Qwen3.8-27B').minimumCompletionTokensForReliableAnswer = 4096;
-  const decision = routeRequest({ messages: [{ role: 'user', content: '分析一个复杂问题' }], max_tokens: 512 }, custom);
+  const decision = routeRequest({ messages: [{ role: 'user', content: '分析一个复杂问题' }], max_tokens: 512, chat_template_kwargs: { enable_thinking: true } }, custom);
   assert.ok(decision.rejected.some((x) => x.model === 'Qwen3.8-27B' && x.reasons.includes('completion_budget_too_low')));
 });
 

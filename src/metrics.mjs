@@ -1,3 +1,4 @@
+import { loadAssessment } from './model-load.mjs';
 // Prometheus 文本格式（format version 0.0.4）渲染器，零依赖。
 // 输入是 server 内部状态的实时快照——单一数据源，不重复计数。
 // 用法：GET /metrics → renderPrometheusMetrics({ counters, health, budget, decisionLog, config, sessions, draining, inflight })
@@ -16,6 +17,9 @@ export function renderPrometheusMetrics(snapshot) {
   const { counters = {}, health = {}, budget = {}, decisionLog = {}, config = {}, sessions = 0, draining = false, inflight = 0 } = snapshot || {};
   const lines = [];
 
+  const loads = (config.models || []).map(model => ({ id: model.id, ...loadAssessment(model, config.routing, snapshot?.modelLoad) }));
+  metric(lines, 'router_model_inflight', 'gauge', '本路由进程占用的模型调用数，不代表上游总负载', loads.map(x => `router_model_inflight{model="${esc(x.id)}"} ${x.inflight}`));
+  metric(lines, 'router_model_concurrency_limit', 'gauge', '配置的本进程模型并发额度；未知不输出', loads.filter(x => x.capacity !== null).map(x => `router_model_concurrency_limit{model="${esc(x.id)}"} ${x.capacity}`));
   const outcome = counters.outcome || {};
   const successTotal = (outcome.auto?.success || 0) + (outcome.explicit?.success || 0);
   metric(lines, 'router_requests_total', 'counter', '路由完成的请求总数（按请求模式与结果）', [

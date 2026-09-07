@@ -99,6 +99,15 @@ export function validateConfig(config) {
   }
   if (!Number.isInteger(Number(config.routing.maxAttempts)) || config.routing.maxAttempts < 1 || config.routing.maxAttempts > config.models.length) throw new Error('maxAttempts 必须为 1 到模型数量之间的整数');
   if (config.routing.scoreStrategy !== undefined && !['weighted'].includes(config.routing.scoreStrategy)) throw new Error(`routing.scoreStrategy 无效: ${config.routing.scoreStrategy}（当前仅支持 weighted）`);
+  if (config.routing.loadBalancing !== undefined) {
+    const lb = config.routing.loadBalancing;
+    if (!lb || typeof lb !== 'object' || Array.isArray(lb) || typeof lb.enabled !== 'boolean') throw new Error('routing.loadBalancing.enabled 必须是布尔值');
+    if (lb.penaltyWeight !== undefined && (typeof lb.penaltyWeight !== 'number' || !Number.isFinite(lb.penaltyWeight) || lb.penaltyWeight < 0 || lb.penaltyWeight > 1)) throw new Error('loadBalancing.penaltyWeight 必须在 0 到 1 之间');
+    if (lb.limits !== undefined && (!lb.limits || typeof lb.limits !== 'object' || Array.isArray(lb.limits))) throw new Error('loadBalancing.limits 必须是模型到本进程并发上限的映射');
+    for (const [id, limit] of Object.entries(lb.limits || {})) {
+      if (!ids.has(id) || !Number.isInteger(limit) || limit < 1) throw new Error('loadBalancing.limits 必须引用已有模型，且额度为正整数');
+    }
+  }
   if (config.routing.livePenalty) {
     const lp = config.routing.livePenalty;
     const lpBounds = [['latencyScaleMs', 1000, 3600000], ['latencyMax', 0, 1], ['errorStep', 0, 1], ['errorMax', 0, 1]];

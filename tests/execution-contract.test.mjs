@@ -72,6 +72,93 @@ async function harness(handler, configure = () => {}) {
   };
 }
 
+test('e2e local capacity bounds concurrent calls, preserves quality gate, and releases after completion', { timeout: 20000 }, async () => {
+  let release; let arrived; let calls = 0;
+  const arrival = new Promise(r => { arrived = r; });
+  const h = await harness(async (_req, res, body) => {
+    calls++;
+    if (body.messages[0].content === 'hold') { arrived(); await new Promise(r => { release = r; }); }
+    normal(res);
+  }, cfg => {
+    cfg.models = cfg.models.slice(0, 2);
+    cfg.routing.maxAttempts = 2;
+    cfg.routing.defaultExplicitModel = cfg.models[0].id; cfg.routing.shadowModel = cfg.models[0].id;
+    cfg.routing.loadBalancing = { enabled: true, limits: Object.fromEntries(cfg.models.map(m => [m.id, 1])) };
+    cfg.routing.qualityFloor = 0.8; cfg.routing.relQualityCap = 0.02;
+    cfg.models[0].quality = { default: 0.95 }; cfg.models[1].quality = { default: 0.5 };
+  });
+  try {
+    const model = h.cfg.models[0].id;
+    const pending = h.post({ model, messages: [{ role: 'user', content: 'hold' }] });
+    await arrival;
+    assert.match(await h.metrics(), new RegExp(`router_model_inflight\\{model="${model}"\\} 1`));
+    const blocked = await h.post({ model }); await blocked.text(); assert.equal(blocked.status, 503);
+    const auto = await h.post(); await auto.text(); assert.equal(auto.status, 503, 'must not admit a lower quality model merely because the best is busy');
+    assert.equal(calls, 1);
+    release(); const first = await pending; await first.text();
+    const next = await h.post({ model }); await next.text(); assert.equal(next.status, 200);
+    assert.match(await h.metrics(), new RegExp(`router_model_inflight\\{model="${model}"\\} 0`));
+  } finally { release?.(); await h.close(); }
+});
+
+test('e2e explicit thinking intent is respected under a small completion budget', { timeout: 20000 }, async () => {
+  const seen = [];
+  const h = await harness((_req, res, body) => { seen.push(body); normal(res); }, cfg => {
+    const model = cfg.models[0];
+    model.minimumCompletionTokensForReliableAnswer = 16384;
+    model.reasoningControl = { verified: true, parameter: 'chat_template_kwargs.enable_thinking', values: { off: false, standard: true, high: true } };
+    cfg.reasoningControl = { enabled: true, offMaxComplexity: 0.3, highMinComplexity: 0.78 };
+  });
+  try {
+    const model = h.cfg.models[0].id;
+    const blocked = await h.post({ model, max_tokens: 64, chat_template_kwargs: { enable_thinking: true } });
+    assert.equal(blocked.status, 400); assert.equal((await blocked.json()).error.type, 'completion_budget_too_low');
+    assert.equal(seen.length, 0);
+    const ok = await h.post({ model, max_tokens: 64, chat_template_kwargs: { enable_thinking: false, extra: 'keep' } });
+    assert.equal(ok.status, 200); await ok.text();
+    assert.deepEqual(seen[0].chat_template_kwargs, { enable_thinking: false, extra: 'keep' });
+  } finally { await h.close(); }
+});
+
+test('e2e auto uses another qualified model while the first is occupied', { timeout: 20000 }, async () => {
+  let release; let arrived;
+  const arrival = new Promise(r => { arrived = r; });
+  const calls = [];
+  const h = await harness(async (_req, res, body) => {
+    calls.push(body.model);
+    if (body.messages[0].content === 'hold') { arrived(); await new Promise(r => { release = r; }); }
+    normal(res);
+  }, cfg => {
+    cfg.models = cfg.models.slice(0, 2);
+    cfg.routing.maxAttempts = 2;
+    cfg.routing.defaultExplicitModel = cfg.models[0].id; cfg.routing.shadowModel = cfg.models[0].id;
+    for (const m of cfg.models) m.quality = { default: 0.95 };
+    cfg.routing.loadBalancing = { enabled: true, limits: Object.fromEntries(cfg.models.map(m => [m.id, 1])) };
+  });
+  try {
+    const pending = h.post({ model: h.cfg.models[0].id, messages: [{ role: 'user', content: 'hold' }] });
+    await arrival;
+    const next = await h.post(); await next.text(); assert.equal(next.status, 200);
+    assert.equal(calls[1], h.cfg.models[1].id);
+    release(); await (await pending).text();
+  } finally { release?.(); await h.close(); }
+});
+
+test('e2e failed calls release capacity without leaking a slot', { timeout: 20000 }, async () => {
+  let calls = 0;
+  const h = await harness((_req, res) => { calls++; res.writeHead(401); res.end('{}'); }, cfg => {
+    cfg.routing.loadBalancing = { enabled: true, limits: { [cfg.models[0].id]: 1 } };
+  });
+  try {
+    for (let i = 0; i < 3; i++) {
+      const response = await h.post({ model: h.cfg.models[0].id }); await response.text();
+      assert.equal(response.status, 401);
+    }
+    assert.equal(calls, 3);
+    assert.match(await h.metrics(), new RegExp(`router_model_inflight\\{model="${h.cfg.models[0].id}"\\} 0`));
+  } finally { await h.close(); }
+});
+
 test('e2e tenant failures preserve 4xx and never open another tenant\'s model circuit', { timeout: 20000 }, async () => {
   let calls = 0;
   const h = await harness((req, res) => {
