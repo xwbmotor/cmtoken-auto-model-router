@@ -16,3 +16,18 @@
 .cards{grid-template-columns:repeat(auto-fit,minmax(155px,1fr))}
 td input.input-price,td input.output-price,td input.p95{width:105px}
 @media(max-width:900px){.impact-summary{grid-template-columns:repeat(2,1fr)}}
+
+/* Model operations and evidence */
+.models-compact th:nth-child(n+3):nth-child(-n+12),.models-compact td:nth-child(n+3):nth-child(-n+12){display:none}
+.models-compact{min-width:0!important;table-layout:auto!important}
+.model-detail-dialog{width:min(740px,94vw);max-height:90vh;overflow:auto;border:1px solid #d9e1ed;border-radius:16px;padding:24px;color:#172b4d;background:#fff}
+.model-detail-dialog::backdrop{background:#13243b88}
+.model-detail-dialog>button{float:right}
+.model-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.model-detail-grid label{display:flex;flex-direction:column;gap:7px;min-width:0}
+.model-detail-grid input,.model-detail-grid select{width:100%;min-width:0;box-sizing:border-box}
+.operation-card{border:1px solid #dae3ef;border-radius:10px;padding:12px 16px;margin:12px 0;overflow-wrap:anywhere}
+.operation-card h4{margin:0 0 8px}.operation-card p{margin:6px 0}
+.latency-coverage{border:1px solid #dae3ef;border-radius:12px;padding:16px;margin:16px 0;overflow-wrap:anywhere}
+.latency-coverage p{margin:8px 0}
+@media(max-width:600px){.model-detail-grid{grid-template-columns:1fr}.model-detail-dialog{padding:16px}.models-compact .health{white-space:normal;min-width:140px}}

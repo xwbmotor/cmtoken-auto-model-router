@@ -62,7 +62,8 @@ export function setupLatencyPanel({ api, notify = () => {} }) {
   const table = node('table','latency-table'); scroll.append(table);
   const detail = node('p','latency-detail','悬停或聚焦小时单元格，查看样本、失败和分位数。'); detail.setAttribute('role', 'status');
   const operations = node('p','latency-operations');
-  root.replaceChildren(head, notice, filters, metricNote, status, windowBar, cards, heatTitle, heatNote, legend, scroll, detail, operations);
+  const coverage = node('section', 'latency-coverage');
+  root.replaceChildren(head, notice, coverage, filters, metricNote, status, windowBar, cards, heatTitle, heatNote, legend, scroll, detail, operations);
   let data = null, busy = false, pending = false, probeBusy = false, requestVersion = 0, lastAttempt = 0, failures = 0, disposed = false;
   const visible = () => !document.hidden && root.getClientRects().length > 0 && !root.closest('[hidden]');
   const query = () => new URLSearchParams(Object.entries(controls).map(([key, control]) => [key, control.value])).toString();
@@ -72,6 +73,13 @@ export function setupLatencyPanel({ api, notify = () => {} }) {
     if (!data) return;
     notice.textContent = `${data.mode === 'off' ? '影子评分未启用。' : '影子评分只记录候选变化，不改变实际选模。'}当前质量未重新评测，时延改善不代表质量提升。`;
     const rows = Array.isArray(data.rows) ? data.rows : [];
+    const evidence = data.evidenceCoverage || {}, n = num(evidence.requests);
+    const rate = count => n ? `${(num(count) / n * 100).toFixed(1)}%` : '暂无评估';
+    coverage.replaceChildren(node('h3', '', '时延决策证据覆盖率'),
+      node('p', '', `最近 30 分钟已评估 Auto 请求 ${n} · 至少一个合格候选有可用证据 ${rate(evidence.anyReady)} · 全部合格候选有可用证据 ${rate(evidence.allReady)}`),
+      node('p', 'latency-note', `按请求当时的同条件证据统计，独立于下方热力图筛选；不表示已切换模型或取得收益。本进程统计起点 ${stamp(evidence.startedAt)}，重启后重新积累，窗口按分钟近似。`));
+    const labels = { ready: '可用', no_data: '无同条件计时', insufficient: '样本不足', stale: '计时过期', unreliable: '成功率不足' };
+    for (const [model, counts] of Object.entries(evidence.models || {})) coverage.append(node('p', '', `${model}：${Object.entries(counts).map(([key, value]) => `${labels[key] || key} ${value}`).join(' · ')}（候选评估次数）`));
     heatNote.textContent = `最近 ${num(data.retentionDays) || 14} 天按所选日期类型汇总至 0–23 时；不是今天的逐小时实况。时间均为 Asia/Shanghai。工作日按星期划分，不含节假日调休。`;
     for (const row of rows) {
       const card = node('article','latency-model-card'), s = row[windowSelect.value];
@@ -102,7 +110,8 @@ export function setupLatencyPanel({ api, notify = () => {} }) {
     const p = data.probe || {}, shadow = data.shadow || {}, storage = data.storage || {};
     const hasCost = Object.hasOwn(p, 'actualCostYuan') || Object.hasOwn(p, 'estimatedCostYuan');
     const probeCost = hasCost ? `今日补测费用：实记¥${num(p.actualCostYuan).toFixed(6)} + 估算¥${num(p.estimatedCostYuan).toFixed(6)}（已计入总成本，不属于业务回答成本）。` : '今日补测费用：数据未返回。';
-    operations.textContent = `补测：${p.running ? '运行中' : p.enabled ? '定时已启用' : '定时未启用'} · 今日调用 ${num(p.callsToday)} / ${num(p.maxCallsPerDay)} · 上次 ${stamp(p.lastRunAt)} · 下次 ${stamp(p.nextRunAt)}。${probeCost}影子评分 ${num(shadow.count)} 次，候选变化 ${num(shadow.changed)} 次；最近 ${stamp(shadow.lastAt)}。${p.lastError ? ` 补测异常：${p.lastError}。` : ''}${storage.evictedBuckets ? ` 存储容量淘汰 ${storage.evictedBuckets} 个桶，已提前截断，历史统计可能不完整。` : ''}${storage.persistErrors ? ` 持久化异常 ${storage.persistErrors} 次，重启后可能丢失近期数据。` : ''}${storage.restoreErrors ? ` 历史数据恢复失败 ${storage.restoreErrors} 次，统计可能缺失。` : ''}`;
+    const decisions = { pacing: '等待全天预算间隔', fresh_business: '近期同上游凭据业务输出充足，跳过补测', model_interval: '等待模型间隔', needs_probe: '缺少近期业务输出，等待补测', no_model: '暂无到期模型', scheduled: '定时补测', manual: '手动补测', cooldown: '等待一分钟冷却', budget: '今日额度已用完', busy: '已有任务运行', disabled: '定时关闭', storage: '存储异常' };
+    operations.textContent = `补测：${p.running ? '运行中' : p.enabled ? '定时已启用' : '定时未启用'} · 今日预留次数 ${num(p.callsToday)} / ${num(p.maxCallsPerDay)}（跳过和失败不退次数） · 上次 ${stamp(p.lastRunAt)} · 最早允许 ${stamp(p.nextRunAt)}；每 5 分钟检查，实际执行还取决于数据新鲜度、容量和预算。${p.lastDecision ? `最近调度：${stamp(p.lastDecision.at)} ${decisions[p.lastDecision.reason] || p.lastDecision.reason}${p.lastDecision.model ? ' · ' + p.lastDecision.model : ''}${p.lastDecision.outcome ? ' · ' + p.lastDecision.outcome : ''}。` : ''}${(p.models || []).map(m => `${m.model}：${decisions[m.reason] || m.reason}`).join('；')}。${probeCost}影子评分累计 ${num(shadow.count)} 次，候选变化 ${num(shadow.changed)} 次；最近 ${stamp(shadow.lastAt)}。${p.lastError ? ` 补测异常：${p.lastError}。` : ''}${storage.evictedBuckets ? ` 存储容量淘汰 ${storage.evictedBuckets} 个桶，已提前截断，历史统计可能不完整。` : ''}${storage.persistErrors ? ` 持久化异常 ${storage.persistErrors} 次，重启后可能丢失近期数据。` : ''}${storage.restoreErrors ? ` 历史数据恢复失败 ${storage.restoreErrors} 次，统计可能缺失。` : ''}`;
     probeButton.disabled = probeBusy || Boolean(p.running) || num(p.callsToday) >= num(p.maxCallsPerDay);
   }
   async function load(manual = false) {

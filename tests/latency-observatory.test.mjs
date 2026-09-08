@@ -10,6 +10,30 @@ const ctx = (overrides = {}) => ({ model: 'm', scope: 'tenant-upstream', inferen
   stream: true, reasoning: 'off', inputBand: 'short', outputBand: 'short', ...overrides });
 const sample = (overrides = {}) => ({ ...ctx(), at: NOW, ok: true, upstreamTtftMs: 100, ttftMs: 150, ...overrides });
 function make(options = {}) { return new LatencyObservatory({ now: () => NOW, ...options }); }
+
+test('coverage counts requests separately from eligible candidate reasons and expires', () => {
+  let clock = NOW; const o = make({ now: () => clock });
+  const candidate = (model, status, extra = {}) => ({ model, qualityEligible: true, latencyEvidence: { status }, ...extra });
+  o.noteShadow({ changed: false }, [candidate('a', 'ready'), candidate('b', 'insufficient'), candidate('c', 'ready', { load: { saturated: true } })]);
+  o.noteShadow({ changed: false }, [candidate('a', 'stale'), candidate('b', 'no_data')]);
+  o.noteShadow({ changed: true }, [candidate('a', 'ready'), candidate('b', 'ready')]);
+  const c = o.evidenceCoverage();
+  assert.equal(c.requests, 3); assert.equal(c.anyReady, 2); assert.equal(c.allReady, 1);
+  assert.deepEqual({ ...c.models.a }, { ready: 2, stale: 1 }); assert.equal(c.models.c, undefined);
+  clock += 32 * MIN; assert.equal(o.evidenceCoverage().requests, 0);
+});
+
+test('probe suppression needs recent successful business output in the exact credential scope', () => {
+  const o = make();
+  for (let i = 0; i < 20; i++) o.record(sample({ upstreamFirstOutputMs: 50 }));
+  assert.equal(o.hasFreshBusiness('tenant-upstream'), true);
+  assert.equal(o.hasFreshBusiness('different-credential'), false);
+  const synthetic = make();
+  for (let i = 0; i < 20; i++) synthetic.record(sample({ source: 'probe', upstreamFirstOutputMs: 50 }));
+  assert.equal(synthetic.hasFreshBusiness('tenant-upstream'), false);
+  for (let i = 0; i < 3; i++) o.record(sample({ ok: false }));
+  assert.equal(o.hasFreshBusiness('tenant-upstream'), false);
+});
 async function disk(t) {
   const dir = await mkdtemp(join(tmpdir(), 'router-latency-observatory-'));
   t.after(() => rm(dir, { recursive: true, force: true }));

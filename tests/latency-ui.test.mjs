@@ -50,7 +50,7 @@ with sync_playwright() as pw:
     for metric in ['completionMs','attemptMs','firstOutputMs','ttftMs']:
         page.locator('select[name=metric]').select_option(metric)
         page.wait_for_function('(metric) => window.calls.at(-1).includes("metric="+metric)',arg=metric)
-    expect(page.locator('.latency-note').first).to_contain_text('只统计成功样本')
+    expect(page.locator('.latency-panel > .latency-note').first).to_contain_text('只统计成功样本')
     page.locator('select[name=source]').select_option('probe')
     page.wait_for_function('window.calls.at(-1).includes("source=probe")')
     for width in [1440,390]:

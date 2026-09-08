@@ -11,7 +11,7 @@ function setup(options = {}) {
     async flush() { writes.push(structuredClone(this.probeState)); this.dirty = false; } };
   Object.assign(obs, options.obs);
   const runner = createLatencyProbeRunner({ observatory: obs, getSettings: () => config,
-    getModels: () => options.models ?? [{ id: 'a' }, { id: 'b' }, { id: 'c' }], now: () => clock,
+    hasFreshBusiness: options.hasFreshBusiness, getModels: () => options.models ?? [{ id: 'a' }, { id: 'b' }, { id: 'c' }], now: () => clock,
     probe: async (model, settings) => { calls.push({ model: model.id, settings }); return options.probe ? options.probe(model) : { ok: true }; } });
   return { runner, obs, config, writes, calls, advance: ms => { clock += ms; }, time: at => { clock = Date.parse(at); } };
 }
@@ -66,7 +66,7 @@ test('UTC+8 midnight resets budget without bypassing global cooldown', async () 
 
 test('selects oldest model, observes interval, manual may bypass model interval', async () => {
   const h = setup();
-  for (let i = 0; i < 3; i++) { assert.equal(h.runner.run().accepted, true); await h.runner.done(); h.advance(60000); }
+  for (let i = 0; i < 3; i++) { assert.equal(h.runner.run().accepted, true); await h.runner.done(); h.advance(100000); }
   assert.deepEqual(h.calls.map(x => x.model), ['a', 'b', 'c']);
   assert.deepEqual(h.runner.run(), { accepted: false, reason: 'no_model' });
   assert.equal(h.runner.run({ manual: true }).accepted, true); await h.runner.done();
@@ -86,7 +86,7 @@ test('skips preserve missing sample time but delay scheduling and rotate models'
   const h = setup({ probe: async () => ({ ok: false, skipped: true, errorCode: 'capacity' }) });
   h.runner.run(); await h.runner.done();
   assert.equal(h.obs.probeState.modelLastAt.a, undefined); assert.equal(h.obs.probeState.calls, 1);
-  h.advance(60000); h.runner.run(); await h.runner.done(); assert.equal(h.calls[1].model, 'b');
+  h.advance(100000); h.runner.run(); await h.runner.done(); assert.equal(h.calls[1].model, 'b');
 });
 
 test('no enabled models makes no reservation; persisted state survives new runner', async () => {
@@ -108,4 +108,28 @@ test('failed completion flush retains pre-call durable budget and blocks next at
   assert.equal(h.calls.length, 1); assert.equal(h.writes[0].calls, 1);
   assert.equal(h.runner.snapshot().callsToday, 1); assert.equal(h.runner.snapshot().lastError, 'storage');
   h.advance(900000); assert.equal(h.runner.run().reason, 'storage');
+});
+
+test('automatic probes pace remaining daily budget, but manual retains hard limits', async () => {
+  const h = setup({ config: { maxCallsPerDay: 4 } });
+  h.runner.run(); await h.runner.done();
+  h.advance(60000);
+  assert.equal(h.runner.run().reason, 'pacing');
+  const due = h.runner.snapshot().nextRunAt;
+  h.advance(60000); assert.equal(h.runner.snapshot().nextRunAt, due, 'polling must not postpone due time');
+  assert.equal(h.runner.run({ manual: true }).accepted, true); await h.runner.done();
+  h.advance(5400000); assert.equal(h.runner.run().accepted, true); await h.runner.done();
+  assert.equal(h.calls.length, 3);
+});
+
+test('fresh business suppresses automatic probes without consuming budget; manual can inspect', async () => {
+  let fresh = true;
+  const h = setup({ hasFreshBusiness: () => fresh });
+  assert.equal(h.runner.run().reason, 'fresh_business');
+  assert.equal(h.obs.probeState.calls, 0);
+  assert.ok(h.runner.snapshot().models.every(m => m.reason === 'fresh_business'));
+  assert.equal(h.runner.run({ manual: true }).accepted, true); await h.runner.done();
+  fresh = false; h.advance(900000);
+  assert.equal(h.runner.run().accepted, true); await h.runner.done();
+  assert.equal(h.calls[1].model, 'b');
 });

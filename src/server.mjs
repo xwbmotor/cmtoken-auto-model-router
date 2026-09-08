@@ -76,7 +76,8 @@ await latencyStore.restore();
 const latencySettings = () => ({ mode: 'off', minSamples: 20, staleMs: 300000, scaleMs: 10000, maxAdjust: 0.05, switchMargin: 0.02, ...(config.routing.latencyObservation || {}) });
 const latencyProbeSettings = () => ({ enabled: false, intervalMs: 900000, maxCallsPerDay: 144, timeoutMs: 20000, maxOutputTokens: 128, ...(config.routing.latencyObservation?.probes || {}) });
 const latencyProbes = createLatencyProbeRunner({ observatory: latencyStore, getSettings: latencyProbeSettings,
-  getModels: () => config.models.filter(m => m.enabled !== false), probe: runLatencyProbe });
+  getModels: () => config.models.filter(m => m.enabled !== false), probe: runLatencyProbe,
+  hasFreshBusiness: model => latencyStore.hasFreshBusiness(latencyContextFor(model, {}, {}, 'off', null).scope) });
 let latencyProbeController = null;
 
 
@@ -2467,7 +2468,7 @@ async function proxyCompletion(req, res) {
 
   decision.selectedModel = sessionModel(req, decision);
   decision.policyRevision = getConfigRevision(config) || null;
-  if (auto) latencyStore.noteShadow(decision.latencyShadow);
+  if (auto) latencyStore.noteShadow(decision.latencyShadow, decision.candidates);
 
   counters.suggested[decision.suggestedModel] = (counters.suggested[decision.suggestedModel] || 0) + 1; scheduleCountersWrite();
 

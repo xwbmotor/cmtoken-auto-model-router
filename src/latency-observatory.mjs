@@ -86,6 +86,7 @@ export class LatencyObservatory {
     this.minutes = new Map(); this.hours = new Map(); this.lastPrune = 0;
     this.storage = { evictedBuckets: 0, persistErrors: 0, restoreErrors: 0 };
     this.shadow = { count: 0, changed: 0, lastAt: null };
+    this.evidenceWindows = new Map(); this.evidenceStartedAt = new Date(now()).toISOString();
     this.probeState = { day: '', calls: 0, lastRunAt: null, modelLastAt: {} };
     this.pending = null; this.dirty = false;
   }
@@ -96,6 +97,7 @@ export class LatencyObservatory {
       while (map.size > this.maxBuckets) { map.delete(map.keys().next().value); this.storage.evictedBuckets++; }
     }
     this.lastPrune = now;
+    for (const [at] of this.evidenceWindows) if (at < now - 31 * MINUTE) this.evidenceWindows.delete(at);
   }
   record(row) {
     if (!row.model || typeof row.ok !== 'boolean' || !Number.isFinite(row.at) || row.at > this.now() || row.at < this.now() - RETENTION) return;
@@ -131,10 +133,44 @@ export class LatencyObservatory {
     return { metric, ...stats, adjustment: Number(adjustment.toFixed(5)), confidence: Number(confidence.toFixed(3)),
       status: !stats.validCount ? 'no_data' : stats.validCount < minSamples ? 'insufficient' : age >= staleMs ? 'stale' : !usable ? 'unreliable' : 'ready' };
   }
-  noteShadow(value) {
+  noteShadow(value, candidates = []) {
     if (!value) return;
     this.shadow.count++; if (value.changed) this.shadow.changed++;
     this.shadow.lastAt = new Date(this.now()).toISOString(); this.dirty = true;
+    const assessed = candidates.filter(c => c.latencyEvidence && !c.load?.saturated && c.qualityEligible);
+    if (!assessed.length) return;
+    const at = Math.floor(this.now() / MINUTE) * MINUTE;
+    const bucket = this.evidenceWindows.get(at) || { requests: 0, anyReady: 0, allReady: 0, models: Object.create(null) };
+    bucket.requests++;
+    const ready = assessed.filter(c => c.latencyEvidence.status === 'ready').length;
+    if (ready) bucket.anyReady++;
+    if (ready === assessed.length) bucket.allReady++;
+    for (const c of assessed) {
+      const counts = bucket.models[c.model] ||= Object.create(null);
+      const status = c.latencyEvidence.status;
+      counts[status] = (counts[status] || 0) + 1;
+    }
+    this.evidenceWindows.set(at, bucket);
+    for (const [minute] of this.evidenceWindows) if (minute < at - 31 * MINUTE) this.evidenceWindows.delete(minute);
+  }
+  evidenceCoverage() {
+    const result = { windowMinutes: 30, startedAt: this.evidenceStartedAt, requests: 0, anyReady: 0, allReady: 0, models: Object.create(null) };
+    for (const [at, b] of this.evidenceWindows) {
+      if (at < Math.floor((this.now() - 30 * MINUTE) / MINUTE) * MINUTE || at > this.now()) continue;
+      for (const key of ['requests', 'anyReady', 'allReady']) result[key] += b[key];
+      for (const [id, counts] of Object.entries(b.models)) {
+        const total = result.models[id] ||= Object.create(null);
+        for (const [status, n] of Object.entries(counts)) total[status] = (total[status] || 0) + n;
+      }
+    }
+    return result;
+  }
+  hasFreshBusiness(scope, minSamples = 20) {
+    // Only suppress availability probes for the same upstream credential scope.
+    // This does not make these mixed workload samples eligible for ranking.
+    const stats = blank(), cutoff = this.now() - 5 * MINUTE;
+    for (const b of this.minutes.values()) if (b.scope === scope && b.source === 'business' && b.at >= cutoff) merge(stats, b.stats);
+    return (stats.metrics.upstreamFirstOutputMs?.n || 0) >= minSamples && stats.success / Math.max(1, stats.success + stats.failed) >= 0.9;
   }
   dashboard(models, filters = {}) {
     this.prune();
@@ -162,7 +198,7 @@ export class LatencyObservatory {
     });
     return { at: new Date(now).toISOString(), timeZone: 'Asia/Shanghai', retentionDays: 14,
       quantileMethod: 'histogram_upper_bound', windowResolutionMs: MINUTE, metric, source,
-      storage: { ...this.storage, minuteBuckets: this.minutes.size, hourBuckets: this.hours.size, maxBucketsPerTier: this.maxBuckets }, rows, shadow: { ...this.shadow } };
+      storage: { ...this.storage, minuteBuckets: this.minutes.size, hourBuckets: this.hours.size, maxBucketsPerTier: this.maxBuckets }, rows, shadow: { ...this.shadow }, evidenceCoverage: this.evidenceCoverage() };
   }
   async restore() {
     if (!this.path) return;

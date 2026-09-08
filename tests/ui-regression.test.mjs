@@ -97,6 +97,21 @@ with sync_playwright() as pw:
     result['pageerrors_after_tabs'] = errs
     # 发现向导：两步走完
     pg.click('#tabs button[data-tab=\"models\"]'); pg.wait_for_timeout(400)
+    # Model drawer keeps edits in the existing draft; Escape returns to the table.
+    pg.locator('[data-model-details]').first.click()
+    pg.wait_for_selector('.model-detail-dialog[open]')
+    original_quality = pg.locator('#models .quality').first.input_value()
+    pg.locator('.model-detail-dialog .quality').fill('0.123')
+    assert pg.locator('#models .quality').first.input_value() == '0.123', 'drawer edit did not reach draft'
+    pg.locator('.model-detail-dialog .quality').fill(original_quality)
+    pg.keyboard.press('Escape')
+    assert pg.locator('.model-detail-dialog[open]').count() == 0
+    pg.click('#tabs button[data-tab="debug"]')
+    pg.click('#preview')
+    pg.wait_for_selector('#routeExplanation .operation-card')
+    assert '质量' in pg.locator('#routeExplanation').inner_text()
+    assert '预演' in pg.locator('#routeExplanation').inner_text()
+    pg.click('#tabs button[data-tab="models"]')
     pg.evaluate("() => document.getElementById('discoverModels').click()"); pg.wait_for_timeout(400)
     ok1 = pg.evaluate("() => ({ url: !!document.getElementById('dcBaseUrl'), key: !!document.getElementById('dcApiKey'), next: !!document.getElementById('dcNext') })")
     result['step1'] = ok1
@@ -106,6 +121,7 @@ with sync_playwright() as pw:
     rowHs = pg.evaluate("() => [...document.querySelectorAll('.discover-row')].map(r => Math.round(r.getBoundingClientRect().height))")
     result['rowHeights'] = rowHs
     result['hasSelectAll'] = pg.evaluate("() => !!document.getElementById('discSelectAll')")
+    pg.evaluate("document.querySelector('.models-compact').classList.remove('models-compact')")
     sel = pg.evaluate("() => { const s = document.querySelector('#models select.ownership'); if (!s || !s.options.length) return null; const probe = document.createElement('span'); probe.style.cssText='position:absolute;visibility:hidden;white-space:nowrap'; document.body.appendChild(probe); let mx=0; for (const o of s.options){probe.textContent=o.textContent;mx=Math.max(mx,probe.getBoundingClientRect().width);} probe.remove(); return { selW: Math.round(s.getBoundingClientRect().width), needW: Math.round(mx) }; }")
     result['ownershipSelect'] = sel
     bl = pg.evaluate("() => { const l = document.querySelector('label.btn-like'); return l ? getComputedStyle(l).borderTopWidth !== '0px' : 'missing'; }")
