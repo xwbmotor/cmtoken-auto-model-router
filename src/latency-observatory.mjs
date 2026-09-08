@@ -121,6 +121,23 @@ export class LatencyObservatory {
     }
     return view(result, metric);
   }
+  incidentWindows() {
+    // Complete minute buckets give non-overlapping 5 / 25 minute windows.
+    const end = Math.floor(this.now() / MINUTE) * MINUTE, groups = new Map();
+    for (const b of this.minutes.values()) {
+      if (b.source !== 'business' || b.at < end - 30 * MINUTE || b.at >= end) continue;
+      const context = Object.fromEntries(dimensions.map(k => [k, b[k]]));
+      const key = hash(context);
+      let g = groups.get(key);
+      if (!g) { g = { key, context, current: blank(), baseline: blank() }; groups.set(key, g); }
+      merge(b.at >= end - 5 * MINUTE ? g.current : g.baseline, b.stats);
+    }
+    return [...groups.values()].map(g => {
+      const metric = g.context.stream ? 'upstreamFirstOutputMs' : 'attemptMs';
+      return { key: g.key, context: g.context, metric, windowEnd: end,
+        current: view(g.current, metric), baseline: view(g.baseline, metric) };
+    });
+  }
   assessment(context, { minSamples = 20, staleMs = 300000, scaleMs = 10000, maxAdjust = 0.05 } = {}, baselinePenalty = 0, latencyWeight = 0.14) {
     // Synthetic short probes do not determine business latency rankings.
     const metric = context.stream ? (context.reasoning === 'on' || context.toolRequest ? 'upstreamFirstOutputMs' : 'upstreamTtftMs') : 'attemptMs';

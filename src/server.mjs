@@ -2,6 +2,8 @@ import { completionBudgetEligible } from './completion-budget.mjs';
 import { createModelLoadTracker, loadAssessment } from './model-load.mjs';
 import { LatencyObservatory, latencyContext } from './latency-observatory.mjs';
 import { createLatencyProbeRunner } from './latency-probes.mjs';
+import { OperationsEvidence, qualityEvidence, comparisonReadiness } from './operations-evidence.mjs';
+import { analyzeRoutingMatrix } from './routing-matrix.mjs';
 import http from 'node:http';
 
 import { readFile } from 'node:fs/promises';
@@ -73,6 +75,14 @@ const modelLoad = createModelLoadTracker();
 const latencyStore = new LatencyObservatory({ path: process.env.LATENCY_STATE_PATH || (process.env.CONFIG_PATH
   ? join(dirname(resolve(projectRoot, process.env.CONFIG_PATH)), 'latency-observations.json') : join(projectRoot, 'data/latency-observations.json')) });
 await latencyStore.restore();
+const operations = new OperationsEvidence({ path: join(dirname(latencyStore.path), 'operations-evidence.json') });
+await operations.restore();
+const qualityManifest = JSON.parse(await readFile(new URL('./quality-evidence.json', import.meta.url), 'utf8'));
+function checkOperations() {
+  operations.evaluate({ windows: latencyStore.incidentWindows(), revision: getConfigRevision(config),
+    enabledModels: config.models.filter(m => m.enabled !== false).map(m => m.id),
+    capacities: config.models.map(m => ({ model: m.id, ...loadAssessment(m, config.routing, modelLoad.snapshot()) })) });
+}
 const latencySettings = () => ({ mode: 'off', minSamples: 20, staleMs: 300000, scaleMs: 10000, maxAdjust: 0.05, switchMargin: 0.02, ...(config.routing.latencyObservation || {}) });
 const latencyProbeSettings = () => ({ enabled: false, intervalMs: 900000, maxCallsPerDay: 144, timeoutMs: 20000, maxOutputTokens: 128, ...(config.routing.latencyObservation?.probes || {}) });
 const latencyProbes = createLatencyProbeRunner({ observatory: latencyStore, getSettings: latencyProbeSettings,
@@ -652,6 +662,7 @@ function errorJson(res, status, message, type = 'router_error') {
 // 不同路径的请求体上限差异巨大：聊天体含图片/工具可达数十 MB；管理 API/预览/模拟 < 1 MB；metrics 不读 body
 
 const BODY_LIMITS = {
+  '/admin/api/comparison/analyze': 2 * 1024 * 1024,
 
   '/v1/chat/completions': 50 * 1024 * 1024, // 50MB：vision base64 + 长工具 schema + 长上下文
 
@@ -2507,6 +2518,7 @@ async function proxyCompletion(req, res) {
       completionMs: at - requestStarted, attemptMs: at - (c.upstreamAt || c.started) };
     c.attempt.timing = { ttftMs: row.upstreamTtftMs, firstOutputMs: row.upstreamFirstOutputMs, completionMs: row.attemptMs };
     if (latencySettings().mode !== 'off') latencyStore.record(row);
+    operations.record(row, req.requestId);
   };
   const applyFailureHealth = (model, error) => {
     const classification = classifyUpstreamFailure(error, { clientGone });
@@ -4006,6 +4018,23 @@ function subCategoryOf(task, subTask) {
     return json(res, 200, { ...latencyStore.dashboard(config.models, Object.fromEntries(url.searchParams)), mode: latencySettings().mode,
       probe: { ...latencyProbes.snapshot(), actualCostYuan: budget.probeActualCostYuan || 0, estimatedCostYuan: budget.probeEstimatedCostYuan || 0 } });
   }
+  if (req.method === 'GET' && url.pathname === '/admin/api/operations') {
+    return json(res, 200, operations.snapshot());
+  }
+  if (req.method === 'GET' && url.pathname === '/admin/api/quality-evidence') {
+    return json(res, 200, qualityEvidence(config.models, qualityManifest));
+  }
+  if (req.method === 'GET' && url.pathname === '/admin/api/comparison/readiness') {
+    return json(res, 200, comparisonReadiness(recent));
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/comparison/analyze') {
+    try {
+      const matrix = await readJson(req);
+      if (!Array.isArray(matrix.tasks) || matrix.tasks.length > 200 || !Array.isArray(matrix.candidates) || matrix.candidates.length > 6 || !Array.isArray(matrix.observations) || matrix.observations.length > 1200 || (matrix.selections?.length || 0) > 2400) return errorJson(res, 400, '导入上限：200 个任务、6 个候选、1200 条观测与 2400 条选择；较大矩阵请使用离线 CLI。', 'comparison_limit');
+      const report = analyzeRoutingMatrix(matrix, { minTestGroups: 30, bootstrapIterations: 500, seed: 42 });
+      return json(res, 200, report);
+    } catch (error) { return errorJson(res, error.status || 400, error.message, 'comparison_invalid'); }
+  }
   if (req.method === 'POST' && url.pathname === '/admin/api/latency/probe') {
     const result = latencyProbes.run({ manual: true });
     const reasons = { disabled: '自动补测未启用', busy: '已有补测正在运行', cooldown: '补测间隔至少一分钟，请稍后重试', budget: '今日补测调用额度已用完', no_model: '暂无符合补测条件的模型', storage: '补测预算存储异常，已暂停调用' };
@@ -4251,6 +4280,12 @@ function subCategoryOf(task, subTask) {
 
   }
 
+  if (req.method === 'GET' && ['/docs/controlled-comparison.md', '/docs/routing-matrix.md'].includes(url.pathname)) {
+    const md = await readFile(join(projectRoot, url.pathname.slice(1)), 'utf8');
+    const tpl = await readFile(join(projectRoot, 'public', 'manual.html'), 'utf8');
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    return res.end(tpl.replace('__MANUAL_VERSION__', () => String(config.version).replace(/[^0-9a-zA-Z.\-]/g, '')).replace('__MANUAL_BODY__', () => renderMarkdown(md)));
+  }
   if (url.pathname === '/manual') {
 
     // 使用手册页：服务端把 docs/使用说明.md 预渲染成 HTML 注入模板（客户端 JS 只做目录/高亮，失败也可见）
@@ -4308,10 +4343,11 @@ const shutdownManager = createShutdownManager({
   timeoutMs: Number(process.env.SHUTDOWN_TIMEOUT_MS || 20000),
 
   flush: async () => {
-    clearInterval(latencyPersistTimer); clearInterval(latencyProbeTimer);
+    clearInterval(latencyPersistTimer); clearInterval(latencyProbeTimer); clearInterval(operationsTimer);
     latencyProbeController?.abort(new Error('draining'));
     await latencyProbes.done();
     await latencyStore.flush(true);
+    await operations.flush();
 
     // ①counters 最终快照（二十九审 P2-1：优雅关停丢最后 500ms）
     await countersFlushNow();
@@ -4370,6 +4406,9 @@ if (process.env.AMR_TEST_STUCK_SEMANTIC_TASK === '1') {
 }
 
 const latencyPersistTimer = setInterval(() => { latencyStore.flush().catch(() => {}); }, 30000);
+checkOperations();
+const operationsTimer = setInterval(() => { checkOperations(); operations.flush().catch(() => {}); }, 30000);
+operationsTimer.unref();
 latencyPersistTimer.unref();
 const latencyProbeTimer = setInterval(() => { if (!shutdownManager.draining && latencySettings().mode !== 'off') latencyProbes.run(); }, 300000);
 latencyProbeTimer.unref();

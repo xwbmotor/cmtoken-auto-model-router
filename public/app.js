@@ -3,6 +3,7 @@ let configRevision;
 import { setupWorkspace } from './workspace.js';
 import { setupLatencyPanel } from './latency.js';
 import { setupModelDetails, renderRouteExplanation } from './operations.js';
+import { setupEvidencePanels } from './evidence-panels.js';
 let config, savedConfig, metrics, lastSimulation, simulateTimer;
 const $ = (id) => document.getElementById(id);
 //—— 后台枚举 → 中文展示映射（只影响展示，不碰配置值）——
@@ -1077,3 +1078,4 @@ document.addEventListener('workspace:navigate', () => { if (location.hash === '#
 setInterval(() => { if (!document.hidden && location.hash === '#models') loadEvalTasks(); }, 5000);
 if (location.hash === '#models') loadEvalTasks();
 setupLatencyPanel({ api, notify: toast });
+setupEvidencePanels({ api });

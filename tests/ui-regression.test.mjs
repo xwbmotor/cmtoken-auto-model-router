@@ -95,6 +95,26 @@ with sync_playwright() as pw:
         pg.click(f'#tabs button[data-tab=\"{t}\"]')
         pg.wait_for_timeout(300)
     result['pageerrors_after_tabs'] = errs
+    # Authenticated evidence endpoints and actionable empty states.
+    for endpoint in ['operations', 'quality-evidence', 'comparison/readiness']:
+        response = pg.request.get(BASE + '/admin/api/' + endpoint)
+        assert response.status == 200, endpoint
+    assert pg.request.get(BASE + '/docs/controlled-comparison.md').status == 200
+    assert pg.request.post(BASE + '/admin/api/comparison/analyze', data={'tasks': []}).status == 400
+    pg.click('#tabs button[data-tab="insights"]')
+    pg.wait_for_function("document.querySelector('#comparisonEvidence').textContent.includes('真实业务实验尚待')")
+    pg.locator('#comparisonEvidence input[type=file]').set_input_files({'name': 'bad.json', 'mimeType': 'application/json', 'buffer': b'{}'})
+    pg.wait_for_function("document.querySelector('#comparisonEvidence').textContent.includes('分析失败')")
+    fixture = {'schemaVersion': 1, 'dataset': {'id': 'browser-fixture', 'evidenceKind': 'demo', 'currency': 'CNY', 'costScope': 'task_total', 'successBasis': 'task_check', 'successDefinition': 'test only', 'collectionProtocolRef': 'test', 'splitProtocolRef': 'test'}, 'candidates': [{'id': c, 'model': c, 'modelVersion': 'test', 'inference': {}} for c in ['a', 'b']], 'tasks': [{'taskId': s, 'split': s, 'task': 'coding', 'groupId': s, 'inputHash': '0'*64} for s in ['validation', 'test']], 'observations': [{'taskId': s, 'candidateId': c, 'success': True, 'cost': 1, 'costBasis': 'actual', 'latencyMs': 1, 'observedAt': '2026-09-01T00:00:00Z', 'evidenceRef': 'fixture'} for s in ['validation', 'test'] for c in ['a', 'b']], 'policies': [], 'selections': []}
+    fixture['tasks'][1]['inputHash'] = '1'*64
+    pg.locator('#comparisonEvidence input[type=file]').set_input_files({'name': 'demo.json', 'mimeType': 'application/json', 'buffer': json.dumps(fixture).encode()})
+    pg.wait_for_function("document.querySelector('#comparisonEvidence').textContent.includes('证据不足，不能')")
+    assert pg.locator('#comparisonEvidence button').inner_text() == '下载完整对比结果'
+    pg.click('#tabs button[data-tab="models"]')
+    pg.wait_for_function("document.querySelector('#qualityEvidence').textContent.includes('历史 Judge')")
+    pg.locator('#qualityEvidence > div > details > summary').first.click()
+    pg.locator('#qualityEvidence > div > details > details > summary').first.click()
+    assert 'SHA256' in pg.locator('#qualityEvidence').inner_text()
     # 发现向导：两步走完
     pg.click('#tabs button[data-tab=\"models\"]'); pg.wait_for_timeout(400)
     # Model drawer keeps edits in the existing draft; Escape returns to the table.

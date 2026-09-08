@@ -1,0 +1,1826 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-08T06:55:46.688Z",
+  "limitations": [
+    "历史 Judge 评测，非业务成功率",
+    "原始结果未记录模型版本、完整推理参数与题目内容哈希",
+    "当前分数与原始均值不一致时保留人工修订，不自动覆盖"
+  ],
+  "models": {
+    "deepseekv4-flash": {
+      "default": {
+        "path": "data/eval-gate/model-deepseekv4-flash.json",
+        "sha256": "e3bf7311a4cfa95eb7d31422409cf36d3f7fb5d308ffe900510e66c1c478a6b8",
+        "evaluatedAt": "2026-08-21T05:31:14.314Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "default-01",
+          "default-02",
+          "default-03",
+          "default-04",
+          "default-05",
+          "default-06",
+          "default-07",
+          "default-08",
+          "default-09",
+          "default-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.908,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "simple": {
+        "path": "data/eval-gate/model-deepseekv4-flash.json",
+        "sha256": "e3bf7311a4cfa95eb7d31422409cf36d3f7fb5d308ffe900510e66c1c478a6b8",
+        "evaluatedAt": "2026-08-21T05:31:14.314Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "simple-01",
+          "simple-02",
+          "simple-03",
+          "simple-04",
+          "simple-05",
+          "simple-06"
+        ],
+        "count": 6,
+        "validCount": 6,
+        "duplicateCount": 0,
+        "mean": 0.9833333333333334,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "coding": {
+        "path": "data/eval-gate/model-deepseekv4-flash.json",
+        "sha256": "e3bf7311a4cfa95eb7d31422409cf36d3f7fb5d308ffe900510e66c1c478a6b8",
+        "evaluatedAt": "2026-08-21T05:31:14.314Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "coding-01",
+          "coding-03",
+          "coding-04",
+          "coding-05",
+          "coding-06",
+          "coding-07",
+          "coding-09",
+          "coding-10",
+          "coding-02",
+          "coding-08"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.8850000000000001,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "reasoning": {
+        "path": "data/eval-gate/model-deepseekv4-flash.json",
+        "sha256": "e3bf7311a4cfa95eb7d31422409cf36d3f7fb5d308ffe900510e66c1c478a6b8",
+        "evaluatedAt": "2026-08-21T05:31:14.314Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "reasoning-01",
+          "reasoning-02",
+          "reasoning-03",
+          "reasoning-04",
+          "reasoning-05",
+          "reasoning-06",
+          "reasoning-08",
+          "reasoning-09",
+          "reasoning-10",
+          "reasoning-07"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.9319999999999998,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "creative": {
+        "path": "data/eval-gate/model-deepseekv4-flash.json",
+        "sha256": "e3bf7311a4cfa95eb7d31422409cf36d3f7fb5d308ffe900510e66c1c478a6b8",
+        "evaluatedAt": "2026-08-21T05:31:14.314Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "creative-05",
+          "creative-01",
+          "creative-02",
+          "creative-03",
+          "creative-04",
+          "creative-06",
+          "creative-07",
+          "creative-08",
+          "creative-09",
+          "creative-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.875,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "extraction": {
+        "path": "data/eval-gate/model-deepseekv4-flash.json",
+        "sha256": "e3bf7311a4cfa95eb7d31422409cf36d3f7fb5d308ffe900510e66c1c478a6b8",
+        "evaluatedAt": "2026-08-21T05:31:14.314Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "extraction-01",
+          "extraction-02",
+          "extraction-03",
+          "extraction-04",
+          "extraction-05",
+          "extraction-06",
+          "extraction-07",
+          "extraction-08",
+          "extraction-09",
+          "extraction-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.945,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "subtask:debugging": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "dbg-01",
+          "dbg-02",
+          "dbg-03",
+          "dbg-04",
+          "dbg-05",
+          "dbg-06",
+          "dbg-07",
+          "dbg-08"
+        ],
+        "count": 8,
+        "validCount": 8,
+        "duplicateCount": 0,
+        "mean": 0.83875,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:code-generation": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "gen-01",
+          "gen-02",
+          "gen-03",
+          "gen-04",
+          "gen-05",
+          "gen-06",
+          "gen-07",
+          "gen-08"
+        ],
+        "count": 8,
+        "validCount": 8,
+        "duplicateCount": 0,
+        "mean": 0.7850000000000001,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:code-review": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "rev-01",
+          "rev-02",
+          "rev-03",
+          "rev-04",
+          "rev-05",
+          "rev-06",
+          "rev-07",
+          "rev-08"
+        ],
+        "count": 8,
+        "validCount": 8,
+        "duplicateCount": 0,
+        "mean": 0.8537500000000001,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:sql-database": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "sql-01",
+          "sql-02",
+          "sql-03",
+          "sql-04",
+          "sql-05",
+          "sql-06",
+          "sql-07",
+          "sql-08"
+        ],
+        "count": 8,
+        "validCount": 8,
+        "duplicateCount": 0,
+        "mean": 0.8474999999999999,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:frontend-ui": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "fe-01",
+          "fe-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.825,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:devops-config": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "devops-01",
+          "devops-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.925,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:shell-execution": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "shell-01",
+          "shell-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.65,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:file-io": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "fio-01",
+          "fio-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.75,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:repo-scanning": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "repo-01",
+          "repo-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.855,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:multi-step-planning": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "plan-01",
+          "plan-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.9450000000000001,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:tool-dispatch": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "tool-01",
+          "tool-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.825,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:workflow-execution": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "wf-01",
+          "wf-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.925,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:web-search": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "ws-01",
+          "ws-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.835,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:memory-extraction": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "mem-01",
+          "mem-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.885,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:devops-agent": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "agent-devops-01",
+          "agent-devops-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.875,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:data-extraction": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "dxt-01",
+          "dxt-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.925,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:data-transformation": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "dtf-01",
+          "dtf-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.815,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:classification": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "cls-01",
+          "cls-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.925,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:summarization": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "sum-01",
+          "sum-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.925,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:translation": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "trl-01",
+          "trl-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.9,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:math": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "math-01",
+          "math-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 1,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:content-writing": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "cw-01",
+          "cw-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.8,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:research-reports": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "rr-01",
+          "rr-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.875,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:qa-knowledge": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "qa-01",
+          "qa-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.9,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:conversation": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "conv-01",
+          "conv-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.975,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:customer-support": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "cs-01",
+          "cs-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.935,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:roleplay-fiction": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "rp-01",
+          "rp-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.885,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:finance-trading": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "fin-01",
+          "fin-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.825,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:security-audit": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "sec-01",
+          "sec-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.875,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:other": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "oth-01",
+          "oth-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.935,
+        "configSource": "data/subtask-eval/merged30.json"
+      }
+    },
+    "qwen36-35b": {
+      "default": {
+        "path": "data/eval-gate/model-qwen36-35b.json",
+        "sha256": "200358b1a9e8cee483f917904eba64c4180361bef74e92a70ee82d18a6784194",
+        "evaluatedAt": "2026-08-21T05:07:57.830Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "default-01",
+          "default-02",
+          "default-03",
+          "default-04",
+          "default-05",
+          "default-06",
+          "default-07",
+          "default-08",
+          "default-09",
+          "default-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.8350000000000002,
+        "configSource": "eval-gate-2026-08-20-amended(剔default-06 Token歧义题)"
+      },
+      "simple": {
+        "path": "data/eval-gate/model-qwen36-35b.json",
+        "sha256": "200358b1a9e8cee483f917904eba64c4180361bef74e92a70ee82d18a6784194",
+        "evaluatedAt": "2026-08-21T05:07:57.830Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "simple-01",
+          "simple-02",
+          "simple-03",
+          "simple-04",
+          "simple-05",
+          "simple-06"
+        ],
+        "count": 6,
+        "validCount": 6,
+        "duplicateCount": 0,
+        "mean": 0.9500000000000001,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "coding": {
+        "path": "data/eval-gate/model-qwen36-35b.json",
+        "sha256": "200358b1a9e8cee483f917904eba64c4180361bef74e92a70ee82d18a6784194",
+        "evaluatedAt": "2026-08-21T05:07:57.830Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "coding-04",
+          "coding-01",
+          "coding-02",
+          "coding-03",
+          "coding-05",
+          "coding-06",
+          "coding-07",
+          "coding-08",
+          "coding-09",
+          "coding-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.9280000000000002,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "reasoning": {
+        "path": "data/eval-gate/model-qwen36-35b.json",
+        "sha256": "200358b1a9e8cee483f917904eba64c4180361bef74e92a70ee82d18a6784194",
+        "evaluatedAt": "2026-08-21T05:07:57.830Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "reasoning-01",
+          "reasoning-02",
+          "reasoning-03",
+          "reasoning-04",
+          "reasoning-05",
+          "reasoning-06",
+          "reasoning-07",
+          "reasoning-08",
+          "reasoning-09",
+          "reasoning-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.9270000000000002,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "creative": {
+        "path": "data/eval-gate/model-qwen36-35b.json",
+        "sha256": "200358b1a9e8cee483f917904eba64c4180361bef74e92a70ee82d18a6784194",
+        "evaluatedAt": "2026-08-21T05:07:57.830Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "creative-01",
+          "creative-02",
+          "creative-03",
+          "creative-04",
+          "creative-05",
+          "creative-06",
+          "creative-07",
+          "creative-08",
+          "creative-09",
+          "creative-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.8840000000000001,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "extraction": {
+        "path": "data/eval-gate/model-qwen36-35b.json",
+        "sha256": "200358b1a9e8cee483f917904eba64c4180361bef74e92a70ee82d18a6784194",
+        "evaluatedAt": "2026-08-21T05:07:57.830Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "extraction-01",
+          "extraction-02",
+          "extraction-03",
+          "extraction-04",
+          "extraction-05",
+          "extraction-06",
+          "extraction-07",
+          "extraction-08",
+          "extraction-09",
+          "extraction-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.9400000000000001,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "subtask:debugging": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "dbg-01",
+          "dbg-02",
+          "dbg-03",
+          "dbg-04",
+          "dbg-05",
+          "dbg-06",
+          "dbg-07",
+          "dbg-08"
+        ],
+        "count": 8,
+        "validCount": 8,
+        "duplicateCount": 0,
+        "mean": 0.7875,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:code-generation": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "gen-01",
+          "gen-02",
+          "gen-03",
+          "gen-04",
+          "gen-05",
+          "gen-06",
+          "gen-07",
+          "gen-08"
+        ],
+        "count": 8,
+        "validCount": 8,
+        "duplicateCount": 0,
+        "mean": 0.75,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:code-review": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "rev-01",
+          "rev-02",
+          "rev-03",
+          "rev-04",
+          "rev-05",
+          "rev-06",
+          "rev-08"
+        ],
+        "count": 7,
+        "validCount": 7,
+        "duplicateCount": 0,
+        "mean": 0.9,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:sql-database": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "sql-01",
+          "sql-02",
+          "sql-03",
+          "sql-04",
+          "sql-05",
+          "sql-06",
+          "sql-08"
+        ],
+        "count": 7,
+        "validCount": 7,
+        "duplicateCount": 0,
+        "mean": 0.7285714285714285,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:frontend-ui": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "fe-01",
+          "fe-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.75,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:devops-config": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "devops-01",
+          "devops-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.9,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:shell-execution": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "shell-01",
+          "shell-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.64,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:file-io": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "fio-01",
+          "fio-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.8,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:repo-scanning": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "repo-01",
+          "repo-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.885,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:multi-step-planning": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "plan-01",
+          "plan-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.94,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:tool-dispatch": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "tool-01",
+          "tool-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.7,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:workflow-execution": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "wf-01",
+          "wf-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.91,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:web-search": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "ws-01",
+          "ws-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.8400000000000001,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:memory-extraction": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "mem-01",
+          "mem-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.885,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:devops-agent": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "agent-devops-01",
+          "agent-devops-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.825,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:data-extraction": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "dxt-01",
+          "dxt-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.9,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:data-transformation": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "dtf-01",
+          "dtf-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.8,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:classification": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "cls-01",
+          "cls-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.865,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:summarization": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "sum-01",
+          "sum-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.775,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:translation": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "trl-01",
+          "trl-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.91,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:math": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "math-01",
+          "math-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 1,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:content-writing": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "cw-01",
+          "cw-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.875,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:research-reports": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "rr-01",
+          "rr-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.89,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:qa-knowledge": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "qa-01",
+          "qa-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.9,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:conversation": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "conv-01",
+          "conv-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.96,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:customer-support": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "cs-01",
+          "cs-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.95,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:roleplay-fiction": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "rp-01",
+          "rp-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.89,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:finance-trading": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "fin-01",
+          "fin-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.835,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:security-audit": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "sec-01",
+          "sec-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.9,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:other": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "oth-01",
+          "oth-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.95,
+        "configSource": "data/subtask-eval/merged30.json"
+      }
+    },
+    "Qwen3.8-27B": {
+      "default": {
+        "path": "data/eval-gate/model-Qwen3.8-27B.json",
+        "sha256": "00ffe5287db8ef47543567bacdf29d7948c3256af5eb6bf027517332714f18d7",
+        "evaluatedAt": "2026-08-21T05:36:03.177Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "default-01",
+          "default-02",
+          "default-03",
+          "default-04",
+          "default-05",
+          "default-06",
+          "default-07",
+          "default-08",
+          "default-09",
+          "default-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.8949999999999999,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "simple": {
+        "path": "data/eval-gate/model-Qwen3.8-27B.json",
+        "sha256": "00ffe5287db8ef47543567bacdf29d7948c3256af5eb6bf027517332714f18d7",
+        "evaluatedAt": "2026-08-21T05:36:03.177Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "simple-01",
+          "simple-02",
+          "simple-03",
+          "simple-04",
+          "simple-05",
+          "simple-06"
+        ],
+        "count": 6,
+        "validCount": 6,
+        "duplicateCount": 0,
+        "mean": 0.9583333333333334,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "coding": {
+        "path": "data/eval-gate/model-Qwen3.8-27B.json",
+        "sha256": "00ffe5287db8ef47543567bacdf29d7948c3256af5eb6bf027517332714f18d7",
+        "evaluatedAt": "2026-08-21T05:36:03.177Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "coding-01",
+          "coding-02",
+          "coding-03",
+          "coding-04",
+          "coding-05",
+          "coding-06",
+          "coding-07",
+          "coding-08",
+          "coding-09",
+          "coding-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.9400000000000001,
+        "configSource": "manual-amended(条件质量0.940×0.99可用性折让——历史空输出已修但未重测)"
+      },
+      "reasoning": {
+        "path": "data/eval-gate/model-Qwen3.8-27B.json",
+        "sha256": "00ffe5287db8ef47543567bacdf29d7948c3256af5eb6bf027517332714f18d7",
+        "evaluatedAt": "2026-08-21T05:36:03.177Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "reasoning-01",
+          "reasoning-02",
+          "reasoning-03",
+          "reasoning-04",
+          "reasoning-05",
+          "reasoning-06",
+          "reasoning-07",
+          "reasoning-08",
+          "reasoning-09",
+          "reasoning-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.937,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "creative": {
+        "path": "data/eval-gate/model-Qwen3.8-27B.json",
+        "sha256": "00ffe5287db8ef47543567bacdf29d7948c3256af5eb6bf027517332714f18d7",
+        "evaluatedAt": "2026-08-21T05:36:03.177Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "creative-01",
+          "creative-02",
+          "creative-03",
+          "creative-04",
+          "creative-05",
+          "creative-06",
+          "creative-07",
+          "creative-08",
+          "creative-09",
+          "creative-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.8539999999999999,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "extraction": {
+        "path": "data/eval-gate/model-Qwen3.8-27B.json",
+        "sha256": "00ffe5287db8ef47543567bacdf29d7948c3256af5eb6bf027517332714f18d7",
+        "evaluatedAt": "2026-08-21T05:36:03.177Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "extraction-01",
+          "extraction-02",
+          "extraction-03",
+          "extraction-04",
+          "extraction-05",
+          "extraction-06",
+          "extraction-07",
+          "extraction-08",
+          "extraction-09",
+          "extraction-10"
+        ],
+        "count": 10,
+        "validCount": 10,
+        "duplicateCount": 0,
+        "mean": 0.95,
+        "configSource": "eval-gate-2026-08-20"
+      },
+      "subtask:debugging": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "dbg-01",
+          "dbg-02",
+          "dbg-03",
+          "dbg-06",
+          "dbg-08"
+        ],
+        "count": 5,
+        "validCount": 5,
+        "duplicateCount": 0,
+        "mean": 0.58,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:code-generation": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "gen-01",
+          "gen-02",
+          "gen-03",
+          "gen-04",
+          "gen-05",
+          "gen-06",
+          "gen-07",
+          "gen-08"
+        ],
+        "count": 8,
+        "validCount": 8,
+        "duplicateCount": 0,
+        "mean": 0.46499999999999997,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:code-review": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "rev-02",
+          "rev-03",
+          "rev-04",
+          "rev-06",
+          "rev-07",
+          "rev-08"
+        ],
+        "count": 6,
+        "validCount": 6,
+        "duplicateCount": 0,
+        "mean": 0.47000000000000003,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:sql-database": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "sql-01",
+          "sql-04",
+          "sql-05",
+          "sql-07"
+        ],
+        "count": 4,
+        "validCount": 4,
+        "duplicateCount": 0,
+        "mean": 0.75,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:frontend-ui": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "fe-02"
+        ],
+        "count": 1,
+        "validCount": 1,
+        "duplicateCount": 0,
+        "mean": 0.9,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:devops-config": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "devops-01",
+          "devops-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.935,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:shell-execution": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "shell-01",
+          "shell-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.7749999999999999,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:file-io": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "fio-01",
+          "fio-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.975,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:repo-scanning": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "repo-01",
+          "repo-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.94,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:multi-step-planning": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "plan-01",
+          "plan-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.95,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:tool-dispatch": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "tool-01",
+          "tool-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.89,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:workflow-execution": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "wf-01",
+          "wf-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.94,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:web-search": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "ws-01",
+          "ws-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.9199999999999999,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:memory-extraction": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "mem-01",
+          "mem-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.9199999999999999,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:devops-agent": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "agent-devops-02"
+        ],
+        "count": 1,
+        "validCount": 1,
+        "duplicateCount": 0,
+        "mean": 0.92,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:data-extraction": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "dxt-01",
+          "dxt-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.8999999999999999,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:data-transformation": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "dtf-01",
+          "dtf-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.8999999999999999,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:classification": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "cls-01"
+        ],
+        "count": 1,
+        "validCount": 1,
+        "duplicateCount": 0,
+        "mean": 0.8,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:summarization": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "sum-01",
+          "sum-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.975,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:translation": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "trl-01",
+          "trl-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.915,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:math": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "math-01",
+          "math-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 1,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:content-writing": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "cw-01",
+          "cw-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.8999999999999999,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:research-reports": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "rr-01",
+          "rr-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.89,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:qa-knowledge": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "qa-01",
+          "qa-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.925,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:conversation": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "conv-01",
+          "conv-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.935,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:customer-support": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "cs-01",
+          "cs-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.975,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:roleplay-fiction": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "rp-01",
+          "rp-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.91,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:finance-trading": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "fin-02"
+        ],
+        "count": 1,
+        "validCount": 1,
+        "duplicateCount": 0,
+        "mean": 0.95,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:security-audit": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "sec-01",
+          "sec-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.925,
+        "configSource": "data/subtask-eval/merged30.json"
+      },
+      "subtask:other": {
+        "path": "data/subtask-eval/merged30.json",
+        "sha256": "cb5a3981eab4db8612a8658a79ba087d4ab7e3d1a8ba79a77e88c6d01a94d49b",
+        "evaluatedAt": "2026-08-21T05:41:34.418Z",
+        "judgeModel": "glm-5.3",
+        "caseIds": [
+          "oth-01",
+          "oth-02"
+        ],
+        "count": 2,
+        "validCount": 2,
+        "duplicateCount": 0,
+        "mean": 0.925,
+        "configSource": "data/subtask-eval/merged30.json"
+      }
+    }
+  }
+}

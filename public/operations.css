@@ -31,3 +31,10 @@ td input.input-price,td input.output-price,td input.p95{width:105px}
 .latency-coverage{border:1px solid #dae3ef;border-radius:12px;padding:16px;margin:16px 0;overflow-wrap:anywhere}
 .latency-coverage p{margin:8px 0}
 @media(max-width:600px){.model-detail-grid{grid-template-columns:1fr}.model-detail-dialog{padding:16px}.models-compact .health{white-space:normal;min-width:140px}}
+.evidence-panel { scroll-margin-top: 20px; }
+.evidence-panel details { margin: 12px 0; }
+.evidence-panel summary { cursor: pointer; line-height: 1.6; font-weight: 600; }
+.evidence-panel p, .evidence-panel li { line-height: 1.7; overflow-wrap: anywhere; }
+.evidence-panel label { display: grid; gap: 10px; margin: 18px 0; }
+.evidence-panel input[type=file] { width: 100%; max-width: 100%; }
+.evidence-ref { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
