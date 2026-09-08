@@ -81,7 +81,7 @@ export class BudgetTracker {
   // settledEstimatedSpendYuan：无 usage 而保留估算结清的累计（只增）
   // 冲正只做一次差额：estimated -= reserved（回滚预占），settled += actual。
   // 修 bug：原实现「先减 reserved，再 consume(actual-reserved)」——预占10实际15 记成 5（系统性少记）。
-  async settle(id, actualYuan, fromUsage) {
+  async settle(id, actualYuan, fromUsage, source = 'answer') {
     this.rollover();
     const reserved = this.reserves.get(id);
     if (reserved === undefined) return;
@@ -93,8 +93,10 @@ export class BudgetTracker {
     if (!fromUsage || actualYuan == null || !Number.isFinite(Number(actualYuan))) {
       this.state.estimatedSettles = (this.state.estimatedSettles || 0) + 1;
       this.state.settledEstimatedSpendYuan = Number(((this.state.settledEstimatedSpendYuan || 0) + reserved).toFixed(6));
-      this.state.answerEstimatedSettles = (this.state.answerEstimatedSettles || 0) + 1;
-      this.state.answerEstimatedCostYuan = Number(((this.state.answerEstimatedCostYuan || 0) + reserved).toFixed(6));
+      const countKey = source === 'probe' ? 'probeEstimatedSettles' : 'answerEstimatedSettles';
+      const costKey = source === 'probe' ? 'probeEstimatedCostYuan' : 'answerEstimatedCostYuan';
+      this.state[countKey] = (this.state[countKey] || 0) + 1;
+      this.state[costKey] = Number(((this.state[costKey] || 0) + reserved).toFixed(6));
       this.scheduleWrite();
       return; // 无 usage：保留预估口径结清（不冲正、不伪造实际值）
     }
@@ -103,8 +105,10 @@ export class BudgetTracker {
     // 的恰好相等（预占 10 实际 15 是正常冲正不是异常；原实现 exact 计数几乎恒 0，指标失去观测意义）
     this.state.settles = (this.state.settles || 0) + 1;
     this.state.exactSettles = (this.state.exactSettles || 0) + 1;
-    this.state.answerSettles = (this.state.answerSettles || 0) + 1;
-    this.state.answerCostYuan = Number(((this.state.answerCostYuan || 0) + actual).toFixed(6));
+    const countKey = source === 'probe' ? 'probeSettles' : 'answerSettles';
+    const costKey = source === 'probe' ? 'probeActualCostYuan' : 'answerCostYuan';
+    this.state[countKey] = (this.state[countKey] || 0) + 1;
+    this.state[costKey] = Number(((this.state[costKey] || 0) + actual).toFixed(6));
     this.state.settledActualSpendYuan = Number(((this.state.settledActualSpendYuan || 0) + actual).toFixed(6));
     this.scheduleWrite();
   }
@@ -137,7 +141,7 @@ export class BudgetTracker {
   // 这笔费用在调用的瞬间就已确定（有真实 usage），直接进 settledActualSpendYuan（已结算实际），
   // 不占用预占语义。pressure 的总消费口径自动包含（settledActualSpendYuan 是其加数之一）。
   // 运营可直接算「净节省 = 回答节省 − 路由额外成本」；settles 与 settledActualSpendYuan 保持
-  // 总口径不变（总量正确），分项字段做加法对齐（answer + overhead = total）。
+  // 总口径不变，分项字段做加法对齐（answer + overhead + probe + legacy = total）。
   async chargeRouterOverhead(costYuan) {
     this.rollover();
     const cost = Number(costYuan);
@@ -178,9 +182,10 @@ export class BudgetTracker {
     const beansPerYuan = Number(this.config.budget?.beansPerYuan);
     const hasBeanRate = Number.isFinite(beansPerYuan) && beansPerYuan > 0;
     const settledTotal = (this.state.settledActualSpendYuan || 0) + (this.state.settledEstimatedSpendYuan || 0);
-    // 首次读取旧台账时四分项之和
+    // 首次读取旧台账时汇总可归因分项
     // 自动补齐恒等式（此后 answerActual/answerEstimated/overhead 增长、legacy 冻结不变）。
-    const attributed = (this.state.answerCostYuan || 0) + (this.state.answerEstimatedCostYuan || 0) + (this.state.routingOverheadCostYuan || 0);
+    const attributed = (this.state.answerCostYuan || 0) + (this.state.answerEstimatedCostYuan || 0) + (this.state.routingOverheadCostYuan || 0)
+      + (this.state.probeActualCostYuan || 0) + (this.state.probeEstimatedCostYuan || 0);
     const legacyUnattributed = Math.max(0, Number((settledTotal - attributed).toFixed(6)));
     return {
       ...this.state,
@@ -198,16 +203,20 @@ export class BudgetTracker {
       // answerEstimatedCostYuan 回答模型无 usage 保留估算结清（新增——原实现只进总账漏分项）
       // routingOverheadCostYuan L2/L3 分类调用（cash 记账）
       // legacyUnattributedCostYuan 升级前积累、无法归因到上述三者的存量（一次性迁移，只减不增）
-      // 恒等式：answerActual + answerEstimated + routingOverhead + legacyUnattributed == settledSpendYuan
-      // 净节省 = （固定模型基线成本 − answerActual − answerEstimated） − routingOverheadCostYuan。
+      // 恒等式：answerActual + answerEstimated + routingOverhead + probeActual + probeEstimated + legacyUnattributed == settledSpendYuan
+      // 净节省需扣除路由分类及补测开销，不能只比较业务回答成本。
       answerActualCostYuan: Number((this.state.answerCostYuan || 0).toFixed(6)),
       answerEstimatedCostYuan: Number((this.state.answerEstimatedCostYuan || 0).toFixed(6)),
       routingOverheadCostYuan: Number((this.state.routingOverheadCostYuan || 0).toFixed(6)),
+      probeActualCostYuan: Number((this.state.probeActualCostYuan || 0).toFixed(6)),
+      probeEstimatedCostYuan: Number((this.state.probeEstimatedCostYuan || 0).toFixed(6)),
       legacyUnattributedCostYuan: Number((legacyUnattributed).toFixed(6)),
       totalCostYuan: Number(settledTotal.toFixed(6)),
       answerSettles: this.state.answerSettles || 0,
       answerEstimatedSettles: this.state.answerEstimatedSettles || 0,
       classifierSettles: this.state.classifierSettles || 0,
+      probeSettles: this.state.probeSettles || 0,
+      probeEstimatedSettles: this.state.probeEstimatedSettles || 0,
       pressure: Number(this.pressure().toFixed(4)),
       // estimateOnly 语义：已结算部分有真实 usage 支撑；「true」只描述未结算预占
       estimateOnly: this.state.settledActualSpendYuan == null,

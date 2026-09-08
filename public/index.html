@@ -11,7 +11,7 @@
 .btn-mini{font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid var(--border,#ccc);background:transparent;cursor:pointer;margin-right:4px}
 .progress-wrap{background:var(--border,#eee);border-radius:6px;height:10px;overflow:hidden;margin:10px 0}
 .progress-bar{background:var(--accent,#369);height:100%;width:0;transition:width .4s}
-</style><link rel="stylesheet" href="/workspace.css">
+</style><link rel="stylesheet" href="/workspace.css"><link rel="stylesheet" href="/latency.css">
 </head>
 
 <body class="console">
@@ -209,7 +209,7 @@
           <button id="addModel" class="secondary">新增模型</button>
           <div id="offlineBanner" class="offline-banner" style="display:none"></div>
           </div>
-          </div><div class="table-wrap"><table><thead><tr><th>启用</th><th>模型</th><th>归属 <span class="help" data-help="自建=自有算力部署；生态=外部生态伙伴模型。">?</span></th><th>默认质量 <span class="help" data-help="该模型的质量分（0~1），越高越强，是路由的核心依据。来自本网真实环境实测校准。">?</span></th><th>用户成本指数 <span class="help" data-help="用户侧相对成本（0~1），越大用户结算越贵（按算力豆单价归一），用于路由打分。由下方「成本与定价」按单价自动计算，一般不手改。">?</span></th><th>算力消耗指数 <span class="help" data-help="平台侧算力资源消耗（0~1）：单位吞吐占用的自建算力（设备×卡×卡价÷吞吐），与用户侧豆价独立，两者可背离。越大越吃卡。无部署数据的模型按 0.5 中性值参与评分。">?</span></th><th>时延指数 <span class="help" data-help="相对时延（0~1），越大越慢，用于路由打分。">?</span></th><th>输入单价 <span class="help" data-help="真实输入价格（元/百万 Token），用于预算估算。">?</span></th><th>缓存单价 <span class="help" data-help="输入缓存命中价（元/百万 Token），通常为输入价的 2~5 折。">?</span></th><th>输出单价 <span class="help" data-help="真实输出价格（元/百万 Token），用于预算估算。">?</span></th><th>P95 端到端时延 <span class="help" data-help="实测 95 分位完整回答耗时（毫秒，从发出请求到收完最后一个字，含模型思考）。">?</span></th><th>校准 <span class="help" data-help="pilot=试点中；待校准=未跑够真实流量；已验证=已通过真实表现验证。">?</span></th><th>测评</th><th>健康 <span class="help" data-help="实时健康状态（正常/恢复探测/熔断）及时延、错误数。">?</span></th></tr></thead><tbody id="models"></tbody></table></div></section>
+          </div><div class="table-wrap"><table><thead><tr><th>启用</th><th>模型</th><th>归属 <span class="help" data-help="自建=自有算力部署；生态=外部生态伙伴模型。">?</span></th><th>默认质量 <span class="help" data-help="该模型的质量分（0~1），越高越强，是路由的核心依据。当前包含历史评测与人工先验；以评测来源及样本量判断可信度，不代表全部已重新实测。">?</span></th><th>用户成本指数 <span class="help" data-help="用户侧相对成本（0~1），越大用户结算越贵（按算力豆单价归一），用于路由打分。由下方「成本与定价」按单价自动计算，一般不手改。">?</span></th><th>算力消耗指数 <span class="help" data-help="平台侧算力资源消耗（0~1）：单位吞吐占用的自建算力（设备×卡×卡价÷吞吐），与用户侧豆价独立，两者可背离。越大越吃卡。无部署数据的模型按 0.5 中性值参与评分。">?</span></th><th>时延指数 <span class="help" data-help="相对时延（0~1），越大越慢，用于路由打分。">?</span></th><th>输入单价 <span class="help" data-help="真实输入价格（元/百万 Token），用于预算估算。">?</span></th><th>缓存单价 <span class="help" data-help="输入缓存命中价（元/百万 Token），通常为输入价的 2~5 折。">?</span></th><th>输出单价 <span class="help" data-help="真实输出价格（元/百万 Token），用于预算估算。">?</span></th><th>P95 端到端时延 <span class="help" data-help="实测 95 分位完整回答耗时（毫秒，从发出请求到收完最后一个字，含模型思考）。">?</span></th><th>校准 <span class="help" data-help="pilot=试点中；待校准=未跑够真实流量；已验证=已通过真实表现验证。">?</span></th><th>测评</th><th>健康 <span class="help" data-help="实时健康状态（正常/恢复探测/熔断）及时延、错误数。">?</span></th></tr></thead><tbody id="models"></tbody></table></div></section>
 
       <section class="panel"><div class="panel-head"><div><p class="eyebrow">任务进度</p><h2>评测任务</h2><p class="hint">关闭弹窗不会停止评测，可随时回来查看。已结束任务保留 2 小时；服务重启后记录清空。</p></div><button id="refreshEvalTasks" class="secondary">刷新任务</button></div><div id="evalTaskList" aria-live="polite"><p class="empty">进入模型管理后加载任务。</p></div></section>
 
@@ -246,6 +246,7 @@
     </section>
 
     <section class="tab-page" data-tab="insights" hidden>
+      <section id="latencyPanel" class="panel"></section>
 
       <section class="panel routing-report-panel"><div class="panel-head"><div><p class="eyebrow">效果叙事</p><h2>路由体检</h2><p class="hint">同一批代表任务上，auto 路由对比每个单模型固定基线的质量/成本/时延——「auto 好在哪」一句话有数可查。模拟口径（读跑分配置），不调模型、零成本。</p></div><div class="actions"><button id="runReport" class="secondary">生成体检</button></div></div><div id="reportHighlights" class="report-highlights"></div><div class="table-wrap"><table><thead><tr><th>方案</th><th>加权质量</th><th>平均用户成本指数</th><th>平均时延指数</th></tr></thead><tbody id="reportRows"><tr><td colspan="4" class="empty">点击「生成体检」计算 auto vs 单模型基线。</td></tr></tbody></table></div></section>
 

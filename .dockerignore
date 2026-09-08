@@ -27,3 +27,4 @@ data/deploy-*/
 # 本地 Python 环境与离线分析输入不进入构建上下文
 .venv/
 data/algorithm-audit-*/
+data/latency-observations.json*

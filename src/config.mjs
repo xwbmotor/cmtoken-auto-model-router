@@ -109,11 +109,26 @@ export function validateConfig(config) {
     }
   }
   if (config.routing.livePenalty) {
+    // Legacy penalty remains active during the new observation-only rollout.
     const lp = config.routing.livePenalty;
     const lpBounds = [['latencyScaleMs', 1000, 3600000], ['latencyMax', 0, 1], ['errorStep', 0, 1], ['errorMax', 0, 1]];
     for (const [key, min, max] of lpBounds) {
       const v = Number(lp[key]);
       if (lp[key] !== undefined && (!Number.isFinite(v) || v < min || v > max)) throw new Error(`routing.livePenalty.${key} 必须在 ${min} 到 ${max} 之间`);
+    }
+  }
+  if (config.routing.latencyObservation !== undefined) {
+    const lp = config.routing.latencyObservation;
+    if (!lp || typeof lp !== 'object' || Array.isArray(lp) || !['off', 'shadow'].includes(lp.mode)) throw new Error('latencyObservation.mode 必须是 off 或 shadow；新算法尚未开放正式采纳');
+    for (const [key, min, max] of [['minSamples', 5, 1000], ['staleMs', 60000, 1800000], ['scaleMs', 100, 300000], ['maxAdjust', 0, 0.1], ['switchMargin', 0, 0.2]]) {
+      if (lp[key] !== undefined && (typeof lp[key] !== 'number' || !Number.isFinite(lp[key]) || lp[key] < min || lp[key] > max)) throw new Error(`latencyObservation.${key} 超出允许范围`);
+    }
+    if (lp.probes !== undefined) {
+      const p = lp.probes;
+      if (!p || typeof p !== 'object' || Array.isArray(p) || typeof p.enabled !== 'boolean') throw new Error('latencyObservation.probes.enabled 必须是布尔值');
+      for (const [key, min, max] of [['intervalMs', 60000, 86400000], ['maxCallsPerDay', 0, 1000], ['timeoutMs', 1000, 30000], ['maxOutputTokens', 16, 256]]) {
+        if (p[key] !== undefined && (!Number.isInteger(p[key]) || p[key] < min || p[key] > max)) throw new Error(`latencyObservation.probes.${key} 超出允许范围`);
+      }
     }
   }
   if (config.routing.budgetCostMultiplier !== undefined && (!Number.isFinite(Number(config.routing.budgetCostMultiplier)) || Number(config.routing.budgetCostMultiplier) < 0)) throw new Error('routing.budgetCostMultiplier 必须是非负数');

@@ -1,5 +1,7 @@
 import { completionBudgetEligible } from './completion-budget.mjs';
 import { createModelLoadTracker, loadAssessment } from './model-load.mjs';
+import { LatencyObservatory, latencyContext } from './latency-observatory.mjs';
+import { createLatencyProbeRunner } from './latency-probes.mjs';
 import http from 'node:http';
 
 import { readFile } from 'node:fs/promises';
@@ -68,6 +70,14 @@ const serverHeadersTimeoutMs = Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 310
 
 let config = await loadConfig();
 const modelLoad = createModelLoadTracker();
+const latencyStore = new LatencyObservatory({ path: process.env.LATENCY_STATE_PATH || (process.env.CONFIG_PATH
+  ? join(dirname(resolve(projectRoot, process.env.CONFIG_PATH)), 'latency-observations.json') : join(projectRoot, 'data/latency-observations.json')) });
+await latencyStore.restore();
+const latencySettings = () => ({ mode: 'off', minSamples: 20, staleMs: 300000, scaleMs: 10000, maxAdjust: 0.05, switchMargin: 0.02, ...(config.routing.latencyObservation || {}) });
+const latencyProbeSettings = () => ({ enabled: false, intervalMs: 900000, maxCallsPerDay: 144, timeoutMs: 20000, maxOutputTokens: 128, ...(config.routing.latencyObservation?.probes || {}) });
+const latencyProbes = createLatencyProbeRunner({ observatory: latencyStore, getSettings: latencyProbeSettings,
+  getModels: () => config.models.filter(m => m.enabled !== false), probe: runLatencyProbe });
+let latencyProbeController = null;
 
 
 assertSemanticBucketSecretForMode(config.semanticRouter?.mode);
@@ -1378,6 +1388,76 @@ function upstreamRequestBody(body, model, reasoningLevel) {
 
 }
 
+function latencyContextFor(model, body, analysis, reasoningLevel, clientAuthHeader, source = 'business') {
+  const keys = ['stream', 'max_tokens', 'max_completion_tokens', 'reasoning_effort', 'thinking', 'reasoning', 'chat_template_kwargs', 'response_format', 'temperature', 'top_p'];
+  const parameterRoot = model.reasoningControl?.parameter?.split('.')[0];
+  if (parameterRoot && !keys.includes(parameterRoot)) keys.push(parameterRoot);
+  const controls = Object.fromEntries(keys.filter(key => body[key] !== undefined).map(key => [key, body[key]]));
+  if (body.tools?.length || body.functions?.length) controls.tools = [{}];
+  const payload = upstreamRequestBody(controls, model.id, reasoningLevel);
+  const key = (process.env.ROUTER_KEY_MODE === 'passthrough' ? clientAuthHeader : null) || process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY || '';
+  return latencyContext({ model, payload, analysis, source,
+    authorization: key.replace(/^Bearer\s+/i, '').trim(),
+    baseUrl: (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl || '').replace(/\/$/, '') });
+}
+
+function latencyRuntime(body, clientAuthHeader) {
+  return { latencyAssessment: (model, analysis, reasoningLevel, baseline) => latencyStore.assessment(
+    latencyContextFor(model, body, analysis, reasoningLevel, clientAuthHeader), latencySettings(), baseline, Number(config.routing.latencyWeight || 0)) };
+}
+
+async function runLatencyProbe(model, settings) {
+  if (shutdownManager.draining) return { skipped: true, errorCode: 'draining' };
+  try { upstreamBase(); } catch { return { skipped: true, errorCode: 'upstream_configuration' }; }
+  if (!(process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY)) return { skipped: true, errorCode: 'missing_server_credential' };
+  const body = { model: model.id, messages: [{ role: 'user', content: '只回答一个数字：1+1等于几？' }], stream: true, max_tokens: settings.maxOutputTokens, stream_options: { include_usage: true } };
+  if (!completionBudgetEligible(body, model, config, 'off')) return { skipped: true, errorCode: 'thinking_budget_incompatible' };
+  const load = loadAssessment(model, config.routing, modelLoad.snapshot());
+  if (load.capacity != null && load.inflight / load.capacity >= 0.8) return { skipped: true, errorCode: 'busy_model' };
+  const release = modelLoad.acquire(model, config.routing);
+  if (!release) return { skipped: true, errorCode: 'capacity' };
+  const analysis = analyzeRequest(body, config), at = Date.now(), timing = createStreamTimingObserver(at);
+  const context = latencyContextFor(model, body, analysis, 'off', null, 'probe');
+  let reservation = null, called = false, cost = null, ok = false, errorCode = null, timeout = false;
+  const controller = new AbortController(), timeoutHandle = setTimeout(() => controller.abort(), settings.timeoutMs);
+  latencyProbeController = controller;
+  let tail = '', bytes = 0;
+  try {
+    reservation = await budgetTracker.reserve(estimateCostYuan(body, analysis, model, config, 'off'));
+    called = true;
+    // Pass the configured server credential explicitly in passthrough mode as well.
+    const credential = process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY;
+    const response = await callUpstream(body, model.id, controller.signal, 'off', 'Bearer ' + credential);
+    if (!response.ok) { await response.body?.cancel(); errorCode = `http_${response.status}`; }
+    else if (!response.headers.get('content-type')?.includes('text/event-stream')) { await response.body?.cancel(); errorCode = 'stream_protocol'; }
+    else {
+      let done = false;
+      for await (const chunk of response.body) {
+        bytes += chunk.length;
+        if (bytes > 256 * 1024) { controller.abort(); errorCode = 'response_limit'; break; }
+        timing.push(chunk); tail = (tail + Buffer.from(chunk).toString('utf8')).slice(-65536);
+        if (/data:\s*\[DONE\]/.test(tail)) done = true;
+      }
+      timing.finish();
+      const usage = extractUsage('text/event-stream', tail);
+      cost = computeActualCostFromUsage(usage, model);
+      ok = done && timing.snapshot().firstContentMs != null;
+      if (!ok && !errorCode) errorCode = 'incomplete_stream';
+    }
+  } catch (error) { if (error.failureScope === 'configuration') called = false; timeout = controller.signal.aborted && !errorCode && !shutdownManager.draining; errorCode ||= shutdownManager.draining ? 'draining' : timeout ? 'timeout' : error.failureScope === 'configuration' ? 'configuration' : 'request_failed'; }
+  finally {
+    clearTimeout(timeoutHandle); release(); latencyProbeController = null;
+    if (reservation != null) { if (called) await budgetTracker.settle(reservation, cost, cost != null, 'probe').catch(() => {}); else await budgetTracker.release(reservation).catch(() => {}); }
+    if (called) {
+      const snap = timing.snapshot(), elapsed = Date.now() - at;
+      latencyStore.record({ ...context, at: Date.now(), ok, timeout, failureScope: 'probe',
+        ttftMs: snap.firstContentMs, firstOutputMs: snap.firstOutputMs, upstreamTtftMs: snap.firstContentMs,
+        upstreamFirstOutputMs: snap.firstOutputMs, completionMs: elapsed, attemptMs: elapsed });
+    }
+  }
+  return { ok, errorCode, skipped: !called };
+}
+
 // 点路径参数注入（如 "chat_template_kwargs.enable_thinking" → body.chat_template_kwargs.enable_thinking）。
 
 // 只覆盖叶子值，不整棵替换客户端已传的同名子对象（其他键保留）。
@@ -1466,9 +1546,15 @@ function computeActualCostFromUsage(usage, modelConfig) {
 
 }
 
+function upstreamBase() {
+  const raw = process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl;
+  try { const url = new URL(raw); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error(); return String(raw).replace(/\/$/, ''); }
+  catch { const error = new Error('上游地址未配置或格式无效'); error.retryable = false; error.failureScope = 'configuration'; throw error; }
+}
+
 async function callUpstream(body, model, signal, reasoningLevel = 'off', clientAuthHeader = null) {
 
-  const base = (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl).replace(/\/$/, '');
+  const base = upstreamBase();
 
   const passthrough = process.env.ROUTER_KEY_MODE === 'passthrough';
 
@@ -2001,7 +2087,7 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 
     // 对比同样要用同口径候选池，否则分歧率统计失真。
 
-    const proposed = routeRequest(body, config, { health, modelLoad: modelLoad.snapshot(), analysisOverride: semanticAnalysis, budgetPressure: budgetTracker.pressure(), trafficBucket: baseDecision.rollout.trafficBucket, ...(allowedModelIds ? { allowedModelIds } : {}) });
+    const proposed = routeRequest(body, config, { health, ...latencyRuntime(body, clientAuthHeader), modelLoad: modelLoad.snapshot(), analysisOverride: semanticAnalysis, budgetPressure: budgetTracker.pressure(), trafficBucket: baseDecision.rollout.trafficBucket, ...(allowedModelIds ? { allowedModelIds } : {}) });
 
     const disagreed = assessment.tier !== baseAnalysis.tier || assessment.task !== baseAnalysis.task || proposed.suggestedModel !== baseDecision.suggestedModel;
 
@@ -2182,7 +2268,7 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
 
   const baseAnalysis = { ...analyzeRequest(body, config), routeMethod: 'rules' };
 
-  const runtime = { health, modelLoad: modelLoad.snapshot(), analysisOverride: baseAnalysis, budgetPressure: budgetTracker.pressure(), ...(preview ? { trafficBucket: 0 } : {}) };
+  const runtime = { health, ...latencyRuntime(body, clientAuthHeader), modelLoad: modelLoad.snapshot(), analysisOverride: baseAnalysis, budgetPressure: budgetTracker.pressure(), ...(preview ? { trafficBucket: 0 } : {}) };
 
   // 套餐动态候选池：按客户端 key 解析 v1/models 可用集，交集非空才启用过滤（防命名不匹配全灭），失败回退全量
 
@@ -2381,6 +2467,7 @@ async function proxyCompletion(req, res) {
 
   decision.selectedModel = sessionModel(req, decision);
   decision.policyRevision = getConfigRevision(config) || null;
+  if (auto) latencyStore.noteShadow(decision.latencyShadow);
 
   counters.suggested[decision.suggestedModel] = (counters.suggested[decision.suggestedModel] || 0) + 1; scheduleCountersWrite();
 
@@ -2407,6 +2494,19 @@ async function proxyCompletion(req, res) {
   let actxCtx = null; // { model, started, ttftMs, isStream } 当前 attempt 快照
   const attemptOutcomes = [];
   const responseTimings = counters.responseTimingsV2 ||= {};
+  const observeAttempt = (c, ok, error) => {
+    if (!c || c.latencyRecorded || !c.attempt?.upstreamStarted || !c.observation) return;
+    c.latencyRecorded = true;
+    const at = Date.now(), snap = c.streamTiming?.snapshot(), offset = (c.upstreamAt || c.started) - requestStarted;
+    const row = { ...c.observation, at, ok, failureScope: c.attempt.failureScope || null,
+      timeout: /超时|timeout/i.test(String(error?.message || '')),
+      ttftMs: snap?.firstContentMs ?? null, firstOutputMs: snap?.firstOutputMs ?? null,
+      upstreamTtftMs: snap?.firstContentMs == null ? null : Math.max(0, snap.firstContentMs - offset),
+      upstreamFirstOutputMs: snap?.firstOutputMs == null ? null : Math.max(0, snap.firstOutputMs - offset),
+      completionMs: at - requestStarted, attemptMs: at - (c.upstreamAt || c.started) };
+    c.attempt.timing = { ttftMs: row.upstreamTtftMs, firstOutputMs: row.upstreamFirstOutputMs, completionMs: row.attemptMs };
+    if (latencySettings().mode !== 'off') latencyStore.record(row);
+  };
   const applyFailureHealth = (model, error) => {
     const classification = classifyUpstreamFailure(error, { clientGone });
     if (classification.countModelFailure) updateHealth(model, false, Date.now() - (actxCtx?.started || requestStarted));
@@ -2619,6 +2719,7 @@ async function proxyCompletion(req, res) {
 
     }
     if (c.attempt) c.attempt.ok = ok;
+    observeAttempt(c, ok, err);
 
   };
 
@@ -2694,6 +2795,8 @@ async function proxyCompletion(req, res) {
       if (body.stream === true) body.stream_options = { ...(body.stream_options || {}), include_usage: true };
 
       attempt.upstreamStarted = true;
+      actxCtx.upstreamAt = Date.now();
+      actxCtx.observation = latencyContextFor(selectedConfig, body, decision.analysis, decision.reasoningLevel, req.headers.authorization);
       const upstream = await callUpstream(body, model, controller.signal, decision.reasoningLevel, req.headers.authorization);
 
       const latency = Date.now() - started;
@@ -2988,6 +3091,7 @@ async function proxyCompletion(req, res) {
 
       const failureClass = applyFailureHealth(model, error);
       if (actxCtx?.attempt) { actxCtx.attempt.failureScope = failureClass.scope; actxCtx.attempt.ok = false; }
+      observeAttempt(actxCtx, false, error);
       if (failureClass.retryable && i + 1 < attempts.length) { counters.fallback += 1; scheduleCountersWrite(); continue; }
 
       break;
@@ -3896,6 +4000,17 @@ function subCategoryOf(task, subTask) {
 
   }
 
+  if (req.method === 'GET' && url.pathname === '/admin/api/latency') {
+    const budget = budgetTracker.snapshot();
+    return json(res, 200, { ...latencyStore.dashboard(config.models, Object.fromEntries(url.searchParams)), mode: latencySettings().mode,
+      probe: { ...latencyProbes.snapshot(), actualCostYuan: budget.probeActualCostYuan || 0, estimatedCostYuan: budget.probeEstimatedCostYuan || 0 } });
+  }
+  if (req.method === 'POST' && url.pathname === '/admin/api/latency/probe') {
+    const result = latencyProbes.run({ manual: true });
+    const reasons = { disabled: '自动补测未启用', busy: '已有补测正在运行', cooldown: '补测间隔至少一分钟，请稍后重试', budget: '今日补测调用额度已用完', no_model: '暂无符合补测条件的模型', storage: '补测预算存储异常，已暂停调用' };
+    return json(res, result.accepted ? 202 : 409, { ...result, ...(!result.accepted ? { error: { code: result.reason, message: reasons[result.reason] || '本次无法启动补测' } } : {}) });
+  }
+
   if (req.method === 'GET' && url.pathname === '/admin/api/metrics') {
 
     const visibleRecent = recentKeyFilter ? recent.filter((x) => (x.keyFingerprint || '') === recentKeyFilter) : recent;
@@ -4192,6 +4307,10 @@ const shutdownManager = createShutdownManager({
   timeoutMs: Number(process.env.SHUTDOWN_TIMEOUT_MS || 20000),
 
   flush: async () => {
+    clearInterval(latencyPersistTimer); clearInterval(latencyProbeTimer);
+    latencyProbeController?.abort(new Error('draining'));
+    await latencyProbes.done();
+    await latencyStore.flush(true);
 
     // ①counters 最终快照（二十九审 P2-1：优雅关停丢最后 500ms）
     await countersFlushNow();
@@ -4248,6 +4367,11 @@ if (process.env.AMR_TEST_STUCK_SEMANTIC_TASK === '1') {
   trackSemanticTask(new Promise(() => {}));
 
 }
+
+const latencyPersistTimer = setInterval(() => { latencyStore.flush().catch(() => {}); }, 30000);
+latencyPersistTimer.unref();
+const latencyProbeTimer = setInterval(() => { if (!shutdownManager.draining && latencySettings().mode !== 'off') latencyProbes.run(); }, 300000);
+latencyProbeTimer.unref();
 
 server.listen(port, host, () => {
 

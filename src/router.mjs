@@ -437,6 +437,14 @@ export function routeRequest(body, config, runtime = {}) {
     const uncertainty = model.reliabilityStatus === 'verified' ? 0 : config.routing.uncertaintyPenalty;
     const selfBonus = config.routing.preferSelfHosted && model.ownership === 'self_hosted' ? config.routing.selfHostedBonus : 0;
     const dynamicPenalty = livePenalty(model.id, health, config);
+    let latencyEvidence = null;
+    if (config.routing.latencyObservation?.mode === 'shadow' && runtime.latencyAssessment) {
+      const p = config.routing.livePenalty || {};
+      const legacyLatency = Math.min(Number(p.latencyMax ?? 0.2), Number(health?.[model.id]?.ewmaLatencyMs || 0) / Number(p.latencyScaleMs ?? 300000));
+      let level = recommendReasoningLevel(analysis, config);
+      if (Number(runtime.budgetPressure || 0) >= Number(config.budget?.degradeThreshold ?? 0.9)) level = level === 'high' ? 'standard' : 'off';
+      latencyEvidence = runtime.latencyAssessment(model, analysis, level, Number(config.routing.latencyWeight || 0) * Number(model.latencyIndex || 0) + legacyLatency);
+    }
     const complexMargin = analysis.tier === 'complex' ? Number(config.routing.complexQualityMargin || 0) : 0;
     const effectiveQualityFloor = Math.min(1, config.routing.qualityFloor + complexMargin);
     const budgetPressure = Math.max(0, Math.min(1, Number(runtime.budgetPressure || 0)));
@@ -453,6 +461,7 @@ export function routeRequest(body, config, runtime = {}) {
       ownership: model.ownership,
       quality,
       load,
+      ...(latencyEvidence ? { latencyEvidence } : {}),
       score: Number(score.toFixed(4)),
       baseScore: Number(baseScore.toFixed(4)),
       marketAdjust: Number(marketAdjust.toFixed(4)),
@@ -508,6 +517,20 @@ export function routeRequest(body, config, runtime = {}) {
     }
   }
   const suggestedModel = ordered[0].model;
+  let latencyShadow = null;
+  if (config.routing.latencyObservation?.mode === 'shadow') {
+    const shadowPool = pool.map(c => ({ ...c, score: c.score + (c.latencyEvidence?.adjustment || 0) })).sort((a, b) => b.score - a.score || a.costIndex - b.costIndex);
+    const preferred = !qualityDegraded && pref?.model ? shadowPool.find(c => c.model === pref.model) : null;
+    if (preferred && shadowPool[0].score - preferred.score <= Number(pref.tolerance ?? 0.02) + 1e-9) {
+      shadowPool.splice(shadowPool.indexOf(preferred), 1); shadowPool.unshift(preferred);
+    }
+    const base = shadowPool.find(c => c.model === suggestedModel), proposed = shadowPool[0];
+    const ready = base?.latencyEvidence?.status === 'ready' && proposed?.latencyEvidence?.status === 'ready';
+    const changed = ready && proposed.model !== suggestedModel && proposed.score - base.score >= Number(config.routing.latencyObservation.switchMargin ?? 0.02);
+    latencyShadow = { mode: 'shadow', scope: 'qualified_candidates_before_session', baselineModel: suggestedModel,
+      proposedModel: changed ? proposed.model : suggestedModel, changed: Boolean(changed),
+      reason: !ready ? 'insufficient_comparable_evidence' : changed ? 'bounded_latency_advantage' : 'within_switch_margin' };
+  }
   const activeTrafficPercent = Math.max(0, Math.min(100, Number(config.routing.activeTrafficPercent ?? 100)));
   const trafficBucket = Number(runtime.trafficBucket ?? Math.random() * 100);
   const rolloutApplied = config.routing.mode === 'active' && trafficBucket < activeTrafficPercent;
@@ -522,6 +545,7 @@ export function routeRequest(body, config, runtime = {}) {
   return {
     // 不再写死 'auto'——决策日志/市场信号按此归并 auto vs explicit。
     requestedModel: body.model || autoModelId(config), selectedModel, suggestedModel,
+    ...(latencyShadow ? { latencyShadow } : {}),
     shadow: !rolloutApplied, rollout: { activeTrafficPercent, trafficBucket: Number(trafficBucket.toFixed(2)), rolloutApplied,
       ...(safetyOverride ? { safetyOverride: 'configured_shadow_model_not_eligible' } : {}) }, analysis, candidates: candidates.sort((a, b) => b.score - a.score),
     preference: preferenceApplied ? { task: analysis.task, model: pref.model, note: preferenceNote } : null,

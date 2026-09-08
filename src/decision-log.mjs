@@ -114,6 +114,7 @@ export class DecisionLog {
         explicitTask: decision.explicitTask || null,
         reasoningLevel: decision.reasoningLevel,
         policyRevision: decision.policyRevision || null,
+        latencyShadow: decision.latencyShadow || null,
         qualifiedModelIds: decision.qualifiedModelIds || [],
         qualityDegraded: Boolean(decision.qualityDegraded),
         qualityDegradedReason: decision.qualityDegradedReason || null,
@@ -131,7 +132,7 @@ export class DecisionLog {
           ...(Array.isArray(decision.analysis.confidenceFactors) && decision.analysis.confidenceFactors.length > 0
             ? { confidenceFactors: decision.analysis.confidenceFactors } : {})
         } : null,
-        candidates: (decision.candidates || []).map((c) => ({ model: c.model, score: c.score, quality: c.quality, qualityEligible: c.qualityEligible, load: c.load || null })),
+        candidates: (decision.candidates || []).map((c) => ({ model: c.model, score: c.score, quality: c.quality, qualityEligible: c.qualityEligible, load: c.load || null, latencyEvidence: c.latencyEvidence || null })),
         rejected: decision.rejected || [],
         fallbackOrder: decision.fallbackOrder || [],
         semanticReview: decision.semanticReview || null,

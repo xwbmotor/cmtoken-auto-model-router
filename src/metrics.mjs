@@ -145,10 +145,16 @@ export function renderPrometheusMetrics(snapshot) {
   metric(lines, 'router_budget_routing_overhead_cost_yuan', 'gauge', '路由分类开销（元，L2/L3 分类调用现金记账）', [
     `router_budget_routing_overhead_cost_yuan ${Number(budget.routingOverheadCostYuan || 0)}`,
   ]);
+  metric(lines, 'router_budget_probe_actual_cost_yuan', 'gauge', '当日补测按真实 usage 结算（元）', [
+    `router_budget_probe_actual_cost_yuan ${Number(budget.probeActualCostYuan || 0)}`,
+  ]);
+  metric(lines, 'router_budget_probe_estimated_cost_yuan', 'gauge', '当日补测无 usage 保留估算结清（元）', [
+    `router_budget_probe_estimated_cost_yuan ${Number(budget.probeEstimatedCostYuan || 0)}`,
+  ]);
   metric(lines, 'router_budget_legacy_unattributed_cost_yuan', 'gauge', '升级前存量无归因成本（元，只减不增）', [
     `router_budget_legacy_unattributed_cost_yuan ${Number(budget.legacyUnattributedCostYuan || 0)}`,
   ]);
-  metric(lines, 'router_budget_total_cost_yuan', 'gauge', '已结算总成本（元）= answerActual + answerEstimated + overhead + legacy', [
+  metric(lines, 'router_budget_total_cost_yuan', 'gauge', '已结算总成本（元）= answerActual + answerEstimated + overhead + probeActual + probeEstimated + legacy', [
     `router_budget_total_cost_yuan ${Number(budget.totalCostYuan || budget.settledSpendYuan || 0)}`,
   ]);
   metric(lines, 'router_budget_answer_settles', 'gauge', '当日回答模型结算次数（answerSettles）', [
