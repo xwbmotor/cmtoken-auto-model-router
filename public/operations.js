@@ -27,9 +27,9 @@ export function renderRouteExplanation(d) {
 export function setupModelDetails({ api }) {
   const tbody = document.getElementById('models'); if (!tbody) return;
   const table = tbody.closest('table'); table.classList.add('models-compact');
-  const toggle = el('button', '展开全部参数列', 'secondary'); toggle.type = 'button';
-  toggle.onclick = () => { const compact = table.classList.toggle('models-compact'); toggle.textContent = compact ? '展开全部参数列' : '收起参数列'; };
-  table.parentElement.before(toggle);
+  document.addEventListener('change', event => {
+    if (event.target.id === 'modelColumnView') table.classList.toggle('models-compact', event.target.value === 'common');
+  });
   const dialog = el('dialog', null, 'model-detail-dialog'); dialog.setAttribute('aria-label', '模型详情与草稿参数'); document.body.append(dialog);
   let generation = 0, refreshing = false;
   const refreshObservations = async () => {

@@ -95,6 +95,46 @@ with sync_playwright() as pw:
         pg.click(f'#tabs button[data-tab=\"{t}\"]')
         pg.wait_for_timeout(300)
     result['pageerrors_after_tabs'] = errs
+    # Configuration view is readable, while editing remains a reviewed draft transaction.
+    pg.click('#tabs button[data-tab="policy"]')
+    pg.wait_for_selector('#policySummary .policy-readout')
+    assert pg.locator('#policySummary').is_visible() and pg.locator('#policyEditor').is_hidden()
+    assert pg.locator('#autoModelId').is_disabled() and pg.locator('#exposeModelList').is_disabled()
+    before_policy = pg.request.get(BASE + '/admin/api/config').json()
+    original_traffic = pg.locator('#activeTrafficPercent').input_value()
+    pg.click('#unlockEdit')
+    assert pg.locator('#policyEditor').is_visible() and pg.locator('#policySummary').is_hidden()
+    assert pg.locator('.policy-runtime .policy-group').count() == 4
+    assert pg.locator('#autoModelId').is_enabled()
+    pg.locator('#activeTrafficPercent').evaluate("e => { e.value = '35'; e.dispatchEvent(new Event('input', {bubbles:true})); }")
+    pg.wait_for_selector('#dirtyBadge', state='visible')
+    pg.click('#save')
+    pg.wait_for_selector('#publishReview[open]')
+    assert '35' in pg.locator('#changeRows').inner_text()
+    pg.keyboard.press('Escape')
+    assert pg.request.get(BASE + '/admin/api/config').json() == before_policy, 'Opening or cancelling review changed saved configuration'
+    pg.once('dialog', lambda dialog: dialog.accept())
+    pg.click('#relockEdit')
+    assert pg.locator('#policySummary').is_visible() and pg.locator('#policyEditor').is_hidden()
+    assert pg.locator('#activeTrafficPercent').input_value() == original_traffic
+    assert pg.locator('#autoModelId').is_disabled()
+    assert pg.locator('#dirtyBadge').is_hidden()
+    assert pg.locator('#impactDetails').get_attribute('open') is None
+    pg.locator('#impactDetails > summary').click()
+    pg.locator('#impactRows tr').first.wait_for(state='visible')
+    pg.locator('#impactDetails > summary').click()
+    pg.click('#tabs button[data-tab="semantic"]')
+    assert pg.locator('#semanticMode').is_disabled() and pg.locator('#judgeSecretClear').is_disabled()
+    pg.click('#editReviewSettings')
+    assert pg.locator('#semanticMode').is_enabled()
+    pg.click('#editReviewSettings')
+    assert pg.locator('#semanticMode').is_disabled()
+    assert pg.locator('.tab-page[data-tab="semantic"]').is_visible()
+    pg.click('#tabs button[data-tab="models"]')
+    pg.locator('#modelColumnView').select_option('pricing')
+    assert pg.locator('#models .input-price').first.is_visible(), 'Pricing mode must not require a second column toggle'
+    pg.locator('#modelColumnView').select_option('common')
+    assert pg.locator('#models .input-price').first.is_hidden()
     # Authenticated evidence endpoints and actionable empty states.
     for endpoint in ['operations', 'quality-evidence', 'comparison/readiness']:
         response = pg.request.get(BASE + '/admin/api/' + endpoint)

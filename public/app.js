@@ -4,8 +4,10 @@ import { setupWorkspace } from './workspace.js';
 import { setupLatencyPanel } from './latency.js';
 import { setupModelDetails, renderRouteExplanation } from './operations.js';
 import { setupEvidencePanels } from './evidence-panels.js';
+import { setupPolicyLayout } from './policy-layout.js';
 let config, savedConfig, metrics, lastSimulation, simulateTimer;
 const $ = (id) => document.getElementById(id);
+const policyView = setupPolicyLayout();
 //—— 后台枚举 → 中文展示映射（只影响展示，不碰配置值）——
 const TASK_CN = { coding: '代码', reasoning: '推理', creative: '创意', extraction: '抽取', default: '通用' };
 //OpenRouter rankings TASK TYPE 官方 30 小类 → 4 大类（+Pinned）
@@ -165,7 +167,7 @@ function stableStringify(value) {
 function syncDirty() { if (!config || !savedConfig) return; readForm(); const dirty = stableStringify(config) !== stableStringify(savedConfig) || Boolean(readJudgeSecretForm()); const badge = $('dirtyBadge'); if (badge) badge.hidden = !dirty; const dot = $('tabDirtyDot'); if (dot) dot.hidden = !dirty; }
 //基线规范化：savedConfig 必须与 readForm 之后的 config 同形状（readForm 会补 pricingYuan…/performance 等默认键），
 //否则 diff 永不相等。凡重建基线（connect/发布成功）处，先 render 表单再 readForm 再 snapshot。
-function snapshotBaseline() { bindPolicy(); bindProfile(); renderModels(); renderProviderColumn(); renderProfile(); renderCapabilityMatrix(); renderDeployment(); readForm(); savedConfig = structuredClone(config); clearDirty(); }
+function snapshotBaseline() { bindPolicy(); bindProfile(); renderModels(); renderProviderColumn(); renderProfile(); renderCapabilityMatrix(); renderDeployment(); readForm(); savedConfig = structuredClone(config); clearDirty(); policyView.update(!policyUnlocked, config); }
 //—— 页面 Tab 切换 ——
 const TABS = ['overview','policy','models','insights','semantic','debug','help'];
 function applyTab(name, record = true) {
@@ -181,11 +183,11 @@ function applyTab(name, record = true) {
 document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => applyTab(b.dataset.tab); });
 
 //── 业务策略只读锁：默认只读，点「解锁修改」才能调整 ──
-const POLICY_INPUTS = ['#mode', '#activeTrafficPercent', '#semanticActivePercent', '#judgeEnabled', '#judgeTaskCheckEnabled', '#judgeSamplePercent', '#judgeModel', '#judgeDailyMaxCalls', '#judgeDailyMaxTokens', '#judgeTimeoutMs', '#judgeCircuitThreshold', '#judgeSecretBaseUrl', '#judgeSecretApiKey', '#preferSelf', '#reasoningEnabled', '#decisionLogEnabled', '#logFullRequest', '#logAnswerText',
+const POLICY_INPUTS = ['#mode', '#activeTrafficPercent', '#autoModelId', '#exposeModelList', '#semanticActivePercent', '#judgeEnabled', '#judgeTaskCheckEnabled', '#judgeSamplePercent', '#judgeModel', '#judgeDailyMaxCalls', '#judgeDailyMaxTokens', '#judgeTimeoutMs', '#judgeCircuitThreshold', '#judgeSecretBaseUrl', '#judgeSecretApiKey', '#preferSelf', '#reasoningEnabled', '#decisionLogEnabled', '#logFullRequest', '#logAnswerText',
   '#costTier', '#qualityFloor', '#costWeight', '#providerCostWeight', '#latencyWeight', '#budgetEnabled', '#dailyBudget',
   '#budgetThreshold', '#selfBonus', '#qualityWeight', '#complexQualityMargin', '#uncertaintyPenalty', '#maxAttempts',
   '#relQualityCapSimple', '#relQualityCapBalanced', '#relQualityCapComplex', '#subtaskSmoothK',
-  '#semanticSmallAccept', '#semanticFinalAdoption']
+  '#semanticSmallAccept', '#semanticFinalAdoption', '#semanticProvider', '#semanticMode', '#semanticModel', '#semanticHttpUrl', '#semanticThreshold', '#judgeSecretClear']
   .flatMap(sel => Array.from(document.querySelectorAll(sel))).concat(
     Array.from(document.querySelectorAll('#tierPicker input'))).concat(
     Array.from(document.querySelectorAll('#stylePicker input')));
@@ -197,21 +199,22 @@ function setPolicyLock(locked) {
   const reload = $('reload'); if (reload) reload.hidden = locked && !isDirty();
   const save = $('save'); if (save) save.hidden = locked;
   document.body.classList.toggle('policy-locked', locked);
+  policyView.update(locked, config);
 }
 let policyUnlocked = false;
 if ($('unlockEdit')) $('unlockEdit').onclick = () => {
   policyUnlocked = true;
   setPolicyLock(false);
-  toast('已解锁——调整后记得「安全发布」');
+  if (!$('policyEditor').closest('[hidden]')) $('mode').focus({ preventScroll: true });
 };
 //重新锁定：改完不想发布（或只是看看），一键回到只读态并丢弃未发布修改
 if ($('relockEdit')) $('relockEdit').onclick = () => {
-  if (isDirty() && !window.confirm('有未发布的修改，重新锁定将丢弃这些修改。继续吗？')) return;
+  if (isDirty() && !window.confirm('结束编辑将放弃所有未发布修改。继续吗？')) return;
   policyUnlocked = false;
   $('judgeSecretBaseUrl').value=''; $('judgeSecretApiKey').value='';
   if (savedConfig) { config = structuredClone(savedConfig); snapshotBaseline(); scheduleSimulation(); }
   setPolicyLock(true);
-  toast('已回到只读视图');
+  ($('policyEditor').closest('.tab-page').hidden ? $('editReviewSettings') : $('unlockEdit')).focus({ preventScroll: true });
 };
 //发布成功后自动回锁：安全发布本身就是一次完整事务，结束后不需要继续编辑态
 const __origSave = $('save')?.onclick?.bind($('save'));

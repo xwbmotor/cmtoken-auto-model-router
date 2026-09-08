@@ -1,0 +1,118 @@
+/* Task-oriented forms and a readable configuration view. */
+.console main { max-width: 1480px; margin-inline: auto; }
+.console .policy-grid { align-items: start; }
+.console .policy-grid > label { min-width: 0; }
+.console .policy-grid .check { align-self: start; }
+.console .policy-configuration { padding: 26px; }
+.policy-configuration > .panel-head { padding-bottom: 20px; margin-bottom: 0; border-bottom: 1px solid var(--line); }
+.policy-configuration > .panel-head h2 { font-size: 18px; }
+.policy-configuration > .panel-head .hint { max-width: 620px; font-size: 13px; }
+.policy-configuration #unlockEdit { color: #fff; background: var(--brand); border-color: var(--brand); padding-inline: 18px; }
+.policy-configuration #relockEdit { border-color: transparent; color: var(--muted); }
+.policy-configuration #reload { color: #914332; }
+.policy-readout-grid, .policy-runtime, .policy-preset-groups { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; }
+.policy-summary, .policy-editor { padding-top: 22px; }
+.policy-readout { border-radius: 10px; background: #f7f9fc; padding: 20px; min-width: 0; }
+.policy-readout h3, .policy-group h3 { margin: 0 0 12px; font-size: 14px; font-weight: 650; color: #243453; }
+.policy-readout dl { margin: 0; }
+.policy-readout dl > div { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.2fr); align-items: baseline; gap: 12px; padding: 9px 0; }
+.policy-readout dt { font-size: 13px; color: var(--muted); line-height: 1.65; }
+.policy-readout dd { margin: 0; text-align: right; color: #21324d; font-weight: 550; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.policy-state { display: inline-flex; align-items: center; gap: 6px; }
+.policy-state::before { content: ''; width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: #98a2b3; }
+.policy-state.on::before { background: #208864; }
+.policy-group-note { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.policy-parameters { margin-top: 18px; }
+.policy-parameters > summary, .policy-advanced > summary { cursor: pointer; color: #52617a; font-weight: 550; font-size: 13px; padding: 10px 0; }
+.policy-parameters[open] > summary { margin-bottom: 8px; }
+.policy-group { padding: 20px; border: 1px solid #e3e9f2; border-radius: 10px; min-width: 0; }
+.policy-group > .policy-group-note { margin: -5px 0 18px; }
+.policy-fields { display: grid; gap: 18px; }
+.policy-fields label { font-size: 13px; gap: 9px; min-width: 0; }
+.policy-fields .lbl { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.policy-fields :is(input,select) { min-height: 40px; }
+.policy-fields .check { align-self: stretch; justify-content: space-between; flex-direction: row-reverse; min-height: 36px; gap: 14px; }
+.policy-fields .check .lbl { justify-content: flex-start; color: #35455f; }
+.policy-editor input[type=checkbox] { appearance: none; width: 34px; height: 20px; min-height: 20px; flex-shrink: 0; padding: 0; border: 0; border-radius: 20px; background: #aab5c5; position: relative; cursor: pointer; }
+.policy-editor input[type=checkbox]::after { content: ''; position: absolute; width: 14px; height: 14px; border-radius: 50%; background: white; left: 3px; top: 3px; transition: transform .12s; box-shadow: 0 1px 3px #24345322; }
+.policy-editor input[type=checkbox]:checked { background: var(--brand); }
+.policy-editor input[type=checkbox]:checked::after { transform: translateX(14px); }
+.policy-editor :is(input,select):focus-visible { outline: 2px solid #6c88eb; outline-offset: 2px; box-shadow: none; }
+.policy-editor label:has(> input[type=range]) { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; }
+.policy-editor label:has(> input[type=range]) > input { grid-column: 1 / -1; min-height: 20px; padding: 0; height: 20px; accent-color: var(--brand); }
+.policy-editor label:has(> input[type=range]) > .hint { grid-column: 1 / -1; margin: 0; font-size: 12px; line-height: 1.7; }
+.policy-editor output { color: var(--brand); font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.policy-editor > .policy-section { margin-top: 26px; padding-top: 24px; border-top: 1px solid var(--line); }
+.policy-editor .policy-section-title { color: #243453; font-size: 14px; letter-spacing: 0; margin-bottom: 16px; }
+.policy-preset-group { margin: 0; padding: 16px; border: 1px solid #e3e9f2; border-radius: 10px; min-width: 0; }
+.policy-preset-group legend { font-size: 13px; font-weight: 600; padding-inline: 6px; color: #35455f; }
+.policy-preset-group > .policy-group-note { margin: 0 0 14px; }
+.policy-editor .tier-picker { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.policy-editor .tier-picker .tier { position: relative; min-width: 0; padding: 13px 12px 13px 34px; box-shadow: none; gap: 4px; }
+.policy-editor .tier-picker .tier:last-child { grid-column: 1 / -1; }
+.policy-editor .tier-picker .tier input { display: block; position: absolute; width: 13px; height: 13px; top: 15px; left: 12px; margin: 0; padding: 0; accent-color: var(--brand); }
+.policy-editor .tier-picker .tier:focus-within { outline: 2px solid #6c88eb; outline-offset: 2px; }
+.policy-editor .tier-picker .tier.active { background: #f2f5ff; border-color: #8199e6; }
+.policy-editor #presetHelp { color: var(--muted); font-size: 12px; line-height: 1.7; margin-top: 12px!important; }
+.console .policy-editor .policy-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 22px 28px; }
+.policy-budget .check { grid-column: 1 / -1; justify-content: flex-start; }
+.policy-editor .business-policy small { min-height: 0; line-height: 1.6; }
+.policy-advanced .policy-grid { margin-top: 14px; }
+.policy-configuration ~ .danger-note { background: transparent; border: 0; padding-block: 0; color: var(--muted); }
+.evidence-panel .evidence-rules { color: var(--muted); font-size: 12px; }
+.evidence-panel .evidence-rules > summary { font-weight: 500; }
+.impact-details { margin-top: 18px; }
+.impact-details > summary { cursor: pointer; color: #52617a; font-size: 13px; font-weight: 550; padding: 10px 0; }
+.impact-details[open] > summary { margin-bottom: 12px; }
+.review-settings .tri-layer { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+.review-settings .arch-step { min-height: 0; padding: 16px; }
+.review-settings .arch-step::after { display: none; }
+.review-settings .policy-section { border-top: 1px solid var(--line); padding-top: 22px; margin-top: 24px; }
+.review-section-title { font-size: 14px; font-weight: 650; color: #243453; margin: 0 0 16px; }
+.review-groups { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; }
+.review-group { background: #f7f9fc; padding: 20px; border-radius: 10px; min-width: 0; }
+.review-group h3 { font-size: 13px; margin: 0 0 16px; color: #35455f; }
+.review-fields { display: grid; gap: 18px; }
+.review-fields label { gap: 8px; font-size: 13px; min-width: 0; }
+.review-fields .lbl { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.review-fields input[type=checkbox] { width: 18px; height: 18px; padding: 0; accent-color: var(--brand); }
+.review-fields label:has(> input[type=checkbox]) { display: grid; grid-template-columns: minmax(0,1fr) auto; }
+.review-fields label:has(> input[type=checkbox]) > small { grid-column: 1 / -1; }
+.review-fields small, .review-settings .policy-grid small { font-size: 12px; line-height: 1.6; min-height: 0; }
+.review-read-value { display: none; }
+.policy-locked .review-read-field { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.25fr); column-gap: 20px; row-gap: 6px; align-items: start; }
+.policy-locked .review-read-field > :is(input,select) { display: none; }
+.policy-locked .review-read-field > small { grid-column: 1 / -1; color: #77849a; }
+.policy-locked .review-read-value { display: block; grid-column: 2; grid-row: 1; color: #243453; font-size: 13px; font-weight: 550; text-align: right; overflow-wrap: anywhere; line-height: 1.6; }
+.policy-locked .review-read-value.is-on { color: #208864; }
+.review-settings .review-usage { display: flex; flex-direction: row; gap: 14px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+.review-usage .pill { border-radius: 8px; white-space: normal; line-height: 1.7; }
+.review-connection, .review-components { margin-top: 22px; }
+.review-settings details > summary { cursor: pointer; font-size: 13px; color: #52617a; font-weight: 550; }
+.review-connection[open] > summary { margin-bottom: 18px; }
+.console .review-settings .policy-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
+.review-connection #judgeSecretClear { margin-top: 16px!important; }
+.review-connection > .hint { font-size: 12px; }
+.console .deployment-panel > .policy-grid { grid-template-columns: repeat(3,minmax(0,1fr)); }
+@media (max-width: 1040px) {
+  .policy-readout-grid, .policy-runtime, .policy-preset-groups { gap: 14px; }
+  .policy-readout, .policy-group { padding: 16px; }
+}
+@media (max-width: 760px) {
+  .console .policy-configuration { padding: 18px; }
+  .policy-readout-grid, .policy-runtime, .policy-preset-groups { grid-template-columns: 1fr; }
+  .console .policy-editor .policy-grid { grid-template-columns: 1fr; gap: 20px; }
+  .policy-summary, .policy-editor { padding-top: 18px; }
+  .policy-configuration > .panel-head .actions { gap: 8px; }
+  .policy-configuration > .panel-head .actions button { flex: 1; }
+  .policy-readout dl > div { grid-template-columns: minmax(0,1fr) minmax(0,1.1fr); gap: 10px; }
+  .policy-editor label:has(> input[type=range]) > .lbl { font-size: 12px; }
+  .review-settings .tri-layer, .review-groups, .console .review-settings .policy-grid, .console .deployment-panel > .policy-grid { grid-template-columns: 1fr; }
+  .review-settings .arch-step { padding: 14px; }
+  .review-group { padding: 16px; }
+  .policy-locked .review-read-field { gap: 8px 12px; }
+  .console .impact-panel .impact-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .console .impact-panel .impact-summary article:last-child { grid-column: 1 / -1; }
+  .console .danger-note { flex-direction: column; align-items: flex-start; gap: 6px; }
+}
+@media (prefers-reduced-motion: reduce) { .policy-editor input[type=checkbox]::after { transition: none; } }

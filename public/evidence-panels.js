@@ -36,24 +36,30 @@ export function setupEvidencePanels({ api }) {
   const ops = panel('overview', 'operationsEvidence', '需要关注的异常');
   const quality = panel('models', 'qualityEvidence', '质量分数的证据');
   const compare = panel('insights', 'comparisonEvidence', '真实效果对比');
+  document.querySelector('.tab-page[data-tab="overview"] > .cards')?.after(ops.node);
+  document.querySelector('.model-registry-panel')?.after(quality.node);
+  document.getElementById('latencyPanel')?.after(compare.node);
   const refreshers = [
     [ops, async () => {
       const d = await api('/admin/api/operations');
-      ops.body.replaceChildren(el('p', `最近检查 ${date(d.lastCheckedAt)} · 两次连续检查确认 · 最多保留 ${d.maxEvents} 条事件，结束后保留 ${d.retentionDays} 天。`, 'hint'));
-      ops.body.append(el('p', '失败率 ≥10% 且至少 20 次尝试；同条件时延 P50 至少翻倍且增加 1 秒、两窗各至少 20 个有效样本；额度使用 ≥90%。无足够数据时不判定恢复。', 'hint'));
+      ops.body.replaceChildren(el('p', `最近检查 ${date(d.lastCheckedAt)}`, 'hint'));
       if (d.storageErrors) ops.body.append(el('p', '异常记录持久化存在错误，请检查服务存储与权限。', 'latency-notice'));
       if (!d.active.length) ops.body.append(el('p', '暂无达到持续触发条件的异常；不代表所有条件均有足够观测。'));
       for (const e of d.active) ops.body.append(incident(e));
       const history = el('details'); history.append(el('summary', `已结束事件（${d.history.length}）`));
       for (const e of d.history) history.append(incident(e)); ops.body.append(history);
+      const rules = el('details', null, 'evidence-rules'); rules.append(el('summary', '判定规则与保留范围'));
+      rules.append(el('p', `连续两次检查确认。失败率 ≥10% 且至少 20 次尝试；同条件时延 P50 至少翻倍且增加 1 秒、两窗各至少 20 个有效样本；额度使用 ≥90%。无足够数据时不判定恢复。最多保留 ${d.maxEvents} 条事件，结束后保留 ${d.retentionDays} 天。`)); ops.body.append(rules);
     }],
     [quality, async () => {
       const d = await api('/admin/api/quality-evidence');
       quality.body.replaceChildren(el('p', (d.limitations || []).join('；') + '。', 'hint'));
       for (const m of d.models) {
         const group = el('details', null, 'operation-card'); group.append(el('summary', m.model));
+        const subtasks = el('details', null, 'quality-subtasks'); subtasks.append(el('summary', '细分任务评分 · 按需展开'));
         for (const s of m.scores) {
-          const row = el('details'); row.append(el('summary', `${s.task} · 当前 ${s.value} · ${states[s.status]}`));
+          const name = ({ default: '通用', simple: '简单任务', coding: '代码', reasoning: '推理', creative: '创意', extraction: '抽取' })[s.task] || s.task.replace(/^subtask:/, '');
+          const row = el('details'); row.append(el('summary', `${name} · 当前 ${s.value} · ${states[s.status]}`));
           row.append(el('p', `来源标记：${s.source}`));
           const e = s.evidence;
           if (e) {
@@ -61,8 +67,9 @@ export function setupEvidencePanels({ api }) {
             row.append(el('p', `原始文件 ${e.path} · SHA256 ${e.sha256}`, 'evidence-ref'));
             row.append(el('p', `题目 ID：${e.caseIds.join('、')}`, 'evidence-ref'));
           }
-          row.append(el('p', `证据缺口：${s.missing.join('、')}。`, 'hint')); group.append(row);
+          row.append(el('p', `证据缺口：${s.missing.join('、')}。`, 'hint')); (s.task.startsWith('subtask:') ? subtasks : group).append(row);
         }
+        if (subtasks.children.length > 1) group.append(subtasks);
         quality.body.append(group);
       }
       const save = el('button', '下载来源清单', 'secondary'); save.onclick = () => download(d, 'quality-evidence.json'); quality.body.append(save);
