@@ -22,6 +22,10 @@ type Tenant struct {
 }
 
 func (g *Gateway) authorize(header string) (string, bool) {
+	if g.auth != nil {
+		p, e := g.auth.Authenticate(header)
+		return p.UpstreamToken, e == nil
+	}
 	token, ok := "", false
 	if subtle.ConstantTimeCompare([]byte(header), []byte("Bearer "+g.options.AccessToken)) == 1 {
 		token = g.options.UpstreamToken
@@ -64,6 +68,9 @@ func (g *Gateway) assess(ctx context.Context, data []byte, native *analysis.Resu
 	if e != nil {
 		return input, errors.New("assessment_request_failed")
 	}
+	if g.options.Bundle != nil {
+		req.Header.Set("X-AMR-Config-Revision", g.options.Bundle.Revision)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+g.options.AssessorToken)
 	if native != nil {
@@ -77,6 +84,9 @@ func (g *Gateway) assess(ctx context.Context, data []byte, native *analysis.Resu
 		return input, errors.New("assessment_unavailable")
 	}
 	defer res.Body.Close()
+	if g.options.Bundle != nil && res.Header.Get("X-AMR-Config-Revision") != g.options.Bundle.Revision {
+		return input, errors.New("assessment_revision_mismatch")
+	}
 	raw, e := io.ReadAll(io.LimitReader(res.Body, MaxBodyBytes+1))
 	if e != nil || res.StatusCode != 200 || len(raw) > MaxBodyBytes {
 		return input, errors.New("assessment_failed")
@@ -148,6 +158,10 @@ func (g *Gateway) runtimeStatus(w http.ResponseWriter) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	if g.runtime != nil {
+		_ = json.NewEncoder(w).Encode(map[string]any{"milestone": "m3", "productionReady": false, "revision": g.options.Bundle.Revision, "ledger": g.runtime.ledger.Snapshot(), "health": g.runtime.health.States(), "persistenceHealthy": !g.runtime.failed.Load(), "inflight": g.admission.Snapshot(), "semanticGuard": guard, "reviews": reviews})
+		return
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"milestone": "m2b", "productionReady": false, "semanticGuard": guard, "reviews": reviews, "inflight": g.admission.Snapshot()})
 }
 func (g *Gateway) backgroundReview(run func(context.Context)) bool {

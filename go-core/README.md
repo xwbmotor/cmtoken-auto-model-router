@@ -2,7 +2,7 @@
 
 分支：`codex/go-core-migration`。目标是逐步把核心请求服务迁移到 Go，沿用现有管理台，Python 继续承担模型训练、推理与评测。
 
-当前为 **M2b：Go 原生语义复核与按凭据查询模型资格**，包含此前的 L1、容量估算、显式调用与会话粘性。M2 的实验功能链路已连通；生产鉴权集成和 M3 运行账本尚未完成，**不能替换生产 Node 服务**。
+当前为 **M3：生产鉴权合同、持久化计费、合格重试与配置热更新**，包含此前 M1/M2 功能。`--runtime` 已接通完整本地 HTTP 运行链路；继续受限于 loopback，**没有切换生产 Node 服务**。启动、热更、旧账导入及单写运行边界见 [RUNTIME.md](RUNTIME.md)。
 
 ## 已实现的边界
 
@@ -37,18 +37,18 @@ flowchart LR
 | L2/Python、L3 复核及采纳 | Go 支持 http-json、openai-chat 和 cascade；稳定分桶、低置信拒绝、降级与后台观察已验证。L3 只调用本地模拟端点 |
 | 动态模型资格 | Go 按映射后的上游凭据查询 `/models`，HMAC 缓存、合并并发查询、过期后台刷新；失败/空集/无交集沿用 Node 全量回退语义，上游负责实际授权 |
 | 复核额度与观测 | 独立进程内调用/token 限额，真实 usage 与估算分开；最近 100 条不含正文和凭据的复核记录，只对实验管理凭据开放 |
-| 生产鉴权集成、运行健康更新、费用结算、持久日志、重试、配置热发布 | 待 M3；本阶段租户凭据映射只用于受限实验，不读取生产账户状态 |
+| 生产鉴权、健康、耐久计费、重试、配置热更 | `--runtime` 已实现 strict/passthrough、独立管理员、WAL 单写恢复、逐尝试结算、合格回退/半开及整代发布；生产与管理台联调待 M4/M5 |
 | 管理台、Python 训练与评测 | 保留现有实现，未声称已与 Go 后端联调完成 |
 
-本地网关强制 `--lab`，监听和出站目标均只能为带端口的字面量 loopback IP；禁止目标重定向。实验超时是总时长，尚不等价于生产 SSE 闲置超时。失败不自动重试。
+本地网关强制 `--lab`，监听和出站目标均只能为带端口的字面量 loopback IP；禁止目标重定向。原有对照模式保持总时长超时且不重试；`--runtime` 使用独立尝试计时、SSE 闲置超时和受限合格回退。
 
-原生分析在启动时读取私有 `/analysis-config` 快照。配置适配器当前固定配置、没有热更新；后续需统一 revision。自定义规则只支持 Go RE2 语法及已知任务标签，不支持的规则在启动时报错，不静默退回默认规则。内置规则已对齐 JS 无 `/u` 正则的 UTF-16 长度及换行边界。容量仍是启发式估算，不是模型 tokenizer 的精确计费。
+原生分析在启动时读取私有 `/analysis-config` 快照。原对照模式保持启动固定配置；`--runtime` 使用统一 revision 和原子热更新。自定义规则只支持 Go RE2 语法及已知任务标签，不支持的规则在启动时报错，不静默退回默认规则。内置规则已对齐 JS 无 `/u` 正则的 UTF-16 长度及换行边界。容量仍是启发式估算，不是模型 tokenizer 的精确计费。
 
 会话仅在当前 Go 进程内保存，重启清空；多副本共享和生产凭据同步未接入。空响应、无有效输出、SSE 缺少 `[DONE]`、取消及写回失败均不建立会话。超大或无法识别的响应仍转发，但保守地不记录粘性状态。
 
 ## 一次运行全部本地检查
 
-依赖：Go 1.25+、Node.js 24；Go 代码仅使用标准库，无第三方模块。本次开发编译器为 Go 1.27.1，CI 固定使用同版本。
+依赖：Go 1.25+、Node.js 24；Go 代码仅使用标准库，无第三方模块。耐久文件锁本轮验证 Windows/Linux，其他平台尚未验收。本次开发编译器为 Go 1.27.1，CI 固定使用同版本。
 
 Windows，从仓库根目录：
 
@@ -74,6 +74,7 @@ node go-core/compat/verify-analysis.mjs --binary data/go-migration/amr-core
 node go-core/compat/verify-semantic.mjs --binary data/go-migration/amr-core
 node go-core/compat/demo.mjs --binary data/go-migration/amr-core
 node go-core/compat/demo-semantic.mjs --binary data/go-migration/amr-core
+node go-core/compat/demo-runtime.mjs --binary data/go-migration/amr-core
 ```
 
 `demo.mjs` 自动启动真实 Go 原生分析进程、Node 配置适配器和本地模拟上游，使用随机临时令牌与空闲端口；验证非流式、SSE 及时输出、`[DONE]`、显式调用与鉴权隔离，随后清理进程和临时配置。**没有真实模型调用，不读取 `.env`，不使用生产令牌。**
@@ -116,4 +117,4 @@ GitHub 的 `Go core migration` 工作流独立运行 `go vet`、`go test -race`�
 - `compat/verify.mjs`：独立 Node 基准与 Go 差分验证。
 - `compat/demo.mjs`：无需手动部署服务的进程级验证。
 
-协议与后续迁移验收见 [语义与租户接口](SEMANTICS.md)、[合同说明](CONTRACT.md)、[迁移路线](../docs/go-core-migration.md)。
+生产运行合同见 [RUNTIME.md](RUNTIME.md)。协议与后续迁移验收见 [语义与租户接口](SEMANTICS.md)、[合同说明](CONTRACT.md)、[迁移路线](../docs/go-core-migration.md)。

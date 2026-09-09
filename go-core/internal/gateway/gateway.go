@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/analysis"
+	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/auth"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/decision"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/labnet"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/scope"
@@ -29,6 +30,9 @@ import (
 const MaxBodyBytes = 2 << 20
 
 type Options struct {
+	Bundle               *Bundle
+	Authenticator        *auth.Authenticator
+	Shared               *runtimeState
 	NativeSemantics      bool
 	SemanticOptions      semantic.Options
 	SemanticBucketSecret []byte
@@ -48,6 +52,8 @@ type Options struct {
 }
 
 type Gateway struct {
+	runtime           *runtimeState
+	auth              *auth.Authenticator
 	semantic          *semantic.Client
 	tenantScope       *scope.Cache
 	background        context.Context
@@ -83,7 +89,7 @@ func New(o Options) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(o.AccessToken) < 16 || len(o.AssessorToken) < 16 {
+	if (o.Authenticator == nil && len(o.AccessToken) < 16) || len(o.AssessorToken) < 16 {
 		return nil, errors.New("access and assessor tokens must each contain at least 16 characters")
 	}
 	if o.RequestTimeout <= 0 || o.AssessmentTimeout <= 0 || o.MaxRequests < 1 || o.MaxRequests > 10000 {
@@ -113,6 +119,11 @@ func New(o Options) (*Gateway, error) {
 	g := &Gateway{options: o, assessor: assessor, upstream: upstream, transport: t,
 		client:    &http.Client{Transport: t, Timeout: o.AssessmentTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		admission: NewAdmission(), requests: make(chan struct{}, o.MaxRequests)}
+	g.runtime, g.auth = o.Shared, o.Authenticator
+	if g.runtime != nil {
+		g.admission = g.runtime.admission
+		g.requests = g.runtime.requests
+	}
 	g.background, g.cancelBackground = context.WithCancel(context.Background())
 	g.backgroundSlots = make(chan struct{}, 8)
 	g.sessionSecret = make([]byte, 32)
@@ -120,7 +131,26 @@ func New(o Options) (*Gateway, error) {
 		g.Close()
 		return nil, e
 	}
-	if o.NativeAnalysis {
+	if g.runtime != nil {
+		g.sessionSecret = g.runtime.sessionSecret
+	}
+	if o.Bundle != nil {
+		if e := o.Bundle.validate(); e != nil {
+			g.Close()
+			return nil, e
+		}
+	}
+	if o.NativeAnalysis && o.Bundle != nil {
+		g.analyzer, err = analysis.New(o.Bundle.Analysis)
+		if err != nil {
+			g.Close()
+			return nil, err
+		}
+		if o.Bundle.Analysis.SemanticRequired && !o.NativeSemantics {
+			g.Close()
+			return nil, errors.New("active semantic configuration requires native semantics")
+		}
+	} else if o.NativeAnalysis {
 		u := *assessor
 		u.Path = "/analysis-config"
 		req, _ := http.NewRequest("GET", u.String(), nil)
@@ -149,7 +179,15 @@ func New(o Options) (*Gateway, error) {
 	}
 	if o.NativeSemantics {
 		var p semantic.Policy
-		if e := g.loadPolicy("/semantic-config", &p); e != nil {
+		if o.Bundle != nil {
+			p = o.Bundle.Semantic
+		}
+		if e := func() error {
+			if o.Bundle != nil {
+				return nil
+			}
+			return g.loadPolicy("/semantic-config", &p)
+		}(); e != nil {
 			g.Close()
 			return nil, e
 		}
@@ -162,6 +200,10 @@ func New(o Options) (*Gateway, error) {
 		}
 		opts := o.SemanticOptions
 		opts.Policy = p
+		if g.runtime != nil {
+			opts.Billing = g.semanticBilling
+			opts.Guard = g.runtime.semanticGuard
+		}
 		g.semantic, err = semantic.New(opts)
 		if err != nil {
 			g.Close()
@@ -218,12 +260,35 @@ func decodeStrict(r io.Reader, target any) error {
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-AMR-Experimental", "go-core-m2b")
+	if g.runtime != nil {
+		w.Header().Set("X-AMR-Experimental", "go-core-m3")
+	}
 	if r.Method == "GET" && r.URL.Path == "/health" {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "runtime": "go", "milestone": "m2b", "productionReady": false})
 		return
 	}
+	if g.runtime != nil {
+		w.Header().Set("X-AMR-Config-Revision", g.options.Bundle.Revision)
+		if r.URL.Path == "/internal/v1/runtime" || r.URL.Path == "/internal/v1/decide" {
+			if !g.auth.AdminAuthorized(r.Header.Get("Authorization")) {
+				writeError(w, 403, "admin_required")
+				return
+			}
+			if r.Method == "GET" && r.URL.Path == "/internal/v1/runtime" && r.URL.RawQuery == "" {
+				g.runtimeStatus(w)
+				return
+			}
+		}
+		if g.runtime.failed.Load() {
+			writeError(w, 503, "runtime_persistence_unavailable")
+			return
+		}
+	}
 	upstreamToken, authorized := g.authorize(r.Header.Get("Authorization"))
+	if g.runtime != nil && r.URL.Path == "/internal/v1/decide" && g.auth.AdminAuthorized(r.Header.Get("Authorization")) {
+		authorized = true
+	}
 	if !authorized {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
@@ -333,6 +398,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if g.runtime != nil {
+		input.Runtime.Health = g.runtime.health.Snapshot()
+		input.Runtime.NowMs = float64(time.Now().UnixMilli())
+	}
 	if g.semantic != nil && native != nil && requested == input.Policy.AutoModelID {
 		input, err = g.reviewInput(ctx, r, w, data, *native, input)
 		if err != nil {
@@ -347,6 +416,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionKey := SessionKey(r.Header.Get("X-Session-ID"), r.Header.Get("Authorization"), g.upstream.String(), g.sessionSecret)
+	if g.runtime != nil {
+		g.forwardRuntime(w, r, body, input, *native, sessionKey, upstreamToken)
+		return
+	}
 	d, release, err := g.admission.SelectSession(input, sessionKey)
 	if err != nil {
 		decisionError(w, err)

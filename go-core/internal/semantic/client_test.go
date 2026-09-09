@@ -143,7 +143,7 @@ func TestLargeGuardAtomicAndIdempotent(t *testing.T) {
 	}
 }
 func TestTokenGuardAndParseFailureStillCharge(t *testing.T) {
-	c := &Client{options: Options{MaxLargeCalls: 10, MaxLargeTokens: 10}, slots: make(chan struct{}, 1)}
+	c := &Client{options: Options{MaxLargeCalls: 10, MaxLargeTokens: 10}, guard: NewGuard(1)}
 	settle, e := c.reserve(8)
 	if e != nil {
 		t.Fatal(e)

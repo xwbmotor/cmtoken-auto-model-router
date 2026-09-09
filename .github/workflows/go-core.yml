@@ -46,6 +46,8 @@ jobs:
         run: node go-core/compat/demo.mjs --binary data/go-migration/amr-core
       - name: Verify native semantic review and tenant scopes
         run: node go-core/compat/demo-semantic.mjs --binary data/go-migration/amr-core
+      - name: Verify durable runtime, retry and atomic hot reload
+        run: node go-core/compat/demo-runtime.mjs --binary data/go-migration/amr-core
       - name: Preserve verification evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

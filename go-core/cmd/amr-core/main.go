@@ -17,12 +17,20 @@ import (
 	"time"
 
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/analysis"
+	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/auth"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/decision"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/gateway"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/semantic"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "ledger-import" {
+		if e := importLedger(os.Args[2:], os.Stdout); e != nil {
+			fmt.Fprintln(os.Stderr, e)
+			os.Exit(2)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "semantic-replay" {
 		if err := semanticReplay(os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -46,6 +54,9 @@ func main() {
 	}
 	flags := flag.NewFlagSet("amr-core", flag.ExitOnError)
 	lab := flags.Bool("lab", false, "acknowledge experimental loopback-only milestone")
+	runtimeMode := flags.Bool("runtime", false, "enable M3 durable runtime with production auth contracts (still loopback only)")
+	authFile := flags.String("auth-config", "", "optional protected local auth JSON, re-read on explicit hot reload")
+	ledgerPath := flags.String("ledger", "", "dedicated Go ledger path; never share a live Node ledger")
 	nativeAnalysis := flags.Bool("native-analysis", false, "compute L1 and capacity in Go with a startup policy snapshot")
 	nativeSemantics := flags.Bool("native-semantics", false, "enable native semantic review against explicit local endpoints")
 	smallURL := flags.String("semantic-small", "", "local http-json classifier endpoint")
@@ -74,12 +85,21 @@ func main() {
 			os.Exit(2)
 		}
 	}
-	g, err := gateway.New(gateway.Options{NativeAnalysis: *nativeAnalysis, NativeSemantics: *nativeSemantics, AssessorURL: *assessor, UpstreamURL: *upstream,
+	options := gateway.Options{NativeAnalysis: *nativeAnalysis, NativeSemantics: *nativeSemantics, AssessorURL: *assessor, UpstreamURL: *upstream,
 		Tenants: tenants, ScopeURL: *scopeURL, ScopeTTL: 60 * time.Second, ScopeTimeout: 3 * time.Second,
 		SemanticBucketSecret: []byte(os.Getenv("AMR_GO_SEMANTIC_BUCKET_SECRET")),
 		SemanticOptions:      semantic.Options{SmallURL: *smallURL, LargeURL: *largeURL, SmallToken: os.Getenv("AMR_GO_SEMANTIC_SMALL_TOKEN"), LargeToken: os.Getenv("AMR_GO_SEMANTIC_LARGE_TOKEN"), MaxConcurrent: 8, MaxLargeCalls: *largeCalls, MaxLargeTokens: *largeTokens},
 		AccessToken:          os.Getenv("AMR_GO_ACCESS_TOKEN"), AssessorToken: os.Getenv("AMR_GO_ASSESSOR_TOKEN"), UpstreamToken: os.Getenv("AMR_GO_UPSTREAM_TOKEN"),
-		AssessmentTimeout: 3 * time.Second, RequestTimeout: *timeout, MaxRequests: 256})
+		AssessmentTimeout: 3 * time.Second, RequestTimeout: *timeout, MaxRequests: 256}
+	var g interface {
+		http.Handler
+		Close()
+	}
+	if *runtimeMode {
+		g, err = gateway.NewManaged(gateway.ManagedOptions{Gateway: options, AuthFile: *authFile, LedgerPath: *ledgerPath, Auth: auth.Config{Mode: os.Getenv("ROUTER_KEY_MODE"), AccessToken: os.Getenv("ROUTER_ACCESS_KEY"), UpstreamToken: firstNonempty(os.Getenv("UPSTREAM_API_KEY"), os.Getenv("MAAS_API_KEY")), AdminToken: os.Getenv("AMR_GO_ADMIN_TOKEN")}})
+	} else {
+		g, err = gateway.New(options)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
@@ -91,21 +111,39 @@ func main() {
 		os.Exit(1)
 	}
 	server := &http.Server{Handler: g, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16384}
+	drained := make(chan struct{})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
 		<-ctx.Done()
+		defer close(drained)
 		drain, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if server.Shutdown(drain) != nil {
 			_ = server.Close()
 		}
 	}()
-	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"listen": listener.Addr().String(), "milestone": "m2b", "productionReady": false})
+	milestone := "m2b"
+	if *runtimeMode {
+		milestone = "m3"
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"listen": listener.Addr().String(), "milestone": milestone, "productionReady": false})
 	if err = server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, "laboratory server failed")
 		os.Exit(1)
 	}
+	if ctx.Err() != nil {
+		<-drained
+	}
+}
+
+func firstNonempty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func semanticReplay(reader io.Reader, writer io.Writer) error {

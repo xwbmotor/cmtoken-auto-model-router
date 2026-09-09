@@ -16,10 +16,15 @@ type completionBody struct {
 	output                      bool
 	pending                     []byte
 	data                        []byte
+	usage                       *tokenUsage
+	onRead                      func()
 }
 
 func (b *completionBody) Read(p []byte) (int, error) {
 	n, e := b.ReadCloser.Read(p)
+	if n > 0 && b.onRead != nil {
+		b.onRead()
+	}
 	if b.stream {
 		if !b.overflow {
 			b.pending = append(b.pending, p[:n]...)
@@ -31,6 +36,11 @@ func (b *completionBody) Read(p []byte) (int, error) {
 				line := strings.TrimSuffix(string(b.pending[:i]), "\r")
 				if strings.HasPrefix(line, "data:") && strings.TrimSpace(strings.TrimPrefix(line, "data:")) == "[DONE]" {
 					b.done = true
+				}
+				if strings.HasPrefix(line, "data:") {
+					if u := parseUsage([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:")))); u != nil {
+						b.usage = u
+					}
 				}
 				if strings.HasPrefix(line, "data:") && hasOutput([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:")))) {
 					b.output = true
@@ -52,6 +62,9 @@ func (b *completionBody) Read(p []byte) (int, error) {
 	}
 	if e == io.EOF {
 		b.eof = true
+		if !b.stream && !b.overflow {
+			b.usage = parseUsage(b.data)
+		}
 	}
 	return n, e
 }

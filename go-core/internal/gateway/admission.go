@@ -31,6 +31,44 @@ func (a *Admission) Snapshot() map[string]int {
 func (a *Admission) Select(in decision.Input) (decision.Decision, func(), error) {
 	return a.SelectSession(in, "")
 }
+
+// AcquireModel rechecks a pinned fallback against current capacity and health.
+// It cannot widen the original qualified fallback list supplied by the caller.
+func (a *Admission) AcquireModel(in decision.Input, model string) (func(), bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	in.Runtime.Inflight = a.active
+	d, e := decision.Decide(in)
+	if e != nil {
+		return nil, false
+	}
+	allowed := d.SelectedModel == model
+	for _, id := range d.FallbackOrder {
+		if id == model {
+			allowed = true
+		}
+	}
+	if !allowed {
+		return nil, false
+	}
+	for _, m := range in.Models {
+		if m.ID == model && in.Policy.LoadEnabled && m.Capacity > 0 && a.active[model] >= m.Capacity {
+			return nil, false
+		}
+	}
+	a.active[model]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.active[model]--
+			if a.active[model] == 0 {
+				delete(a.active, model)
+			}
+		})
+	}, true
+}
 func (a *Admission) SelectSession(in decision.Input, key string) (decision.Decision, func(), error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

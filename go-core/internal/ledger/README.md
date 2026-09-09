@@ -1,0 +1,20 @@
+# Durable attempt ledger
+
+Amounts use signed int64 microyuan (1 yuan = 1,000,000 microyuan). The caller calculates prices and captures its configuration version before reserving. This package never receives API keys, prompts, or response bodies. Source is `answer`, `probe`, or `classifier`.
+
+- `Open(path, Options{TimeZone, Now})`: opens an append-only checksummed versioned journal with an exclusive OS file lock. Locks release on process exit; concurrent writers fail closed. Use a dedicated local persistent disk, not NFS/SMB or multiple replicas with separate copies. Do not replace/rotate/unlink the file while it is open.
+- `Reserve(attemptID, *estimateMicros, dailyLimitMicros, source)`: fsyncs before success. Positive limits atomically guard total pending + actual + estimated; zero/negative limits disable the guard. Nil price under an enforced budget fails closed. IDs must be globally unique per attempt across restarts. Identical reserves are idempotent even after settlement; they are not permission to resend an upstream attempt.
+- `Settle(attemptID, *actualMicros, fromUsage)`: actual usage replaces the reserve; missing usage moves the reserve to estimated spending. An actual amount is recorded even for an initially unpriced attempt. Identical settlements are idempotent; conflicting settlements fail. Actual cost may exceed the original estimate and daily budget: recording incurred cost must remain possible.
+- `Release(attemptID)`: use only when generation definitely never started. Network failures/timeouts with uncertain upstream execution must settle estimated, not release.
+- `Snapshot()`: amounts and per-source totals belong to the settlement day; unresolved reservations carry across days and restarts. `Unpriced` counts reservations made on the current day with unknown price, including subsequently completed or released ones.
+- `Close()`: releases the writer lock. Failed writes/syncs poison the active writer, requiring close and reopen before further mutations. Callers must fail closed on every persistence error and must not start a new upstream attempt.
+
+Crash recovery retains every fully committed reservation. Only an unterminated final record is discarded; a corrupt newline-terminated record, checksum mismatch, or invalid sequence prevents opening. A reservation whose settlement was lost remains pending conservatively. Operators must reconcile unresolved attempts against upstream evidence; there is no automatic expiration or refund. Budget pressure is conservative, not an exact provider invoice or a guarantee against actual usage exceeding estimates.
+
+The WAL and completed-ID map grow with attempts; there is no retention/compaction in this milestone. Plan capacity and backups. This format does not import the Node JSON ledger automatically; use the explicit offline opening-balance API below with verified inputs so existing daily spending is not reset. OS permissions are best effort on Windows; deploy under a dedicated service identity with private directory ACLs.
+
+## Explicit offline migration API
+
+`ImportOpeningBalance(sourceID, date string, actual, estimated, pending int64) error` accepts the lowercase SHA256 digest of a frozen source ledger and integer microyuan totals. It imports exactly once into an empty WAL. Repeating the identical tuple remains idempotent after restart and after subsequent business records; changing any field is rejected. Date must equal the ledger's current accounting date. Stop the Node writer and verify date/totals before invoking this helper. It does not read source files or perform automatic production migration.
+
+Map Node `settledActualSpendYuan` to actual, `settledEstimatedSpendYuan` to estimated, and `estimatedSpendYuan` to pending. All imported values are attributed to `legacy`; old pending goes into estimated settled spending because Node has no durable attempt identity and cannot safely be released. Reject negative, malformed, stale-day or overflowing inputs. Keep the frozen source file as migration evidence. Do not run a second independent ledger against the same budget after migration.

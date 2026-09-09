@@ -3,9 +3,10 @@
 import { createServer } from 'node:http';
 import { timingSafeEqual, randomInt } from 'node:crypto';
 import { resolve } from 'node:path';
-import { loadConfig } from '../../src/config.mjs';
+import { loadConfig, getConfigRevision } from '../../src/config.mjs';
 import { decisionInput } from './contract.mjs';
 import { semanticPolicy } from './semantic-policy.mjs';
+import { runtimeBundle } from './runtime-policy.mjs';
 
 const arg = name => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
 if (!process.argv.includes('--lab') || !arg('--config')) throw new Error('Requires --lab --config <explicit path>');
@@ -15,6 +16,7 @@ process.env.CONFIG_PATH = resolve(arg('--config'));
 const config = await loadConfig();
 // Active L2/L3 selection is deliberately not approximated by this rule-only adapter.
 if (config.semanticRouter?.enabled && config.semanticRouter.mode === 'active' && !process.argv.includes('--native-semantics')) throw new Error('Active semantic adoption requires --native-semantics and Go native review');
+const snapshots = new Map([[getConfigRevision(config), config]]);
 const port = Number(arg('--port') ?? 8789);
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port');
 const authorized = req => {
@@ -24,10 +26,24 @@ const authorized = req => {
 const server = createServer(async (req, res) => {
   const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)); };
   if (!authorized(req)) return send(401, { error: 'unauthorized' });
+  if (req.method === 'GET' && req.url === '/runtime-config') {
+    try {
+      const next = await loadConfig();
+      const bundle = runtimeBundle(next);
+      // Retain pinned revisions, never evict an in-flight request's configuration.
+      if (!snapshots.has(bundle.revision) && snapshots.size >= 64) return send(503, { error: 'snapshot_capacity_exhausted' });
+      snapshots.set(bundle.revision, next);
+      return send(200, bundle);
+    } catch { return send(400, { error: 'invalid_runtime_configuration' }); }
+  }
+  const revision = req.headers['x-amr-config-revision'];
+  const pinned = revision ? snapshots.get(revision) : config;
+  if (!pinned) return send(409, { error: 'configuration_revision_unavailable' });
+  if (revision) res.setHeader('X-AMR-Config-Revision', revision);
   if (req.method === 'GET' && req.url === '/analysis-config') return send(200, { semanticRequired: config.semanticRouter?.enabled === true && config.semanticRouter.mode === 'active', taskRules: config.taskRules, budget: { defaultEstimatedOutputTokens: config.budget?.defaultEstimatedOutputTokens } });
   if (req.method === 'GET' && req.url === '/semantic-config') return send(200, semanticPolicy(config));
   if (req.method !== 'POST' || req.url !== '/assess') return send(404, { error: 'not_found' });
-  if (config.semanticRouter?.enabled && config.semanticRouter.mode === 'active' && req.headers['x-amr-native-semantics'] !== '1') return send(400, { error: 'native_semantics_required' });
+  if (pinned.semanticRouter?.enabled && pinned.semanticRouter.mode === 'active' && req.headers['x-amr-native-semantics'] !== '1') return send(400, { error: 'native_semantics_required' });
   let bytes = 0; const chunks = [];
   try {
     for await (const chunk of req) {
@@ -41,7 +57,7 @@ const server = createServer(async (req, res) => {
     const nativeAnalysis = nativeTransport ? payload.analysis : undefined;
     const body = nativeAnalysis ? payload.request : payload;
     if (!Array.isArray(body?.messages) || !body.messages.length || body.messages.some(m => !m || typeof m.role !== 'string')) return send(400, { error: 'invalid_messages' });
-    const input = decisionInput(body, config, { trafficBucket: randomInt(1000000) / 10000, nativeAnalysis });
+    const input = decisionInput(body, pinned, { trafficBucket: randomInt(1000000) / 10000, nativeAnalysis });
     send(200, input);
   } catch { send(400, { error: 'invalid_assessment_request' }); }
 });

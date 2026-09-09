@@ -31,6 +31,7 @@ try {
     Invoke-Checked 'node' @('compat/verify-semantic.mjs', '--binary', $binary) ''
     Invoke-Checked 'node' @('compat/demo.mjs', '--binary', $binary) ''
     Invoke-Checked 'node' @('compat/demo-semantic.mjs', '--binary', $binary) ''
+    Invoke-Checked 'node' @('compat/demo-runtime.mjs', '--binary', $binary) ''
     Write-Output 'Local checks passed. Linux CI additionally runs go test -race; production migration remains disabled.'
 } finally {
     $env:GOCACHE = $previousGoCache
