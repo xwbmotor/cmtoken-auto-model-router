@@ -1,7 +1,8 @@
 // Docker/cgroup v2 capacity experiment. Creates and removes only its own labeled
 // containers. The staging tree contains source and synthetic config, never .env.
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { validateConfig } from '../../src/config.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync, chmodSync } from 'node:fs';
 import { resolve, dirname, sep } from 'node:path';
@@ -32,6 +33,8 @@ const model = 'm4-fixture-model';
 function config(role) {
   const c = JSON.parse(readFileSync(resolve(root, 'config/router.json'), 'utf8')), dir = `/lab/${role}`;
   c.upstreamBaseUrl = 'http://127.0.0.1:8790/v1'; c.semanticRouter.enabled = false;
+  c.semanticRouter.model = model;
+  if (c.semanticRouter.openaiChat) c.semanticRouter.openaiChat.model = model;
   c.judge = { ...c.judge, enabled: false, taskCheckEnabled: false, guardStatePath: `${dir}/judge.json` };
   c.rateLimit = { ...c.rateLimit, enabled: false }; c.feedbackLog = { enabled: false, dirPath: `${dir}/feedback` };
   c.decisionLog = { ...c.decisionLog, enabled: true, dirPath: `${dir}/decisions`, includePrompt: false };
@@ -46,7 +49,7 @@ function config(role) {
   m.benchmarkScores = null; m.minimumCompletionTokensForReliableAnswer = 0; m.contextWindow = 131072;
   m.pricingYuanPerMillionTokens = { input: 1, output: 2 };
   c.budget = { ...c.budget, enabled: true, dailyBudgetYuan: 10000, cacheHitRatio: 0, ledgerPath: `${dir}/node-ledger.json` };
-  return c;
+  validateConfig(c); return c;
 }
 const controlHeaders = { authorization: `Bearer ${credentials.M4_CONTROL_TOKEN}` };
 async function control(path) {
@@ -91,14 +94,14 @@ async function request(target, shape, run, stream = false, due = performance.now
 }
 async function measure(target, id, action) {
   const stateBefore = await control('/state'), before = target === 'direct' ? null : await control(`/resources/${target}`), resourceSamples = [];
-  let sampling = false;
+  let sampling;
   const timer = setInterval(async () => {
-    if (sampling || target === 'direct') return; sampling = true;
-    try { resourceSamples.push(await control(`/resources/${target}`)); } catch {} finally { sampling = false; }
+    if (sampling || target === 'direct') return;
+    sampling = control(`/resources/${target}`).then(value => resourceSamples.push(value)).catch(() => {}).finally(() => { sampling = null; });
   }, 1000);
   const start = Date.now(), from = requests.length;
   let offered;
-  try { offered = await action(); } finally { clearInterval(timer); }
+  try { offered = await action(); } finally { clearInterval(timer); await sampling; }
   const end = Date.now(), samples = requests.slice(from), good = samples.filter(s => s.complete);
   const stateAfter = await control('/state'), after = before ? await control(`/resources/${target}`) : null;
   assert.equal(stateAfter.duplicates, stateBefore.duplicates, 'duplicate upstream generation');
@@ -117,6 +120,8 @@ async function measure(target, id, action) {
   return value;
 }
 try {
+  // Validate synthetic model references before allocating any container.
+  config('node'); config('go');
   engine = JSON.parse(docker(['info', '--format', '{"os":{{json .OSType}},"version":{{json .ServerVersion}},"cpus":{{.NCPU}},"memoryBytes":{{.MemTotal}}}']));
   assert.equal(engine.os, 'linux', 'Linux Docker engine required');
   try { docker(['image', 'inspect', image, '--format', '{{.Id}}']); } catch { docker(['pull', image]); }
@@ -129,17 +134,19 @@ try {
   sourceHash = sha(readFileSync(resolve(root, 'src/server.mjs')));
   for (const role of ['node', 'go']) { mkdirSync(resolve(stage, role)); writeFileSync(resolve(stage, role, 'router.json'), JSON.stringify(config(role))); }
   writeFileSync(resolve(stage, 'go/auth.json'), JSON.stringify({ mode: 'strict', accessToken: credentials.M4_ACCESS, adminToken: credentials.M4_CORE_ADMIN, upstreamToken: credentials.M4_UPSTREAM }));
-  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, GOMAXPROCS: cpus, NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
+  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, GOMAXPROCS: Math.max(1, Math.ceil(cpus)), NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
   const fixture = `${runKey}-fixture`;
   const mounts = ['--mount', `type=bind,source=${resolve(stage, 'app')},target=/app,readonly`, '--mount', `type=bind,source=${stage},target=/lab`, '--env-file', envFile];
+  containers.push(fixture);
   docker(['run', '-d', '--name', fixture, '--label', `amr.capacity=${runKey}`, '--workdir', '/app', ...mounts,
-    ...[8785, 8792, 8784, 8790, 8799].flatMap(port => ['-p', `127.0.0.1::${port}`]), imageEvidence.id, 'node', 'go-core/compat/capacity-fixture.mjs']); containers.push(fixture);
+    ...[8785, 8792, 8784, 8790, 8799].flatMap(port => ['-p', `127.0.0.1::${port}`]), imageEvidence.id, 'node', 'go-core/compat/capacity-fixture.mjs']);
   const portMap = JSON.parse(docker(['inspect', fixture, '--format', '{{json .NetworkSettings.Ports}}']));
   hostPorts = Object.fromEntries(Object.entries({ node: 8785, go: 8792, admin: 8784, direct: 8790, control: 8799 }).map(([name, port]) => [name, Number(portMap[`${port}/tcp`][0].HostPort)]));
   quotas = {};
   for (const role of ['node', 'go']) {
     const name = `${runKey}-${role}`;
-    docker(['run', '-d', '--name', name, '--label', `amr.capacity=${runKey}`, '--workdir', '/app', '--network', `container:${fixture}`, '--cpus', String(cpus), '--memory', `${memoryMiB}m`, '--memory-swap', `${memoryMiB}m`, '--pids-limit', '128', ...mounts, '-e', `M4_ROLE=${role}`, imageEvidence.id, 'node', 'go-core/compat/capacity-group.mjs']); containers.push(name);
+    containers.push(name);
+    docker(['run', '-d', '--name', name, '--label', `amr.capacity=${runKey}`, '--workdir', '/app', '--network', `container:${fixture}`, '--cpus', String(cpus), '--memory', `${memoryMiB}m`, '--memory-swap', `${memoryMiB}m`, '--pids-limit', '128', ...mounts, '-e', `M4_ROLE=${role}`, imageEvidence.id, 'node', 'go-core/compat/capacity-group.mjs']);
     quotas[role] = JSON.parse(docker(['inspect', name, '--format', '{"nanoCpus":{{.HostConfig.NanoCpus}},"memory":{{.HostConfig.Memory}},"memorySwap":{{.HostConfig.MemorySwap}},"pidsLimit":{{.HostConfig.PidsLimit}}}']));
     assert.equal(quotas[role].nanoCpus, cpus * 1e9); assert.equal(quotas[role].memory, memoryMiB * 1048576); assert.equal(quotas[role].memorySwap, quotas[role].memory);
   }
@@ -178,8 +185,14 @@ try {
   const finalState = await control('/state'); assert.equal(finalState.active, 0); assert.equal(finalState.duplicates, 0); assert.equal(finalState.fixtureErrors, 0);
 } catch (error) { failure = error.message; process.exitCode = 1; }
 finally {
+  const diagnostics = failure ? containers.map(name => {
+    const result = spawnSync('docker', ['logs', '--tail', '60', name], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    let log = (result.stdout || '') + (result.stderr || '');
+    for (const value of Object.values(credentials)) log = log.split(value).join('[redacted]');
+    return { name, log };
+  }) : undefined;
   const report = { schemaVersion: 1, experiment: 'm4-cgroup-open-loop', at: new Date().toISOString(), runKey, productionReady: false, formalAcceptance: 'not evaluated: production workload and SLO not supplied',
-    failure, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB }, engine, image: imageEvidence, quotas,
+    failure, diagnostics, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB }, engine, image: imageEvidence, quotas,
     groups: { node: ['Node gateway + resource endpoint'], go: ['Go runtime', 'Node adapter', 'real Node administration + resource endpoint'], outsideQuota: ['common TCP ingress', 'mock upstream', 'load generator'] },
     corpus: { model, shapes, synthetic: true, semanticReview: false, inputMix: 'equal round-robin', mockDelayMs: 10 },
     binarySha256: sha(readFileSync(binary)), nodeSourceSha256: sourceHash, preflight, runs, requests,
