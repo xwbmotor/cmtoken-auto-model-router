@@ -27,6 +27,9 @@ func decimal(x float64, digits int) float64 {
 	return math.Copysign(value, x)
 }
 
+// RoundNumber is the shared Number(x.toFixed(digits)) rule for bounded features.
+func RoundNumber(x float64, digits int) float64 { return decimal(x, digits) }
+
 func clamp(x, low, high float64) float64 { return math.Max(low, math.Min(high, x)) }
 
 func (in Input) Validate() error {

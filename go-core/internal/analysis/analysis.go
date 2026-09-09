@@ -13,7 +13,8 @@ import (
 )
 
 type Config struct {
-	TaskRules struct {
+	SemanticRequired bool `json:"semanticRequired"`
+	TaskRules        struct {
 		SimpleMaxComplexity  float64             `json:"simpleMaxComplexity"`
 		ComplexMinComplexity float64             `json:"complexMinComplexity"`
 		Patterns             map[string][]string `json:"patterns"`

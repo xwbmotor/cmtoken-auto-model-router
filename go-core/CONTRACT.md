@@ -1,4 +1,6 @@
-# 决策合同 v1（M2a 扩展）
+# 决策合同 v1（M2a/M2b 扩展）
+
+M2b 在合同之外增加原生语义与资格查询流程，见 [语义与租户接口](SEMANTICS.md)。决策输入格式不变：再次分类后保留原始 `runtime`（含流量桶与资格集合），再执行同一 Go 内核。实时资格缓存是与 Node 一致的候选提示；未知集合仍为 `null`，不得把它描述为已完成生产账户授权。
 
 M2a 增加 `policy.allowExplicitModel`、`policy.sessionTtlMs` 与 `policy.sessionMaxGap`，缺省均为 Go 零值（关闭显式调用、关闭会话）；Node 适配器传入已解析的实际配置。显式调用绕过 Auto 评分与质量门槛，但仍检查模型启用、资格快照、上下文、能力、输出预算与本进程并发。
 

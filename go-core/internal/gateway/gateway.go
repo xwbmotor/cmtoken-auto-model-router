@@ -16,48 +16,62 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/analysis"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/decision"
+	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/labnet"
+	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/scope"
+	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/semantic"
 )
 
 const MaxBodyBytes = 2 << 20
 
 type Options struct {
-	NativeAnalysis    bool
-	AssessorURL       string
-	UpstreamURL       string
-	AccessToken       string
-	AssessorToken     string
-	UpstreamToken     string
-	AssessmentTimeout time.Duration
-	RequestTimeout    time.Duration
-	MaxRequests       int
+	NativeSemantics      bool
+	SemanticOptions      semantic.Options
+	SemanticBucketSecret []byte
+	ScopeURL             string
+	ScopeTTL             time.Duration
+	ScopeTimeout         time.Duration
+	Tenants              []Tenant
+	NativeAnalysis       bool
+	AssessorURL          string
+	UpstreamURL          string
+	AccessToken          string
+	AssessorToken        string
+	UpstreamToken        string
+	AssessmentTimeout    time.Duration
+	RequestTimeout       time.Duration
+	MaxRequests          int
 }
 
 type Gateway struct {
-	sessionSecret []byte
-	analyzer      *analysis.Analyzer
-	options       Options
-	assessor      *url.URL
-	upstream      *url.URL
-	client        *http.Client
-	transport     *http.Transport
-	admission     *Admission
-	requests      chan struct{}
+	semantic          *semantic.Client
+	tenantScope       *scope.Cache
+	background        context.Context
+	cancelBackground  context.CancelFunc
+	backgroundMu      sync.Mutex
+	backgroundClosing bool
+	backgroundWorkers sync.WaitGroup
+	backgroundSlots   chan struct{}
+	closeOnce         sync.Once
+	reviewsMu         sync.Mutex
+	reviews           []Review
+	sessionSecret     []byte
+	analyzer          *analysis.Analyzer
+	options           Options
+	assessor          *url.URL
+	upstream          *url.URL
+	client            *http.Client
+	transport         *http.Transport
+	admission         *Admission
+	requests          chan struct{}
 }
 
 func LoopbackURL(raw string) (*url.URL, error) {
-	u, err := url.Parse(raw)
-	if err != nil || u == nil {
-		return nil, errors.New("invalid endpoint")
-	}
-	ip := net.ParseIP(u.Hostname())
-	if (u.Scheme != "http" && u.Scheme != "https") || ip == nil || !ip.IsLoopback() || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Port() == "" {
-		return nil, errors.New("laboratory endpoints must use literal loopback IPs and explicit ports, without credentials/query/fragment")
-	}
-	return u, nil
+	return labnet.URL(raw)
 }
 
 func New(o Options) (*Gateway, error) {
@@ -75,6 +89,21 @@ func New(o Options) (*Gateway, error) {
 	if o.RequestTimeout <= 0 || o.AssessmentTimeout <= 0 || o.MaxRequests < 1 || o.MaxRequests > 10000 {
 		return nil, errors.New("positive timeouts and bounded concurrency are required")
 	}
+	if o.NativeSemantics && !o.NativeAnalysis {
+		return nil, errors.New("native semantics requires native analysis")
+	}
+	if len(o.Tenants) > 256 {
+		return nil, errors.New("too many laboratory tenants")
+	}
+	seen := map[string]bool{o.AccessToken: true}
+	for _, tenant := range o.Tenants {
+		if len(tenant.AccessToken) < 16 || len(tenant.UpstreamToken) < 16 || seen[tenant.AccessToken] {
+			return nil, errors.New("invalid or duplicate laboratory tenant credentials")
+		}
+		seen[tenant.AccessToken] = true
+	}
+	o.Tenants = append([]Tenant{}, o.Tenants...)
+	o.SemanticBucketSecret = append([]byte{}, o.SemanticBucketSecret...)
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.Proxy = nil // Laboratory loopback traffic must never use an environment proxy.
 	t.DialContext = (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}).DialContext
@@ -84,6 +113,8 @@ func New(o Options) (*Gateway, error) {
 	g := &Gateway{options: o, assessor: assessor, upstream: upstream, transport: t,
 		client:    &http.Client{Transport: t, Timeout: o.AssessmentTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		admission: NewAdmission(), requests: make(chan struct{}, o.MaxRequests)}
+	g.background, g.cancelBackground = context.WithCancel(context.Background())
+	g.backgroundSlots = make(chan struct{}, 8)
 	g.sessionSecret = make([]byte, 32)
 	if _, e := rand.Read(g.sessionSecret); e != nil {
 		g.Close()
@@ -107,15 +138,64 @@ func New(o Options) (*Gateway, error) {
 			return nil, errors.New("invalid analysis configuration")
 		}
 		g.analyzer, e = analysis.New(c)
+		if c.SemanticRequired && !o.NativeSemantics {
+			g.Close()
+			return nil, errors.New("active semantic configuration requires --native-semantics")
+		}
 		if e != nil {
 			g.Close()
 			return nil, e
 		}
 	}
+	if o.NativeSemantics {
+		var p semantic.Policy
+		if e := g.loadPolicy("/semantic-config", &p); e != nil {
+			g.Close()
+			return nil, e
+		}
+		if p.Enabled && p.Mode == "active" && len(o.SemanticBucketSecret) < 32 {
+			g.Close()
+			return nil, errors.New("active semantic rollout requires a separate stable secret of at least 32 bytes")
+		}
+		if len(g.options.SemanticBucketSecret) == 0 {
+			g.options.SemanticBucketSecret = append([]byte{}, g.sessionSecret...)
+		}
+		opts := o.SemanticOptions
+		opts.Policy = p
+		g.semantic, err = semantic.New(opts)
+		if err != nil {
+			g.Close()
+			return nil, err
+		}
+	}
+	if o.ScopeURL != "" {
+		g.tenantScope, err = scope.New(o.ScopeURL, o.ScopeTTL, o.ScopeTimeout)
+		if err != nil {
+			g.Close()
+			return nil, err
+		}
+	}
 	return g, nil
 }
 
-func (g *Gateway) Close() { g.transport.CloseIdleConnections() }
+func (g *Gateway) Close() {
+	g.closeOnce.Do(func() {
+		g.backgroundMu.Lock()
+		g.backgroundClosing = true
+		if g.cancelBackground != nil {
+			g.cancelBackground()
+		}
+		g.backgroundMu.Unlock()
+		g.backgroundWorkers.Wait()
+		if g.semantic != nil {
+			g.semantic.Close()
+		}
+		if g.tenantScope != nil {
+			g.tenantScope.Close()
+		}
+		g.transport.CloseIdleConnections()
+	})
+}
 
 func writeError(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -137,14 +217,23 @@ func decodeStrict(r io.Reader, target any) error {
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("X-AMR-Experimental", "go-core-m1")
+	w.Header().Set("X-AMR-Experimental", "go-core-m2b")
 	if r.Method == "GET" && r.URL.Path == "/health" {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "runtime": "go", "milestone": "m2a", "productionReady": false})
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "runtime": "go", "milestone": "m2b", "productionReady": false})
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.options.AccessToken)) != 1 {
+	upstreamToken, authorized := g.authorize(r.Header.Get("Authorization"))
+	if !authorized {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if r.Method == "GET" && r.URL.Path == "/internal/v1/runtime" && r.URL.RawQuery == "" {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.options.AccessToken)) != 1 {
+			writeError(w, 403, "admin_required")
+			return
+		}
+		g.runtimeStatus(w)
 		return
 	}
 	if r.Method != "POST" || (r.URL.Path != "/v1/chat/completions" && r.URL.Path != "/internal/v1/decide") || r.URL.RawQuery != "" {
@@ -209,39 +298,22 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	assessmentData := data
+	var native *analysis.Result
 	if g.analyzer != nil {
 		result, e := g.analyzer.Analyze(data)
 		if e != nil {
 			writeError(w, 400, "invalid_analysis_request")
 			return
 		}
-		assessmentData, _ = json.Marshal(map[string]any{"nativeAnalysisVersion": 1, "request": json.RawMessage(data), "analysis": result})
+		native = &result
 	}
-	assessment, err := http.NewRequestWithContext(ctx, "POST", g.assessor.String(), bytes.NewReader(assessmentData))
+	input, err := g.assess(ctx, data, native)
 	if err != nil {
-		writeError(w, 500, "assessment_request_failed")
-		return
-	}
-	assessment.Header.Set("Content-Type", "application/json")
-	if g.analyzer != nil {
-		assessment.Header.Set("X-AMR-Native-Analysis", "1")
-	}
-	assessment.Header.Set("Authorization", "Bearer "+g.options.AssessorToken)
-	response, err := g.client.Do(assessment)
-	if err != nil {
-		writeError(w, 502, "assessment_unavailable")
-		return
-	}
-	inputBytes, err := io.ReadAll(io.LimitReader(response.Body, MaxBodyBytes+1))
-	response.Body.Close()
-	if response.StatusCode != 200 || err != nil || len(inputBytes) > MaxBodyBytes {
-		writeError(w, 502, "assessment_failed")
-		return
-	}
-	var input decision.Input
-	if decodeStrict(bytes.NewReader(inputBytes), &input) != nil {
-		writeError(w, 502, "invalid_assessment_contract")
+		if ctx.Err() == context.DeadlineExceeded {
+			writeError(w, 504, "request_timeout")
+			return
+		}
+		writeError(w, 502, err.Error())
 		return
 	}
 	// The private adapter must not change the client's Auto identity.
@@ -252,6 +324,28 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 502, "assessment_identity_mismatch")
 		return
 	}
+	if g.tenantScope != nil {
+		input = applyScope(input, g.tenantScope.Resolve(ctx, upstreamToken))
+	}
+	if ctx.Err() != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			writeError(w, 504, "request_timeout")
+		}
+		return
+	}
+	if g.semantic != nil && native != nil && requested == input.Policy.AutoModelID {
+		input, err = g.reviewInput(ctx, r, w, data, *native, input)
+		if err != nil {
+			decisionError(w, err)
+			return
+		}
+	}
+	if ctx.Err() != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			writeError(w, 504, "request_timeout")
+		}
+		return
+	}
 	sessionKey := SessionKey(r.Header.Get("X-Session-ID"), r.Header.Get("Authorization"), g.upstream.String(), g.sessionSecret)
 	d, release, err := g.admission.SelectSession(input, sessionKey)
 	if err != nil {
@@ -260,6 +354,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	if ctx.Err() != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			writeError(w, 504, "request_timeout")
+		}
 		return
 	}
 	body["model"], _ = json.Marshal(d.SelectedModel)
@@ -282,8 +379,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.Out.Host = g.upstream.Host
 			p.Out.Header = make(http.Header) // Never forward caller cookies or Authorization.
 			p.Out.Header.Set("Content-Type", "application/json")
-			if g.options.UpstreamToken != "" {
-				p.Out.Header.Set("Authorization", "Bearer "+g.options.UpstreamToken)
+			if upstreamToken != "" {
+				p.Out.Header.Set("Authorization", "Bearer "+upstreamToken)
 			}
 			p.Out.Body = io.NopCloser(bytes.NewReader(payload))
 			p.Out.ContentLength = int64(len(payload))

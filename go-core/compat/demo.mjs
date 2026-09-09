@@ -87,7 +87,7 @@ try {
   const explicit = await fetch(base+'/v1/chat/completions', { method: 'POST', headers, body: JSON.stringify({ ...body, model: config.models[0].id }) });
   assert.equal(explicit.status, 200); assert.equal((await explicit.json()).model, config.models[0].id);
   assert.equal(observed.length, 3, 'unexpected upstream call or retry');
-  const report = { milestone: 'm2a', productionReady: false, at: new Date().toISOString(), upstream: 'local mock only',
+  const report = { milestone: 'm2b', productionReady: false, at: new Date().toISOString(), upstream: 'local mock only',
     services: ['Go native L1, capacity, gateway and decision kernel', 'Node configuration adapter', 'mock OpenAI upstream'],
     nonstream: true, sse: true, sseFirstEventBeforeCompletion: true, donePreserved: true, unauthorizedRejected: true,
     explicitModelSupported: true, nativeAnalysis: true, forgedAnalysisIgnored: true, upstreamCalls: observed.length, selectedModelMatchesNode: true, credentialIsolation: true,

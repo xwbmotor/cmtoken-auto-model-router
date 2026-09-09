@@ -40,13 +40,17 @@ jobs:
         run: node go-core/compat/verify.mjs --binary data/go-migration/amr-core
       - name: Compare native request semantics
         run: node go-core/compat/verify-analysis.mjs --binary data/go-migration/amr-core
+      - name: Compare semantic review contract
+        run: node go-core/compat/verify-semantic.mjs --binary data/go-migration/amr-core
       - name: Verify real Go process with local mock upstream
         run: node go-core/compat/demo.mjs --binary data/go-migration/amr-core
+      - name: Verify native semantic review and tenant scopes
+        run: node go-core/compat/demo-semantic.mjs --binary data/go-migration/amr-core
       - name: Preserve verification evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: go-core-m1-evidence
+          name: go-core-migration-evidence
           path: |
             data/go-migration/*.json
             data/go-migration/*.jsonl

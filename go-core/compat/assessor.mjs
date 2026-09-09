@@ -5,6 +5,7 @@ import { timingSafeEqual, randomInt } from 'node:crypto';
 import { resolve } from 'node:path';
 import { loadConfig } from '../../src/config.mjs';
 import { decisionInput } from './contract.mjs';
+import { semanticPolicy } from './semantic-policy.mjs';
 
 const arg = name => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
 if (!process.argv.includes('--lab') || !arg('--config')) throw new Error('Requires --lab --config <explicit path>');
@@ -13,7 +14,7 @@ if (!token || token.length < 16) throw new Error('AMR_GO_ASSESSOR_TOKEN must con
 process.env.CONFIG_PATH = resolve(arg('--config'));
 const config = await loadConfig();
 // Active L2/L3 selection is deliberately not approximated by this rule-only adapter.
-if (config.semanticRouter?.enabled && config.semanticRouter.mode === 'active') throw new Error('Active semantic adoption requires the next migration stage; use an explicit lab configuration');
+if (config.semanticRouter?.enabled && config.semanticRouter.mode === 'active' && !process.argv.includes('--native-semantics')) throw new Error('Active semantic adoption requires --native-semantics and Go native review');
 const port = Number(arg('--port') ?? 8789);
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid port');
 const authorized = req => {
@@ -23,8 +24,10 @@ const authorized = req => {
 const server = createServer(async (req, res) => {
   const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)); };
   if (!authorized(req)) return send(401, { error: 'unauthorized' });
-  if (req.method === 'GET' && req.url === '/analysis-config') return send(200, { taskRules: config.taskRules, budget: { defaultEstimatedOutputTokens: config.budget?.defaultEstimatedOutputTokens } });
+  if (req.method === 'GET' && req.url === '/analysis-config') return send(200, { semanticRequired: config.semanticRouter?.enabled === true && config.semanticRouter.mode === 'active', taskRules: config.taskRules, budget: { defaultEstimatedOutputTokens: config.budget?.defaultEstimatedOutputTokens } });
+  if (req.method === 'GET' && req.url === '/semantic-config') return send(200, semanticPolicy(config));
   if (req.method !== 'POST' || req.url !== '/assess') return send(404, { error: 'not_found' });
+  if (config.semanticRouter?.enabled && config.semanticRouter.mode === 'active' && req.headers['x-amr-native-semantics'] !== '1') return send(400, { error: 'native_semantics_required' });
   let bytes = 0; const chunks = [];
   try {
     for await (const chunk of req) {

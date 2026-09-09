@@ -2,7 +2,7 @@
 
 分支：`codex/go-core-migration`。目标是逐步把核心请求服务迁移到 Go，沿用现有管理台，Python 继续承担模型训练、推理与评测。
 
-当前为 **M2a：Go 原生 L1、容量估算、显式模型调用与本进程会话粘性**。M1 选模与转发已完成，M2 的语义复核与生产租户资格同步仍待衔接，**尚不能替换生产 Node 服务**。
+当前为 **M2b：Go 原生语义复核与按凭据查询模型资格**，包含此前的 L1、容量估算、显式调用与会话粘性。M2 的实验功能链路已连通；生产鉴权集成和 M3 运行账本尚未完成，**不能替换生产 Node 服务**。
 
 ## 已实现的边界
 
@@ -10,6 +10,9 @@
 flowchart LR
     Client[本地测试请求] --> Gateway[Go 接入与转发]
     Gateway --> Analysis[Go L1 与完整容量估算]
+    Gateway --> Scope[Go 按凭据查询模型资格]
+    Analysis --> Semantic[Go L2/L3 复核与采纳]
+    Semantic --> Adapter
     Analysis --> Adapter[Node 配置默认值适配器]
     Adapter --> Features[版本化特征输入]
     Features --> Kernel[Go 评分与选模]
@@ -31,8 +34,10 @@ flowchart LR
 | L1 分类与容量 | Go 原生实现；1153 条 Node 对照验证覆盖置信度、全部信号、完整历史、多模态、工具和 UTF-16 边界 |
 | 显式点名 | 开关允许时支持；校验启用、上下文、能力、思考预算、租户资格快照与并发，不套用 Auto 质量门槛 |
 | 会话粘性 | HMAC 隔离调用凭据/上游/会话，锁内选择与预占；仅复用当前合格候选，完整有效交付后记录，最多 10000 条、最长 24 小时 |
-| L2/Python、L3/MaaS 复核及采纳 | 原服务保持原样；M1 演示不调用，主动采纳配置在适配器启动时拒绝 |
-| 生产鉴权/套餐授权同步、运行健康更新、预算结算、日志、重试、配置热发布 | 待后续迁移，不能把实验服务接入生产流量；当前资格集合仍为受信任合同输入 |
+| L2/Python、L3 复核及采纳 | Go 支持 http-json、openai-chat 和 cascade；稳定分桶、低置信拒绝、降级与后台观察已验证。L3 只调用本地模拟端点 |
+| 动态模型资格 | Go 按映射后的上游凭据查询 `/models`，HMAC 缓存、合并并发查询、过期后台刷新；失败/空集/无交集沿用 Node 全量回退语义，上游负责实际授权 |
+| 复核额度与观测 | 独立进程内调用/token 限额，真实 usage 与估算分开；最近 100 条不含正文和凭据的复核记录，只对实验管理凭据开放 |
+| 生产鉴权集成、运行健康更新、费用结算、持久日志、重试、配置热发布 | 待 M3；本阶段租户凭据映射只用于受限实验，不读取生产账户状态 |
 | 管理台、Python 训练与评测 | 保留现有实现，未声称已与 Go 后端联调完成 |
 
 本地网关强制 `--lab`，监听和出站目标均只能为带端口的字面量 loopback IP；禁止目标重定向。实验超时是总时长，尚不等价于生产 SSE 闲置超时。失败不自动重试。
@@ -65,10 +70,23 @@ go test -race -timeout 90s ./...
 go build -trimpath -o ../data/go-migration/amr-core ./cmd/amr-core
 cd ..
 node go-core/compat/verify.mjs --binary data/go-migration/amr-core
+node go-core/compat/verify-analysis.mjs --binary data/go-migration/amr-core
+node go-core/compat/verify-semantic.mjs --binary data/go-migration/amr-core
 node go-core/compat/demo.mjs --binary data/go-migration/amr-core
+node go-core/compat/demo-semantic.mjs --binary data/go-migration/amr-core
 ```
 
 `demo.mjs` 自动启动真实 Go 原生分析进程、Node 配置适配器和本地模拟上游，使用随机临时令牌与空闲端口；验证非流式、SSE 及时输出、`[DONE]`、显式调用与鉴权隔离，随后清理进程和临时配置。**没有真实模型调用，不读取 `.env`，不使用生产令牌。**
+
+`demo-semantic.mjs` 进一步验证两级复核、低置信/双失败回退、两种租户集合、SSE 和非阻塞后台观察，并逐项对照 Node 分类器请求体与选模结果。`verify-semantic.mjs` 包含 852 个解析、重分类、触发条件和 HMAC 分桶对照。
+
+本地已有 Python 环境与模型时，可运行：
+
+```powershell
+node go-core/compat/demo-python.mjs --binary data/go-migration/amr-core.exe --python .venv/Scripts/python.exe
+```
+
+这会用已有模型启动临时 Python 服务，做 4 个接口对照，不训练模型、不写生产 `serve.log`。实验将采纳线设为 0 以覆盖接口，不能据此认为低置信分类应在线采纳。它不属于依赖本地模型文件的 Linux CI 门禁。
 
 ## 对照验证的含义
 
@@ -89,6 +107,8 @@ GitHub 的 `Go core migration` 工作流独立运行 `go vet`、`go test -race`�
 ## 代码入口
 
 - `internal/decision/`：纯 Go 决策内核及版本化类型。
+- `internal/semantic/`：分类器调用、两级复核、分桶与实验 token 额度。
+- `internal/scope/`：按上游凭据隔离的模型资格缓存。
 - `internal/gateway/`：并发预占、本地 HTTP 转发及传输测试。
 - `cmd/amr-core/`：实验服务入口、JSONL 重放入口。
 - `compat/contract.mjs`：从现有分析和配置导出特征，**不调用 `routeRequest()` 或输出选模结果**。
@@ -96,4 +116,4 @@ GitHub 的 `Go core migration` 工作流独立运行 `go vet`、`go test -race`�
 - `compat/verify.mjs`：独立 Node 基准与 Go 差分验证。
 - `compat/demo.mjs`：无需手动部署服务的进程级验证。
 
-协议与后续迁移验收见 [合同说明](CONTRACT.md)、[迁移路线](../docs/go-core-migration.md)。
+协议与后续迁移验收见 [语义与租户接口](SEMANTICS.md)、[合同说明](CONTRACT.md)、[迁移路线](../docs/go-core-migration.md)。
