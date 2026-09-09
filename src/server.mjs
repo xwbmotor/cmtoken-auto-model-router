@@ -1,4 +1,5 @@
 import { completionBudgetEligible } from './completion-budget.mjs';
+import { createGoCoreAdmin } from './go-core-admin.mjs';
 import { createModelLoadTracker, loadAssessment } from './model-load.mjs';
 import { LatencyObservatory, latencyContext } from './latency-observatory.mjs';
 import { createLatencyProbeRunner } from './latency-probes.mjs';
@@ -63,6 +64,7 @@ import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
 const host = process.env.HOST || '127.0.0.1';
 
 const port = Number(process.env.PORT || 8787);
+const goCoreAdmin = createGoCoreAdmin();
 
 // 长流式 chat 的客户端可能挂 60~120 分钟，必须显式放宽默认 5 秒 keepAlive/headers 超时
 
@@ -3261,6 +3263,18 @@ const server = http.createServer(async (req, res) => {
 
   }
 
+  if (url.pathname === '/admin/api/go-core' || url.pathname === '/admin/api/go-core/reload') {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!goCoreAdmin) return errorJson(res, 404, 'Go 管理接口未启用', 'core_control_disabled');
+    if (url.search || !((req.method === 'GET' && url.pathname === '/admin/api/go-core') || (req.method === 'POST' && url.pathname === '/admin/api/go-core/reload'))) return errorJson(res, 405, '不支持的操作', 'method_not_allowed');
+    try {
+      const result = req.method === 'GET' ? await goCoreAdmin.status() : await goCoreAdmin.reload(req.headers['if-match']);
+      if (result.status !== 200) return errorJson(res, result.status, 'Go 配置操作未成功，请重新查询生效版本', result.error);
+      const { status, ...view } = result;
+      res.setHeader('ETag', view.revision);
+      return json(res, 200, { ...view, savedConfigRevision: getConfigRevision(config), ...(view.configRevision ? { synchronized: view.configRevision === getConfigRevision(config) } : {}) });
+    } catch { return errorJson(res, 502, 'Go 管理接口不可用，请查询状态后再决定是否重试', 'core_control_unavailable'); }
+  }
   if (req.method === 'GET' && url.pathname === '/admin/api/config') { res.setHeader('ETag', getConfigRevision(config)); res.setHeader('Cache-Control', 'no-store'); return json(res, 200, config); }
   // ── P1 模型发现：代理上游 GET /v1/models（30s 缓存），勾选注册用。key 永不出服务端。
   // v0.11.8：流水线向导第一步——管理员现场填端点+key 探测（POST，key 只用于本次请求，不落盘不回显不进日志）

@@ -24,6 +24,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "ledger-export" {
+		if e := exportLedger(os.Args[2:], os.Stdout); e != nil {
+			fmt.Fprintln(os.Stderr, e)
+			os.Exit(2)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "ledger-import" {
 		if e := importLedger(os.Args[2:], os.Stdout); e != nil {
 			fmt.Fprintln(os.Stderr, e)

@@ -1,4 +1,5 @@
 import { reviewPublication } from './change-review.js';
+import { setupGoCorePanel } from './go-core.js';
 let configRevision;
 import { setupWorkspace } from './workspace.js';
 import { setupLatencyPanel } from './latency.js';
@@ -47,6 +48,7 @@ async function api(path, options = {}) {
   return value;
 }
 let toastTimer;
+const goCorePanel = setupGoCorePanel({ api });
 function toast(message, bad = false) {
   if (bad) { $('errorMessage').textContent = message; $('errorNotice').hidden = false; return; }
   const node = $('toast'); clearTimeout(toastTimer); node.textContent = message; node.classList.add('show');
@@ -610,7 +612,7 @@ function renderRecentKeySelect(){ //key 指纹下拉：从最近请求里聚合�
 }
 function renderMetrics(){ const c=metrics.counters; $('total').textContent=c.total; const ts = document.getElementById('totalSince'); if (ts) ts.textContent = c.firstStartedAt ? '累计口径（自 ' + new Date(c.firstStartedAt).toLocaleDateString('zh-CN') + ' 起跨发版持久化）' : ''; $('autoRate').textContent=percent(c.auto,c.total); const selfIds=new Set(config.models.filter(m=>m.ownership==='self_hosted').map(m=>m.id)); const self=Object.entries(c.selected).filter(([id])=>selfIds.has(id)).reduce((s,[,n])=>s+n,0); $('selfRate').textContent=percent(self,c.success); $('semanticRate').textContent=percent(c.semantic?.disagreed||0,c.semantic?.succeeded||0); $('overheadCost').textContent=(metrics.budget?.routingOverheadCostYuan!=null?`${Number(metrics.budget.routingOverheadCostYuan).toFixed(4)}元`:'—'); $('budgetRate').textContent=metrics.budget?.enabled?percentValue(metrics.budget.pressure):'未启用'; $('fallback').textContent=c.fallback; $('errorRate').textContent=percent(c.errors,c.total); document.querySelectorAll('#models tr').forEach(row=>{const m=config.models[Number(row.dataset.index)],h=metrics.health[m.id],cell=row.querySelector('.health'); cell.innerHTML=!h?'<span class="pill muted">无数据</span>':h.circuitState==='half_open'?'<span class="pill muted">恢复探测</span>':h.circuitOpenUntil>Date.now()?'<span class="pill bad">熔断</span>':`<span class="pill good">未熔断</span><small>历史 EWMA ${h.ewmaLatencyMs} ms（含成功/失败） · 累计模型失败 ${h.failures}</small><span hidden></span>`; const load=metrics.modelLoad?.[m.id]; if(load)cell.insertAdjacentHTML('beforeend', `<small> 本进程在途 ${load.inflight}${load.capacity?'/'+load.capacity:'（未设额度）'}</small>`);}); renderRecentKeySelect(); $('recent').innerHTML=metrics.recent.length?metrics.recent.map(x=>{const reasonTag=x.reasoningApplied===false&&x.reasoningLevel&&x.reasoningLevel!=='off'?` · 推理${x.reasoningLevel}(建议未生效)`:` · 推理${x.reasoningLevel||'off'}`; return `<div class="recent-item"><time>${new Date(x.at).toLocaleTimeString()}</time><div><b>${escHtml(x.selected)}</b> <small>← ${escHtml(x.requested)}${x.keyFingerprint?` · <span class="key-fp" title="调用方 key 指纹：${escHtml(x.keyFingerprint)}（可在上方下拉按它筛选）">${escHtml(x.keyFingerprint)}</span>`:''} · ${taskCN(x.task)} · ${METHOD_CN[x.routeMethod]||x.routeMethod||'规则'}${reasonTag}${x.fallbackAttempt?` · fallback ${x.fallbackAttempt}`:''}</small></div><span class="pill ${x.ok?'good':'bad'}">${x.ok?`${x.latencyMs}ms`:'失败'}</span></div>`;}).join(''):'<p class="empty">暂无请求</p>'; }
 async function connect(){ try{ //不再把 ADMIN_TOKEN 写 sessionStorage（HttpOnly 会话已足够；Bearer 只留给外部脚本）
-[config,metrics]=await Promise.all([api('/admin/api/config'),api('/admin/api/metrics')]);snapshotBaseline(); $('status').textContent=`已连接 · v${config.version}`; $('status').className='pill good'; renderMetrics(); renderOverview(); renderTaskBoard(); renderMarketSignal(); applyPolicyLock(); await simulate();}catch(error){$('status').textContent='连接失败';$('status').className='pill bad';toast(error.message,true)} }
+[config,metrics]=await Promise.all([api('/admin/api/config'),api('/admin/api/metrics')]);snapshotBaseline(); $('status').textContent=`已连接 · v${config.version}`; $('status').className='pill good'; renderMetrics(); renderOverview(); renderTaskBoard(); renderMarketSignal(); applyPolicyLock(); await simulate(); await goCorePanel.refresh();}catch(error){$('status').textContent='连接失败';$('status').className='pill bad';toast(error.message,true)} }
 // Token only lives in the input; reconnect explicitly discards the current draft.
 $('connect').onclick=()=>{ if(isDirty()&&!confirm('重新连接将丢弃未发布修改，继续吗？'))return; $('judgeSecretBaseUrl').value=''; $('judgeSecretApiKey').value=''; return connect(); };
 //登出：清会话 cookie 后回登录页
@@ -677,6 +679,7 @@ $('save').onclick = async () => {
     if (!await reviewPublication(savedConfig, publication, { secretChanged: Boolean(secret), changedRate: impact.changedRate, qualityDrop, highRisk })) return;
     config = await api('/admin/api/config', { method: 'PUT', headers: { 'If-Match': configRevision }, body: JSON.stringify(publication) });
     snapshotBaseline();
+    await goCorePanel.refresh();
     $('status').textContent = `已连接 · v${config.version}`;
     if (secret) {
       try { await api('/admin/api/judge/secret', { method: 'PUT', body: JSON.stringify(secret) }); }

@@ -32,6 +32,9 @@ try {
     Invoke-Checked 'node' @('compat/demo.mjs', '--binary', $binary) ''
     Invoke-Checked 'node' @('compat/demo-semantic.mjs', '--binary', $binary) ''
     Invoke-Checked 'node' @('compat/demo-runtime.mjs', '--binary', $binary) ''
+    Invoke-Checked 'node' @('--test', '../tests/go-core-admin.test.mjs') ''
+    Invoke-Checked 'node' @('compat/demo-rollback.mjs', '--binary', $binary, '--out', (Join-Path $evidenceDir 'rollback-demo.json')) ''
+    Invoke-Checked 'node' @('compat/compare-gateways.mjs', '--binary', $binary, '--seconds', '1', '--rounds', '1', '--concurrency', '1,8', '--chunk-ms', '40', '--out', (Join-Path $evidenceDir 'gateway-smoke.json')) ''
     Write-Output 'Local checks passed. Linux CI additionally runs go test -race; production migration remains disabled.'
 } finally {
     $env:GOCACHE = $previousGoCache
