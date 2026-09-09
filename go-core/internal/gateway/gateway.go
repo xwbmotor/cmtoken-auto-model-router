@@ -224,6 +224,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	assessment.Header.Set("Content-Type", "application/json")
+	if g.analyzer != nil {
+		assessment.Header.Set("X-AMR-Native-Analysis", "1")
+	}
 	assessment.Header.Set("Authorization", "Bearer "+g.options.AssessorToken)
 	response, err := g.client.Do(assessment)
 	if err != nil {

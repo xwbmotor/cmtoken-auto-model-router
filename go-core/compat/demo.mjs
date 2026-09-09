@@ -69,6 +69,8 @@ try {
   const health = await (await fetch(base+'/health')).json(); assert.equal(health.productionReady, false);
   const body = { model: config.routing.autoModelId, messages: [{ role: 'user', content: '只返回一个数字：1+1等于几？' }], max_tokens: 8192 };
   const expected = routeRequest(body, config, { trafficBucket: 0 }).selectedModel;
+  const forged = await fetch(`http://127.0.0.1:${assessor.port}/assess`, { method:'POST', headers:{ Authorization:`Bearer ${assessorToken}`, 'Content-Type':'application/json' }, body:JSON.stringify({...body,nativeAnalysisVersion:1,request:body,analysis:{task:'forged-client-task'}}) });
+  assert.equal(forged.status,200); assert.notEqual((await forged.json()).analysis.task,'forged-client-task','client body supplied trusted analysis');
   const plain = await fetch(base+'/v1/chat/completions', { method: 'POST', headers, body: JSON.stringify(body) });
   assert.equal(plain.status, 200); const answer = await plain.json();
   assert.equal(answer.model, expected); assert.equal(answer.choices[0].message.content, '2');
@@ -88,7 +90,7 @@ try {
   const report = { milestone: 'm2a', productionReady: false, at: new Date().toISOString(), upstream: 'local mock only',
     services: ['Go native L1, capacity, gateway and decision kernel', 'Node configuration adapter', 'mock OpenAI upstream'],
     nonstream: true, sse: true, sseFirstEventBeforeCompletion: true, donePreserved: true, unauthorizedRejected: true,
-    explicitModelSupported: true, nativeAnalysis: true, upstreamCalls: observed.length, selectedModelMatchesNode: true, credentialIsolation: true,
+    explicitModelSupported: true, nativeAnalysis: true, forgedAnalysisIgnored: true, upstreamCalls: observed.length, selectedModelMatchesNode: true, credentialIsolation: true,
     binarySha256: createHash('sha256').update(readFileSync(binary)).digest('hex') };
   const output = resolve(arg('--out') || resolve(root, 'data/go-migration/demo.json'));
   mkdirSync(dirname(output), { recursive: true }); writeFileSync(output, JSON.stringify(report, null, 2)+'\n');

@@ -33,7 +33,9 @@ const server = createServer(async (req, res) => {
       chunks.push(chunk);
     }
     const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    const nativeAnalysis = payload?.nativeAnalysisVersion === 1 ? payload.analysis : undefined;
+    const nativeTransport = req.headers['x-amr-native-analysis'] === '1';
+    if (nativeTransport && (payload?.nativeAnalysisVersion !== 1 || !payload.analysis || !payload.request)) return send(400, { error: 'invalid_native_envelope' });
+    const nativeAnalysis = nativeTransport ? payload.analysis : undefined;
     const body = nativeAnalysis ? payload.request : payload;
     if (!Array.isArray(body?.messages) || !body.messages.length || body.messages.some(m => !m || typeof m.role !== 'string')) return send(400, { error: 'invalid_messages' });
     const input = decisionInput(body, config, { trafficBucket: randomInt(1000000) / 10000, nativeAnalysis });
