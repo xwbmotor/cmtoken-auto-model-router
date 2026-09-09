@@ -1,0 +1,52 @@
+name: Go core migration
+
+on:
+  push:
+    branches: [codex/go-core-migration]
+  pull_request:
+    paths:
+      - 'go-core/**'
+      - 'src/**'
+      - 'config/**'
+      - '.github/workflows/go-core.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity-and-transport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Vet and race detection
+        working-directory: go-core
+        run: |
+          mkdir -p ../data/go-migration
+          go vet ./...
+          go test -race -timeout 90s -json ./... > ../data/go-migration/go-test.jsonl
+      - name: Build laboratory binary
+        working-directory: go-core
+        run: go build -trimpath -o ../data/go-migration/amr-core ./cmd/amr-core
+      - name: Compare with Node reference
+        run: node go-core/compat/verify.mjs --binary data/go-migration/amr-core
+      - name: Verify real Go process with local mock upstream
+        run: node go-core/compat/demo.mjs --binary data/go-migration/amr-core
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: go-core-m1-evidence
+          path: |
+            data/go-migration/*.json
+            data/go-migration/*.jsonl
+          if-no-files-found: warn
+          retention-days: 14

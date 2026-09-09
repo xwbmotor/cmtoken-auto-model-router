@@ -28,3 +28,8 @@ data/deploy-*/
 .venv/
 data/algorithm-audit-*/
 data/latency-observations.json*
+
+# Go migration compiler, caches and local verification artifacts
+data/go-toolchain/
+data/go-build-cache/
+data/go-migration/
