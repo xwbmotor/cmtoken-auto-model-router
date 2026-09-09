@@ -39,6 +39,9 @@ func (in Input) Validate() error {
 		return true
 	}
 	p := in.Policy
+	if !finite(p.SessionTTLMS, p.SessionMaxGap) || p.SessionTTLMS < 0 || p.SessionTTLMS > 86400000 || p.SessionMaxGap < 0 || p.SessionMaxGap > 1 {
+		return failure("invalid_contract", "invalid session policy")
+	}
 	if !finite(in.CompletionTokens, in.Analysis.Complexity, in.Analysis.EstimatedContextTokens, in.Runtime.NowMs, in.Runtime.TrafficBucket, in.Runtime.BudgetPressure,
 		p.ActiveTrafficPercent, p.QualityFloor, p.QualityWeight, p.CostWeight, p.ProviderCostWeight, p.LatencyWeight, p.SelfHostedBonus, p.UncertaintyPenalty,
 		p.ComplexQualityMargin, p.RelativeQualityCap, p.SubtaskSmoothK, p.SubtaskMinSamples, p.SubtaskMaxAdjust, p.LatencyScaleMs, p.LatencyMax,
@@ -73,7 +76,7 @@ func (in Input) Validate() error {
 	if in.Analysis.Task == "" || in.Analysis.EstimatedContextTokens < 1 || in.Policy.AutoModelID == "" || in.ConfigVersion == "" {
 		return failure("invalid_contract", "missing analysis or configuration identity")
 	}
-	if in.RequestedModel != "" && in.RequestedModel != in.Policy.AutoModelID {
+	if in.RequestedModel != "" && in.RequestedModel != in.Policy.AutoModelID && !in.Policy.AllowExplicitModel {
 		return failure("unsupported_explicit_model", "this milestone accepts Auto requests only")
 	}
 	if len(in.Models) == 0 || len(in.Models) > 1024 {
@@ -169,6 +172,37 @@ func Decide(in Input) (Decision, error) {
 		for _, id := range *r.AllowedModelIDs {
 			allowed[id] = true
 		}
+	}
+	if d.RequestedModel != p.AutoModelID {
+		for _, m := range in.Models {
+			if m.ID != d.RequestedModel || !m.Enabled {
+				continue
+			}
+			if r.AllowedModelIDs != nil && !allowed[m.ID] {
+				return Decision{}, failure("not_entitled", "model is outside tenant entitlement")
+			}
+			if m.ContextWindow > 0 && a.EstimatedContextTokens > m.ContextWindow {
+				return Decision{}, failure("context_length_exceeded", "request exceeds context window")
+			}
+			for key, needed := range a.Requirements {
+				if needed && key != "chat" && key != "stream" && !m.Capabilities[key] {
+					return Decision{}, failure("unsupported_capability", "model lacks required capability")
+				}
+			}
+			if !completionEligible(in, m, level) {
+				return Decision{}, failure("completion_budget_too_low", "output budget is insufficient")
+			}
+			if p.LoadEnabled && m.Capacity > 0 && r.Inflight[m.ID] >= m.Capacity {
+				return Decision{}, failure("model_capacity_exhausted", "model is at capacity")
+			}
+			d.SelectedModel = m.ID
+			d.SuggestedModel = m.ID
+			d.ReasoningLevel = level
+			d.FallbackOrder = []string{m.ID}
+			d.QualifiedModelIDs = []string{m.ID}
+			return d, nil
+		}
+		return Decision{}, failure("invalid_model", "model does not exist or is disabled")
 	}
 	for _, m := range in.Models {
 		reasons := []string{}

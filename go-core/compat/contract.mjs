@@ -5,7 +5,7 @@ import { estimateRequestCapacity } from '../../src/request-capacity.mjs';
 
 export function decisionInput(body, config, runtime = {}) {
   const r = config.routing;
-  const analysis = { ...(runtime.analysisOverride || analyzeRequest(body, config)), ...estimateRequestCapacity(body, config) };
+  const analysis = runtime.nativeAnalysis || { ...(runtime.analysisOverride || analyzeRequest(body, config)), ...estimateRequestCapacity(body, config) };
   const numeric = (value, fallback) => {
     const n = Number(value ?? fallback);
     if (!Number.isFinite(n)) throw new Error('Non-finite contract feature');
@@ -25,6 +25,8 @@ export function decisionInput(body, config, runtime = {}) {
       complexity: analysis.complexity, estimatedContextTokens: analysis.estimatedContextTokens,
       requirements: analysis.requirements || {} },
     policy: {
+      allowExplicitModel: r.allowExplicitModel === true,
+      sessionTtlMs: numeric(r.sessionStickinessTtlMs, 0), sessionMaxGap: numeric(r.sessionStickinessMaxGap, 0.05),
       scoreStrategy: r.scoreStrategy || 'weighted', mode: r.mode, shadowModel: r.shadowModel || '', autoModelId: r.autoModelId || 'auto',
       activeTrafficPercent: numeric(r.activeTrafficPercent, 100), qualityFloor: numeric(r.qualityFloor),
       qualityWeight: numeric(r.qualityWeight), costWeight: numeric(r.costWeight), providerCostWeight: numeric(r.providerCostWeight, 0),

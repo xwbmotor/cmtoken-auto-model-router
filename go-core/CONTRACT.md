@@ -1,4 +1,8 @@
-# 决策合同 v1
+# 决策合同 v1（M2a 扩展）
+
+M2a 增加 `policy.allowExplicitModel`、`policy.sessionTtlMs` 与 `policy.sessionMaxGap`，缺省均为 Go 零值（关闭显式调用、关闭会话）；Node 适配器传入已解析的实际配置。显式调用绕过 Auto 评分与质量门槛，但仍检查模型启用、资格快照、上下文、能力、输出预算与本进程并发。
+
+纯决策重放仍不应用会话。HTTP 执行器在同一把并发锁内应用本进程会话；只有当前 qualifiedModelIds 中、任务/难度/子任务相同且分差不超限的模型可复用，成功交付后再记入状态。M1 以下描述中“显式模型不支持”和“Node 提供分类”的边界只适用于旧实验路径；新路径使用 `--native-analysis` 和启用显式调用的策略。
 
 合同用于受信任的请求分析组件向 Go 内核提供特征；不是让最终用户上传任意模型配置来调度生产流量。类型定义以 `internal/decision/types.go` 为准。
 

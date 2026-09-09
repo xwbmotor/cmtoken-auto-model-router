@@ -19,6 +19,9 @@ type Preference struct {
 // Policy contains resolved numeric defaults from a validated configuration.
 // Absence and zero are resolved by the versioned adapter, never by Go zero values.
 type Policy struct {
+	AllowExplicitModel      bool        `json:"allowExplicitModel"`
+	SessionTTLMS            float64     `json:"sessionTtlMs"`
+	SessionMaxGap           float64     `json:"sessionMaxGap"`
 	ScoreStrategy           string      `json:"scoreStrategy"`
 	Mode                    string      `json:"mode"`
 	ShadowModel             string      `json:"shadowModel"`

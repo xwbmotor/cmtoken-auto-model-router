@@ -63,7 +63,7 @@ try {
   const config = await loadConfig();
   await new Promise(resolveReady => mock.listen(0, '127.0.0.1', resolveReady));
   const assessor = await start(process.execPath, ['go-core/compat/assessor.mjs', '--lab', '--config', configPath, '--port', '0']);
-  const go = await start(binary, ['--lab', '--listen', '127.0.0.1:0', '--assessor', `http://127.0.0.1:${assessor.port}/assess`, '--upstream', `http://127.0.0.1:${mock.address().port}/v1/chat/completions`]);
+  const go = await start(binary, ['--lab', '--native-analysis', '--listen', '127.0.0.1:0', '--assessor', `http://127.0.0.1:${assessor.port}/assess`, '--upstream', `http://127.0.0.1:${mock.address().port}/v1/chat/completions`]);
   const base = `http://${go.listen}`;
   const headers = { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json', Cookie: 'must-not-leak' };
   const health = await (await fetch(base+'/health')).json(); assert.equal(health.productionReady, false);
@@ -83,12 +83,12 @@ try {
   const unauthenticated = await fetch(base+'/v1/chat/completions', { method: 'POST', body: JSON.stringify(body) });
   assert.equal(unauthenticated.status, 401); await unauthenticated.arrayBuffer();
   const explicit = await fetch(base+'/v1/chat/completions', { method: 'POST', headers, body: JSON.stringify({ ...body, model: config.models[0].id }) });
-  assert.equal(explicit.status, 400); assert.equal((await explicit.json()).error.code, 'unsupported_explicit_model');
-  assert.equal(observed.length, 2, 'unexpected upstream call or retry');
-  const report = { milestone: 'm1', productionReady: false, at: new Date().toISOString(), upstream: 'local mock only',
-    services: ['Go gateway and decision kernel', 'Node rules adapter', 'mock OpenAI upstream'],
+  assert.equal(explicit.status, 200); assert.equal((await explicit.json()).model, config.models[0].id);
+  assert.equal(observed.length, 3, 'unexpected upstream call or retry');
+  const report = { milestone: 'm2a', productionReady: false, at: new Date().toISOString(), upstream: 'local mock only',
+    services: ['Go native L1, capacity, gateway and decision kernel', 'Node configuration adapter', 'mock OpenAI upstream'],
     nonstream: true, sse: true, sseFirstEventBeforeCompletion: true, donePreserved: true, unauthorizedRejected: true,
-    explicitModelRejected: true, upstreamCalls: observed.length, selectedModelMatchesNode: true, credentialIsolation: true,
+    explicitModelSupported: true, nativeAnalysis: true, upstreamCalls: observed.length, selectedModelMatchesNode: true, credentialIsolation: true,
     binarySha256: createHash('sha256').update(readFileSync(binary)).digest('hex') };
   const output = resolve(arg('--out') || resolve(root, 'data/go-migration/demo.json'));
   mkdirSync(dirname(output), { recursive: true }); writeFileSync(output, JSON.stringify(report, null, 2)+'\n');

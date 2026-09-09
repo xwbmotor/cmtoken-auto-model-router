@@ -23,6 +23,7 @@ const authorized = req => {
 const server = createServer(async (req, res) => {
   const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)); };
   if (!authorized(req)) return send(401, { error: 'unauthorized' });
+  if (req.method === 'GET' && req.url === '/analysis-config') return send(200, { taskRules: config.taskRules, budget: { defaultEstimatedOutputTokens: config.budget?.defaultEstimatedOutputTokens } });
   if (req.method !== 'POST' || req.url !== '/assess') return send(404, { error: 'not_found' });
   let bytes = 0; const chunks = [];
   try {
@@ -31,9 +32,11 @@ const server = createServer(async (req, res) => {
       if (bytes > 2 * 1024 * 1024) { send(413, { error: 'request_too_large' }); return; }
       chunks.push(chunk);
     }
-    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const nativeAnalysis = payload?.nativeAnalysisVersion === 1 ? payload.analysis : undefined;
+    const body = nativeAnalysis ? payload.request : payload;
     if (!Array.isArray(body?.messages) || !body.messages.length || body.messages.some(m => !m || typeof m.role !== 'string')) return send(400, { error: 'invalid_messages' });
-    const input = decisionInput(body, config, { trafficBucket: randomInt(1000000) / 10000 });
+    const input = decisionInput(body, config, { trafficBucket: randomInt(1000000) / 10000, nativeAnalysis });
     send(200, input);
   } catch { send(400, { error: 'invalid_assessment_request' }); }
 });

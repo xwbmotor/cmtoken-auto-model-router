@@ -27,6 +27,7 @@ try {
     $binary = Join-Path $evidenceDir 'amr-core.exe'
     Invoke-Checked $GoExecutable @('build', '-trimpath', '-o', $binary, './cmd/amr-core') ''
     Invoke-Checked 'node' @('compat/verify.mjs', '--binary', $binary) ''
+    Invoke-Checked 'node' @('compat/verify-analysis.mjs', '--binary', $binary) ''
     Invoke-Checked 'node' @('compat/demo.mjs', '--binary', $binary) ''
     Write-Output 'Local checks passed. Linux CI additionally runs go test -race; production migration remains disabled.'
 } finally {

@@ -38,6 +38,8 @@ jobs:
         run: go build -trimpath -o ../data/go-migration/amr-core ./cmd/amr-core
       - name: Compare with Node reference
         run: node go-core/compat/verify.mjs --binary data/go-migration/amr-core
+      - name: Compare native request semantics
+        run: node go-core/compat/verify-analysis.mjs --binary data/go-migration/amr-core
       - name: Verify real Go process with local mock upstream
         run: node go-core/compat/demo.mjs --binary data/go-migration/amr-core
       - name: Preserve verification evidence

@@ -1,10 +1,11 @@
 // Package gateway is the loopback-only migration laboratory, not a production
-// drop-in. It deliberately cannot dial a production MaaS endpoint in milestone 1.
+// drop-in. It deliberately cannot dial a production MaaS endpoint in this laboratory.
 package gateway
 
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -17,12 +18,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/analysis"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/decision"
 )
 
 const MaxBodyBytes = 2 << 20
 
 type Options struct {
+	NativeAnalysis    bool
 	AssessorURL       string
 	UpstreamURL       string
 	AccessToken       string
@@ -34,13 +37,15 @@ type Options struct {
 }
 
 type Gateway struct {
-	options   Options
-	assessor  *url.URL
-	upstream  *url.URL
-	client    *http.Client
-	transport *http.Transport
-	admission *Admission
-	requests  chan struct{}
+	sessionSecret []byte
+	analyzer      *analysis.Analyzer
+	options       Options
+	assessor      *url.URL
+	upstream      *url.URL
+	client        *http.Client
+	transport     *http.Transport
+	admission     *Admission
+	requests      chan struct{}
 }
 
 func LoopbackURL(raw string) (*url.URL, error) {
@@ -50,7 +55,7 @@ func LoopbackURL(raw string) (*url.URL, error) {
 	}
 	ip := net.ParseIP(u.Hostname())
 	if (u.Scheme != "http" && u.Scheme != "https") || ip == nil || !ip.IsLoopback() || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Port() == "" {
-		return nil, errors.New("milestone 1 endpoints must use literal loopback IPs and explicit ports, without credentials/query/fragment")
+		return nil, errors.New("laboratory endpoints must use literal loopback IPs and explicit ports, without credentials/query/fragment")
 	}
 	return u, nil
 }
@@ -76,9 +81,38 @@ func New(o Options) (*Gateway, error) {
 	t.MaxIdleConns = o.MaxRequests
 	t.MaxIdleConnsPerHost = o.MaxRequests
 	t.ResponseHeaderTimeout = o.RequestTimeout
-	return &Gateway{options: o, assessor: assessor, upstream: upstream, transport: t,
+	g := &Gateway{options: o, assessor: assessor, upstream: upstream, transport: t,
 		client:    &http.Client{Transport: t, Timeout: o.AssessmentTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		admission: NewAdmission(), requests: make(chan struct{}, o.MaxRequests)}, nil
+		admission: NewAdmission(), requests: make(chan struct{}, o.MaxRequests)}
+	g.sessionSecret = make([]byte, 32)
+	if _, e := rand.Read(g.sessionSecret); e != nil {
+		g.Close()
+		return nil, e
+	}
+	if o.NativeAnalysis {
+		u := *assessor
+		u.Path = "/analysis-config"
+		req, _ := http.NewRequest("GET", u.String(), nil)
+		req.Header.Set("Authorization", "Bearer "+o.AssessorToken)
+		res, e := g.client.Do(req)
+		if e != nil {
+			g.Close()
+			return nil, errors.New("analysis configuration unavailable")
+		}
+		data, e := io.ReadAll(io.LimitReader(res.Body, MaxBodyBytes+1))
+		res.Body.Close()
+		var c analysis.Config
+		if e != nil || res.StatusCode != 200 || len(data) > MaxBodyBytes || json.Unmarshal(data, &c) != nil {
+			g.Close()
+			return nil, errors.New("invalid analysis configuration")
+		}
+		g.analyzer, e = analysis.New(c)
+		if e != nil {
+			g.Close()
+			return nil, e
+		}
+	}
+	return g, nil
 }
 
 func (g *Gateway) Close() { g.transport.CloseIdleConnections() }
@@ -106,7 +140,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-AMR-Experimental", "go-core-m1")
 	if r.Method == "GET" && r.URL.Path == "/health" {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "runtime": "go", "milestone": "m1", "productionReady": false})
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "runtime": "go", "milestone": "m2a", "productionReady": false})
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+g.options.AccessToken)) != 1 {
@@ -175,7 +209,16 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	assessment, err := http.NewRequestWithContext(ctx, "POST", g.assessor.String(), bytes.NewReader(data))
+	assessmentData := data
+	if g.analyzer != nil {
+		result, e := g.analyzer.Analyze(data)
+		if e != nil {
+			writeError(w, 400, "invalid_analysis_request")
+			return
+		}
+		assessmentData, _ = json.Marshal(map[string]any{"nativeAnalysisVersion": 1, "request": json.RawMessage(data), "analysis": result})
+	}
+	assessment, err := http.NewRequestWithContext(ctx, "POST", g.assessor.String(), bytes.NewReader(assessmentData))
 	if err != nil {
 		writeError(w, 500, "assessment_request_failed")
 		return
@@ -206,7 +249,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 502, "assessment_identity_mismatch")
 		return
 	}
-	d, release, err := g.admission.Select(input)
+	sessionKey := SessionKey(r.Header.Get("X-Session-ID"), r.Header.Get("Authorization"), g.upstream.String(), g.sessionSecret)
+	d, release, err := g.admission.SelectSession(input, sessionKey)
 	if err != nil {
 		decisionError(w, err)
 		return
@@ -226,6 +270,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("X-AMR-Selected-Model", d.SelectedModel)
+	var completion *completionBody
+	upstreamOK := false
 	proxy := &httputil.ReverseProxy{
 		Transport: g.transport, FlushInterval: -1, ErrorLog: log.New(io.Discard, "", 0),
 		Rewrite: func(p *httputil.ProxyRequest) {
@@ -243,6 +289,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.Out.Trailer = nil
 		},
 		ModifyResponse: func(up *http.Response) error {
+			upstreamOK = up.StatusCode >= 200 && up.StatusCode < 300
+			completion = &completionBody{ReadCloser: up.Body, stream: strings.HasPrefix(up.Header.Get("Content-Type"), "text/event-stream")}
+			up.Body = completion
 			// A fixed endpoint cannot redirect requests or set browser credentials.
 			if up.StatusCode >= 300 && up.StatusCode < 400 {
 				return errors.New("upstream redirect rejected")
@@ -264,7 +313,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		},
 	}
-	proxy.ServeHTTP(w, r.WithContext(ctx))
+	delivery := &deliveryWriter{ResponseWriter: w}
+	proxy.ServeHTTP(delivery, r.WithContext(ctx))
+	if ctx.Err() == nil && !delivery.failed && upstreamOK && completion != nil && completion.Complete() {
+		g.admission.CompleteSession(sessionKey, input, d, float64(time.Now().UnixMilli()))
+	}
 }
 
 func cloneURL(u *url.URL) *url.URL { v := *u; return &v }
@@ -276,8 +329,11 @@ func decisionError(w http.ResponseWriter, err error) {
 		if de.Code == "model_capacity_exhausted" {
 			status = 503
 		}
-		if de.Code == "invalid_contract" || de.Code == "unsupported_explicit_model" {
+		if de.Code == "invalid_contract" || de.Code == "unsupported_explicit_model" || de.Code == "invalid_model" || de.Code == "context_length_exceeded" || de.Code == "unsupported_capability" || de.Code == "completion_budget_too_low" {
 			status = 400
+		}
+		if de.Code == "not_entitled" {
+			status = 403
 		}
 		writeError(w, status, de.Code)
 		return
