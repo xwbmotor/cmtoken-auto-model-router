@@ -1,0 +1,193 @@
+// Docker/cgroup v2 capacity experiment. Creates and removes only its own labeled
+// containers. The staging tree contains source and synthetic config, never .env.
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync, chmodSync } from 'node:fs';
+import { resolve, dirname, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { setTimeout as sleep } from 'node:timers/promises';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const arg = name => { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; };
+assert.ok(arg('--binary'), '--binary <Linux binary> required');
+const seconds = Number(arg('--seconds') ?? 10), rounds = Number(arg('--rounds') ?? 3), streamSeconds = Number(arg('--stream-seconds') ?? 60);
+const cpus = Number(arg('--cpus') ?? 1), memoryMiB = Number(arg('--memory-mib') ?? 512), streams = Number(arg('--streams') ?? 32);
+const rates = (arg('--rates') ?? '50,150,300').split(',').map(Number);
+assert.ok(Number.isInteger(seconds) && seconds >= 1 && seconds <= 60 && Number.isInteger(rounds) && rounds >= 1 && rounds <= 5);
+assert.ok(Number.isInteger(streamSeconds) && streamSeconds >= 2 && streamSeconds <= 600 && Number.isInteger(streams) && streams >= 1 && streams <= 128);
+assert.ok(cpus >= .25 && cpus <= 8 && Number.isInteger(memoryMiB) && memoryMiB >= 256 && memoryMiB <= 8192);
+assert.ok(rates.length >= 1 && rates.length <= 5 && rates.every(n => Number.isInteger(n) && n > 0 && n <= 2000));
+const runKey = 'm4-' + randomBytes(6).toString('hex'), dataRoot = resolve(root, 'data/go-migration');
+const stage = resolve(dataRoot, runKey), out = resolve(arg('--out') || resolve(dataRoot, `${runKey}.json`));
+const binary = resolve(arg('--binary')), image = arg('--image') || 'node:24-bookworm-slim';
+const secret = () => randomBytes(24).toString('hex');
+const credentials = { M4_ACCESS: secret(), M4_ADMIN: secret(), M4_CORE_ADMIN: secret(), M4_UPSTREAM: secret(), M4_ASSESSOR: secret(), M4_CONTROL_TOKEN: secret() };
+const containers = [], requests = [], runs = [];
+let sourceHash, imageEvidence, hostPorts, engine, quotas, preflight, longStreams, failure;
+const docker = args => execFileSync('docker', args, { cwd: root, windowsHide: true, encoding: 'utf8', timeout: 120000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+const percentile = (values, q) => { const sorted = [...values].sort((a, b) => a - b); return sorted.length ? sorted[Math.ceil(sorted.length * q) - 1] : null; };
+const model = 'm4-fixture-model';
+function config(role) {
+  const c = JSON.parse(readFileSync(resolve(root, 'config/router.json'), 'utf8')), dir = `/lab/${role}`;
+  c.upstreamBaseUrl = 'http://127.0.0.1:8790/v1'; c.semanticRouter.enabled = false;
+  c.judge = { ...c.judge, enabled: false, taskCheckEnabled: false, guardStatePath: `${dir}/judge.json` };
+  c.rateLimit = { ...c.rateLimit, enabled: false }; c.feedbackLog = { enabled: false, dirPath: `${dir}/feedback` };
+  c.decisionLog = { ...c.decisionLog, enabled: true, dirPath: `${dir}/decisions`, includePrompt: false };
+  c.routing.mode = 'active'; c.routing.activeTrafficPercent = 100; c.routing.maxAttempts = 1;
+  c.routing.requestTimeoutMs = Math.max(30000, (streamSeconds + 30) * 1000); c.routing.taskPreferences = {};
+  c.routing.latencyObservation = { ...c.routing.latencyObservation, mode: 'off', probes: { enabled: false } };
+  c.routing.defaultExplicitModel = model; c.routing.shadowModel = model;
+  c.routing.loadBalancing = { enabled: true, penaltyWeight: .2, limits: { [model]: 256 } };
+  c.models = c.models.filter(m => m.enabled).slice(0, 1); assert.equal(c.models.length, 1);
+  const m = c.models[0]; m.id = model; m.capabilities = { chat: true, stream: true, tools: true, json: true, vision: true };
+  m.quality = Object.fromEntries(Object.keys(m.quality).map(k => [k, .95])); m.quality.default = .95;
+  m.benchmarkScores = null; m.minimumCompletionTokensForReliableAnswer = 0; m.contextWindow = 131072;
+  m.pricingYuanPerMillionTokens = { input: 1, output: 2 };
+  c.budget = { ...c.budget, enabled: true, dailyBudgetYuan: 10000, cacheHitRatio: 0, ledgerPath: `${dir}/node-ledger.json` };
+  return c;
+}
+const controlHeaders = { authorization: `Bearer ${credentials.M4_CONTROL_TOKEN}` };
+async function control(path) {
+  const res = await fetch(`http://127.0.0.1:${hostPorts.control}${path}`, { headers: controlHeaders, signal: AbortSignal.timeout(5000) });
+  assert.equal(res.status, 200, 'fixture control unavailable'); return res.json();
+}
+const shapes = ['short', 'history', 'tools', 'image'];
+function bodyFor(target, shape, id, stream) {
+  const body = { model: target === 'direct' ? model : 'auto', stream, max_tokens: 128, messages: [{ role: 'system', content: `m4:${id}` }] };
+  if (shape === 'history') for (let i = 0; i < 16; i++) body.messages.push({ role: i % 2 ? 'assistant' : 'user', content: '项目需求、约束条件和执行记录。'.repeat(64) });
+  if (shape === 'tools') {
+    body.tools = [{ type: 'function', function: { name: 'lookup', description: '查询记录', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } }];
+    body.messages.push({ role: 'assistant', content: null, tool_calls: [{ id: 'call_fixture', type: 'function', function: { name: 'lookup', arguments: '{"id":"42"}' } }] }, { role: 'tool', tool_call_id: 'call_fixture', content: '{"value":42}' });
+  }
+  body.messages.push({ role: 'user', content: shape === 'image' ? [{ type: 'text', text: '描述图片中的颜色。' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jf1sAAAAASUVORK5CYII=' } }] : '请提取并返回数字42。' });
+  return body;
+}
+let sequence = 0;
+async function request(target, shape, run, stream = false, due = performance.now()) {
+  const id = `${runKey}-${sequence++}`, payload = JSON.stringify(bodyFor(target, shape, id, stream));
+  const started = performance.now(), sample = { run, target, shape, stream, id, requestBytes: Buffer.byteLength(payload), schedulerDelayMs: Math.max(0, started - due), status: null, complete: false, firstByteMs: null, serviceMs: null };
+  try {
+    const response = await fetch(`http://127.0.0.1:${hostPorts[target]}/v1/chat/completions`, { method: 'POST', signal: AbortSignal.timeout((stream ? streamSeconds + 30 : 30) * 1000),
+      headers: { authorization: `Bearer ${target === 'direct' ? credentials.M4_UPSTREAM : credentials.M4_ACCESS}`, 'content-type': 'application/json' }, body: payload });
+    sample.status = response.status; let text = ''; const decoder = new TextDecoder();
+    for await (const chunk of response.body) { if (sample.firstByteMs === null) sample.firstByteMs = performance.now() - started; text += decoder.decode(chunk, { stream: true }); }
+    text += decoder.decode();
+    if (response.status === 200 && stream) {
+      const events = text.split(/\r?\n\r?\n/).map(e => e.trim()).filter(e => e.startsWith('data:')).map(e => e.slice(5).trim());
+      const parsed = events.filter(e => e !== '[DONE]').map(e => JSON.parse(e));
+      const content = parsed.map(e => e.choices?.[0]?.delta?.content || '').join('');
+      sample.serviceMs = parsed.find(e => e.fixtureServiceMs != null)?.fixtureServiceMs ?? null;
+      sample.complete = events.filter(e => e === '[DONE]').length === 1 && events.at(-1) === '[DONE]' && content === Array.from({ length: streamSeconds }, (_, i) => `part-${i};`).join('') && sample.firstByteMs < performance.now() - started - 1000;
+    } else if (response.status === 200) {
+      const value = JSON.parse(text); sample.serviceMs = value.fixtureServiceMs ?? null;
+      sample.complete = value.model === model && value.choices?.[0]?.message?.content === 'fixture-ok';
+    }
+  } catch { sample.transportOrContentError = true; }
+  sample.durationMs = performance.now() - started;
+  sample.clientPathResidualMs = sample.serviceMs == null ? null : sample.durationMs - sample.serviceMs;
+  requests.push(sample); return sample;
+}
+async function measure(target, id, action) {
+  const stateBefore = await control('/state'), before = target === 'direct' ? null : await control(`/resources/${target}`), resourceSamples = [];
+  let sampling = false;
+  const timer = setInterval(async () => {
+    if (sampling || target === 'direct') return; sampling = true;
+    try { resourceSamples.push(await control(`/resources/${target}`)); } catch {} finally { sampling = false; }
+  }, 1000);
+  const start = Date.now(), from = requests.length;
+  let offered;
+  try { offered = await action(); } finally { clearInterval(timer); }
+  const end = Date.now(), samples = requests.slice(from), good = samples.filter(s => s.complete);
+  const stateAfter = await control('/state'), after = before ? await control(`/resources/${target}`) : null;
+  assert.equal(stateAfter.duplicates, stateBefore.duplicates, 'duplicate upstream generation');
+  assert.equal(stateAfter.fixtureErrors, 0, 'fixture violated its input contract');
+  assert.ok(stateAfter.calls - stateBefore.calls <= samples.length, 'unexpected upstream call');
+  const value = { id, target, ...offered, started: samples.length, complete: good.length, errors: samples.length - good.length,
+    statusCounts: Object.fromEntries([...new Set(samples.map(s => String(s.status)))].map(status => [status, samples.filter(s => String(s.status) === status).length])),
+    elapsedMs: end - start, deliveredRps: good.length * 1000 / (end - start), p95Ms: percentile(good.map(s => s.durationMs), .95), p99Ms: percentile(good.map(s => s.durationMs), .99),
+    firstByteP95Ms: percentile(good.map(s => s.firstByteMs), .95), schedulerDelayP95Ms: percentile(samples.map(s => s.schedulerDelayMs), .95),
+    clientPathResidualP95Ms: percentile(good.map(s => s.clientPathResidualMs).filter(n => n != null), .95),
+    upstreamCalls: stateAfter.calls - stateBefore.calls, resources: before ? { before, after, resourceSamples,
+      averageCpuCores: (after.cpu.usage_usec - before.cpu.usage_usec) / 1000 / (after.at - before.at),
+      throttledPeriods: after.cpu.nr_throttled - before.cpu.nr_throttled, throttledMs: (after.cpu.throttled_usec - before.cpu.throttled_usec) / 1000,
+      peakSampledMemoryBytes: Math.max(before.memoryBytes, after.memoryBytes, ...resourceSamples.map(s => s.memoryBytes)), oomKills: after.memoryEvents.oom_kill - before.memoryEvents.oom_kill } : null };
+  runs.push(value); console.log(JSON.stringify({ ...value, resources: value.resources ? { averageCpuCores: value.resources.averageCpuCores, throttledPeriods: value.resources.throttledPeriods, peakSampledMemoryBytes: value.resources.peakSampledMemoryBytes, oomKills: value.resources.oomKills } : null }));
+  return value;
+}
+try {
+  engine = JSON.parse(docker(['info', '--format', '{"os":{{json .OSType}},"version":{{json .ServerVersion}},"cpus":{{.NCPU}},"memoryBytes":{{.MemTotal}}}']));
+  assert.equal(engine.os, 'linux', 'Linux Docker engine required');
+  try { docker(['image', 'inspect', image, '--format', '{{.Id}}']); } catch { docker(['pull', image]); }
+  imageEvidence = JSON.parse(docker(['image', 'inspect', image, '--format', '{"id":{{json .Id}},"digests":{{json .RepoDigests}}}']));
+  mkdirSync(stage, { recursive: true }); mkdirSync(resolve(stage, 'app/go-core/compat'), { recursive: true });
+  cpSync(resolve(root, 'src'), resolve(stage, 'app/src'), { recursive: true });
+  cpSync(resolve(root, 'package.json'), resolve(stage, 'app/package.json'));
+  for (const name of ['assessor.mjs', 'contract.mjs', 'semantic-policy.mjs', 'runtime-policy.mjs', 'capacity-group.mjs', 'capacity-fixture.mjs']) cpSync(resolve(root, 'go-core/compat', name), resolve(stage, 'app/go-core/compat', name));
+  cpSync(binary, resolve(stage, 'app/amr-core')); chmodSync(resolve(stage, 'app/amr-core'), 0o755);
+  sourceHash = sha(readFileSync(resolve(root, 'src/server.mjs')));
+  for (const role of ['node', 'go']) { mkdirSync(resolve(stage, role)); writeFileSync(resolve(stage, role, 'router.json'), JSON.stringify(config(role))); }
+  writeFileSync(resolve(stage, 'go/auth.json'), JSON.stringify({ mode: 'strict', accessToken: credentials.M4_ACCESS, adminToken: credentials.M4_CORE_ADMIN, upstreamToken: credentials.M4_UPSTREAM }));
+  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, GOMAXPROCS: cpus, NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
+  const fixture = `${runKey}-fixture`;
+  const mounts = ['--mount', `type=bind,source=${resolve(stage, 'app')},target=/app,readonly`, '--mount', `type=bind,source=${stage},target=/lab`, '--env-file', envFile];
+  docker(['run', '-d', '--name', fixture, '--label', `amr.capacity=${runKey}`, '--workdir', '/app', ...mounts,
+    ...[8785, 8792, 8784, 8790, 8799].flatMap(port => ['-p', `127.0.0.1::${port}`]), imageEvidence.id, 'node', 'go-core/compat/capacity-fixture.mjs']); containers.push(fixture);
+  const portMap = JSON.parse(docker(['inspect', fixture, '--format', '{{json .NetworkSettings.Ports}}']));
+  hostPorts = Object.fromEntries(Object.entries({ node: 8785, go: 8792, admin: 8784, direct: 8790, control: 8799 }).map(([name, port]) => [name, Number(portMap[`${port}/tcp`][0].HostPort)]));
+  quotas = {};
+  for (const role of ['node', 'go']) {
+    const name = `${runKey}-${role}`;
+    docker(['run', '-d', '--name', name, '--label', `amr.capacity=${runKey}`, '--workdir', '/app', '--network', `container:${fixture}`, '--cpus', String(cpus), '--memory', `${memoryMiB}m`, '--memory-swap', `${memoryMiB}m`, '--pids-limit', '128', ...mounts, '-e', `M4_ROLE=${role}`, imageEvidence.id, 'node', 'go-core/compat/capacity-group.mjs']); containers.push(name);
+    quotas[role] = JSON.parse(docker(['inspect', name, '--format', '{"nanoCpus":{{.HostConfig.NanoCpus}},"memory":{{.HostConfig.Memory}},"memorySwap":{{.HostConfig.MemorySwap}},"pidsLimit":{{.HostConfig.PidsLimit}}}']));
+    assert.equal(quotas[role].nanoCpus, cpus * 1e9); assert.equal(quotas[role].memory, memoryMiB * 1048576); assert.equal(quotas[role].memorySwap, quotas[role].memory);
+  }
+  for (const role of ['node', 'go']) {
+    let healthy = false;
+    for (let i = 0; i < 100; i++) { try { const res = await fetch(`http://127.0.0.1:${hostPorts[role]}/health`, { signal: AbortSignal.timeout(500) }); await res.arrayBuffer(); if (res.ok) { healthy = true; break; } } catch {} await sleep(200); }
+    assert.ok(healthy, `${role} container did not become healthy`);
+    const sample = await control(`/resources/${role}`); const [quota, period] = sample.cpuLimit.split(' ').map(Number);
+    assert.equal(quota / period, cpus); assert.equal(Number(sample.memoryLimit), memoryMiB * 1048576);
+  }
+  preflight = [];
+  for (const target of ['direct', 'node', 'go']) for (const shape of shapes) { const sample = await request(target, shape, 'preflight'); preflight.push(sample); assert.ok(sample.complete, `preflight failed: ${target}/${shape}/${sample.status}`); }
+  for (const rate of rates) for (let round = 0; round < rounds; round++) {
+    const order = ['direct', 'node', 'go'];
+    for (const target of [...order.slice(round % 3), ...order.slice(0, round % 3)]) {
+      const id = `${target}-rate${rate}-round${round}`;
+      await measure(target, id, async () => {
+        const count = seconds * rate, start = performance.now(), pending = new Set(); let droppedByGenerator = 0;
+        for (let i = 0; i < count; i++) {
+          const due = start + i * 1000 / rate, delay = due - performance.now(); if (delay > 0) await sleep(delay);
+          if (pending.size >= 256 || performance.now() - due > 1000) { droppedByGenerator++; continue; }
+          const task = request(target, shapes[i % shapes.length], id, false, due); pending.add(task); task.finally(() => pending.delete(task));
+        }
+        await Promise.all(pending); return { rate, round, plannedSeconds: seconds, offered: count, droppedByGenerator };
+      });
+    }
+  }
+  longStreams = [];
+  for (const target of ['direct', 'node', 'go']) {
+    const result = await measure(target, `${target}-long-sse`, async () => {
+      await Promise.all(Array.from({ length: streams }, (_, i) => request(target, shapes[i % shapes.length], `${target}-long-sse`, true)));
+      return { streamSeconds, streams, offered: streams, droppedByGenerator: 0 };
+    });
+    longStreams.push(result); assert.equal(result.errors, 0, 'long SSE integrity failure'); assert.equal(result.upstreamCalls, streams);
+  }
+  const finalState = await control('/state'); assert.equal(finalState.active, 0); assert.equal(finalState.duplicates, 0); assert.equal(finalState.fixtureErrors, 0);
+} catch (error) { failure = error.message; process.exitCode = 1; }
+finally {
+  const report = { schemaVersion: 1, experiment: 'm4-cgroup-open-loop', at: new Date().toISOString(), runKey, productionReady: false, formalAcceptance: 'not evaluated: production workload and SLO not supplied',
+    failure, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB }, engine, image: imageEvidence, quotas,
+    groups: { node: ['Node gateway + resource endpoint'], go: ['Go runtime', 'Node adapter', 'real Node administration + resource endpoint'], outsideQuota: ['common TCP ingress', 'mock upstream', 'load generator'] },
+    corpus: { model, shapes, synthetic: true, semanticReview: false, inputMix: 'equal round-robin', mockDelayMs: 10 },
+    binarySha256: sha(readFileSync(binary)), nodeSourceSha256: sourceHash, preflight, runs, requests,
+    limits: ['These are synthetic workloads, not business quality evidence.', 'CPU/memory limits cover each full service group; shared ingress/upstream and client are outside them.', 'clientPathResidual subtracts measured mock service duration but still includes client, network and relay costs; it is not pure gateway latency.', 'Rate-sweep errors and generator drops are retained; overload is not hidden by a successful-only throughput denominator.', 'Minute-scale SSE is not an hours-long soak. Resource state is reused across runs.'] };
+  mkdirSync(dirname(out), { recursive: true }); writeFileSync(out, JSON.stringify(report, null, 2) + '\n'); console.log(JSON.stringify({ report: out, failure, runs: runs.length, requests: requests.length }));
+  for (const container of containers.reverse()) {
+    try { const label = docker(['inspect', container, '--format', '{{index .Config.Labels "amr.capacity"}}']); if (label === runKey) docker(['rm', '-f', container]); } catch { process.exitCode = 1; }
+  }
+  // Resolve and bound the generated staging directory before recursive cleanup.
+  try { const actual = realpathSync(stage), base = realpathSync(dataRoot); assert.ok(actual.startsWith(base + sep) && actual === stage); rmSync(actual, { recursive: true, force: true }); } catch { /* Keep staging on cleanup failure for inspection. */ }
+}

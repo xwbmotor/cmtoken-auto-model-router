@@ -1,0 +1,55 @@
+name: Go core capacity experiment
+
+on:
+  push:
+    branches: [codex/go-core-migration]
+    paths:
+      - 'go-core/compat/capacity-*.mjs'
+      - 'go-core/compat/compare-capacity.mjs'
+      - '.github/workflows/go-core-capacity.yml'
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Local mock workload size (never production)
+        type: choice
+        options: [smoke, standard]
+        default: smoke
+
+permissions:
+  contents: read
+
+jobs:
+  equal-quota:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - name: Build current Linux candidate
+        working-directory: go-core
+        run: |
+          mkdir -p ../data/go-migration
+          CGO_ENABLED=0 go build -trimpath -o ../data/go-migration/amr-core-linux ./cmd/amr-core
+      - name: Same quota, mixed open-loop load and long SSE
+        env:
+          PROFILE: ${{ inputs.profile || 'smoke' }}
+        run: |
+          if [ "$PROFILE" = "standard" ]; then
+            node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 50,150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-standard.json
+          else
+            node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-linux --seconds 1 --rounds 1 --rates 8 --stream-seconds 2 --streams 2 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-smoke.json
+          fi
+      - name: Preserve raw evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: go-core-capacity-evidence
+          path: data/go-migration/capacity-*.json
+          if-no-files-found: error
+          retention-days: 14
