@@ -58,7 +58,7 @@ async function control(path) {
 }
 const shapes = ['short', 'history', 'tools', 'image'];
 function bodyFor(target, shape, id, stream) {
-  const body = { model: target === 'direct' ? model : 'auto', stream, max_tokens: 128, messages: [{ role: 'system', content: `m4:${id}` }] };
+  const body = { ...(target === 'direct' ? { model } : {}), stream, max_tokens: 128, messages: [{ role: 'system', content: `m4:${id}` }] };
   if (shape === 'history') for (let i = 0; i < 16; i++) body.messages.push({ role: i % 2 ? 'assistant' : 'user', content: '项目需求、约束条件和执行记录。'.repeat(64) });
   if (shape === 'tools') {
     body.tools = [{ type: 'function', function: { name: 'lookup', description: '查询记录', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } } }];
@@ -77,6 +77,11 @@ async function request(target, shape, run, stream = false, due = performance.now
     sample.status = response.status; let text = ''; const decoder = new TextDecoder();
     for await (const chunk of response.body) { if (sample.firstByteMs === null) sample.firstByteMs = performance.now() - started; text += decoder.decode(chunk, { stream: true }); }
     text += decoder.decode();
+    if (response.status !== 200) {
+      let errorBody = text.slice(0, 2048);
+      for (const value of Object.values(credentials)) errorBody = errorBody.split(value).join('[redacted]');
+      sample.errorBody = errorBody;
+    }
     if (response.status === 200 && stream) {
       const events = text.split(/\r?\n\r?\n/).map(e => e.trim()).filter(e => e.startsWith('data:')).map(e => e.slice(5).trim());
       const parsed = events.filter(e => e !== '[DONE]').map(e => JSON.parse(e));
