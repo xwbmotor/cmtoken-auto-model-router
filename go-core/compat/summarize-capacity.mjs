@@ -24,7 +24,7 @@ const percentile = (samples, q) => {
 };
 const lines = ['# M4 同配额开放负载实测', '',
   `原始记录时间：${report.at}。原始 JSON SHA256：\`${createHash('sha256').update(bytes).digest('hex')}\`。`, '',
-  `每个服务组均限制为 ${report.parameters.cpus} CPU、${report.parameters.memoryMiB} MiB 内存且不提供额外 swap。Go 组包含 Go runtime、Node 适配器和真实 Node 管理服务。模拟上游、公共 TCP 入口和发压器在配额之外。`, '',
+  `每个服务组均限制为 ${report.parameters.cpus} CPU、${report.parameters.memoryMiB} MiB 内存且不提供额外 swap。Go 组包含 Go runtime${report.parameters.featureMode === 'snapshot' ? ' 和真实 Node 管理服务，不启动 Node 适配器' : '、Node 适配器和真实 Node 管理服务'}。模拟上游、公共 TCP 入口和发压器在配额之外。`, '',
   `以下均为合成负载。非流式上游固定等待约 10 ms，输入类型 ${report.corpus.shapes.join('/')} 均匀轮换；关闭语义复核。延迟分位数合并各轮完整成功请求，错误和发压丢弃单列；完整吞吐按调度开始至最后请求结束的实测跨度计算，包含排空。末次发起比计划窗口结束早一个请求间隔，因此低负载下实测跨度可能略短于计划窗口。`, '',
   '| 路径 | 目标 RPS | 发起/计划 | 完整成功 | 错误 | 发压丢弃 | 完整 RPS | P95 ms | P99 ms | 调度迟到 P95 ms |',
   '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|'];
