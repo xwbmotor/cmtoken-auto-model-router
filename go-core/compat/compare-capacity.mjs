@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { validateConfig } from '../../src/config.mjs';
 import { createHash, randomBytes } from 'node:crypto';
-import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync, chmodSync, existsSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync, chmodSync } from 'node:fs';
 import { resolve, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -16,6 +16,8 @@ const seconds = Number(arg('--seconds') ?? 10), rounds = Number(arg('--rounds') 
 const cpus = Number(arg('--cpus') ?? 1), memoryMiB = Number(arg('--memory-mib') ?? 512), streams = Number(arg('--streams') ?? 32);
 const rates = (arg('--rates') ?? '50,150,300').split(',').map(Number);
 const profiling = process.argv.includes('--profile');
+const goProcs = arg('--go-procs') ?? String(Math.max(1, Math.ceil(cpus)));
+assert.ok(goProcs === 'auto' || (/^[1-9]\d*$/.test(goProcs) && Number(goProcs) <= 64), 'invalid --go-procs');
 assert.ok(Number.isInteger(seconds) && seconds >= 1 && seconds <= 60 && Number.isInteger(rounds) && rounds >= 1 && rounds <= 5);
 assert.ok(Number.isInteger(streamSeconds) && streamSeconds >= 2 && streamSeconds <= 600 && Number.isInteger(streams) && streams >= 1 && streams <= 128);
 assert.ok(cpus >= .25 && cpus <= 8 && Number.isInteger(memoryMiB) && memoryMiB >= 256 && memoryMiB <= 8192);
@@ -26,7 +28,7 @@ const binary = resolve(arg('--binary')), image = arg('--image') || 'node:24-book
 const secret = () => randomBytes(24).toString('hex');
 const credentials = { M4_ACCESS: secret(), M4_ADMIN: secret(), M4_CORE_ADMIN: secret(), M4_UPSTREAM: secret(), M4_ASSESSOR: secret(), M4_CONTROL_TOKEN: secret() };
 const containers = [], requests = [], runs = [];
-let sourceHash, imageEvidence, hostPorts, engine, quotas, preflight, longStreams, failure;
+let sourceHash, imageEvidence, hostPorts, engine, quotas, preflight, longStreams, failure, goRuntime;
 const docker = args => execFileSync('docker', args, { cwd: root, windowsHide: true, encoding: 'utf8', timeout: 120000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const percentile = (values, q) => { const sorted = [...values].sort((a, b) => a - b); return sorted.length ? sorted[Math.ceil(sorted.length * q) - 1] : null; };
@@ -141,7 +143,7 @@ try {
   sourceHash = sha(readFileSync(resolve(root, 'src/server.mjs')));
   for (const role of ['node', 'go']) { mkdirSync(resolve(stage, role)); writeFileSync(resolve(stage, role, 'router.json'), JSON.stringify(config(role))); }
   writeFileSync(resolve(stage, 'go/auth.json'), JSON.stringify({ mode: 'strict', accessToken: credentials.M4_ACCESS, adminToken: credentials.M4_CORE_ADMIN, upstreamToken: credentials.M4_UPSTREAM }));
-  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, M4_PROFILE: profiling ? '1' : '0', GOMAXPROCS: Math.max(1, Math.ceil(cpus)), NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
+  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, M4_PROFILE: profiling ? '1' : '0', ...(goProcs === 'auto' ? {} : {GOMAXPROCS: goProcs}), NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
   const fixture = `${runKey}-fixture`;
   const mounts = ['--mount', `type=bind,source=${resolve(stage, 'app')},target=/app,readonly`, '--mount', `type=bind,source=${stage},target=/lab`, '--env-file', envFile];
   containers.push(fixture);
@@ -164,6 +166,7 @@ try {
     const sample = await control(`/resources/${role}`); const [quota, period] = sample.cpuLimit.split(' ').map(Number);
     assert.equal(quota / period, cpus); assert.equal(Number(sample.memoryLimit), memoryMiB * 1048576);
   }
+  goRuntime = JSON.parse(readFileSync(resolve(stage, 'go/runtime-info.json'), 'utf8'));
   preflight = [];
   for (const target of ['direct', 'node', 'go']) for (const shape of shapes) { const sample = await request(target, shape, 'preflight'); preflight.push(sample); assert.ok(sample.complete, `preflight failed: ${target}/${shape}/${sample.status}`); }
   for (const rate of rates) for (let round = 0; round < rounds; round++) {
@@ -193,8 +196,18 @@ try {
   if (profiling) {
     const pid = Number(readFileSync(resolve(stage, 'go/core.pid'), 'utf8'));
     assert.ok(Number.isInteger(pid) && pid > 1);
-    docker(['exec', `${runKey}-go`, 'node', '-e', 'process.kill(Number(process.argv[1]), "SIGTERM")', String(pid)]);
-    for (let i = 0; i < 150 && !existsSync(resolve(stage, 'go/profile/complete')); i++) await sleep(100);
+    // The Go process creates private files as container root. Transfer ownership
+    // to the existing bind-mount owner without widening the 0700/0600 modes.
+    docker(['exec', `${runKey}-go`, 'node', '--input-type=module', '-e', `
+      import {existsSync, readFileSync, statSync, chownSync} from 'node:fs';
+      process.kill(Number(process.argv[1]), 'SIGTERM');
+      const dir='/lab/go/profile';
+      for(let i=0;i<150&&!existsSync(dir+'/complete');i++) await new Promise(r=>setTimeout(r,100));
+      if(readFileSync(dir+'/complete','utf8')!=='ok\\n') throw new Error('profile incomplete');
+      const {uid,gid}=statSync('/lab/go');
+      for(const file of ['cpu.pprof','block.pprof','mutex.pprof','runtime.trace','complete']) chownSync(dir+'/'+file,uid,gid);
+      chownSync(dir,uid,gid);
+    `, String(pid)]);
     assert.equal(readFileSync(resolve(stage, 'go/profile/complete'), 'utf8'), 'ok\n', 'profile drain did not complete');
     cpSync(resolve(stage, 'go/profile'), `${out}.profiles`, { recursive: true });
   }
@@ -207,7 +220,7 @@ finally {
     return { name, log };
   }) : undefined;
   const report = { schemaVersion: 1, experiment: 'm4-cgroup-open-loop', at: new Date().toISOString(), runKey, productionReady: false, formalAcceptance: 'not evaluated: production workload and SLO not supplied',
-    failure, diagnostics, profiling, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB }, engine, image: imageEvidence, quotas,
+    failure, diagnostics, profiling, goRuntime, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB, goProcs }, engine, image: imageEvidence, quotas,
     groups: { node: ['Node gateway + resource endpoint'], go: ['Go runtime', 'Node adapter', 'real Node administration + resource endpoint'], outsideQuota: ['common TCP ingress', 'mock upstream', 'load generator'] },
     corpus: { model, shapes, synthetic: true, semanticReview: false, inputMix: 'equal round-robin', mockDelayMs: 10 },
     binarySha256: sha(readFileSync(binary)), nodeSourceSha256: sourceHash, preflight, runs, requests,

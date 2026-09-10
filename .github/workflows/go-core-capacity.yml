@@ -54,15 +54,18 @@ jobs:
             node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-before --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-before.json
             node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-after.json
           elif [ "$PROFILE" = "runtime-profile" ]; then
-            node go-core/compat/compare-capacity.mjs --profile --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 300 --stream-seconds 2 --streams 2 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-profile.json
-            for kind in cpu block mutex; do
-              go tool pprof -top -nodecount=40 data/go-migration/amr-core-linux "data/go-migration/capacity-profile.json.profiles/$kind.pprof" > "data/go-migration/capacity-profile-$kind.txt"
+            for procs in 1 auto; do
+              result="data/go-migration/capacity-profile-$procs"
+              node go-core/compat/compare-capacity.mjs --profile --go-procs "$procs" --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 300 --stream-seconds 2 --streams 2 --cpus 1 --memory-mib 512 --out "$result.json"
+              for kind in cpu block mutex; do
+                go tool pprof -top -nodecount=40 data/go-migration/amr-core-linux "$result.json.profiles/$kind.pprof" > "$result-$kind.txt"
+              done
+              for kind in net sync syscall sched; do
+                go tool trace -pprof="$kind" "$result.json.profiles/runtime.trace" > "$result-$kind.pprof"
+                go tool pprof -top -nodecount=30 "$result-$kind.pprof" > "$result-$kind.txt"
+              done
+              go tool trace -d=parsed "$result.json.profiles/runtime.trace" | node go-core/compat/summarize-trace.mjs "$result-regions.json"
             done
-            for kind in net sync syscall sched; do
-              go tool trace -pprof="$kind" data/go-migration/capacity-profile.json.profiles/runtime.trace > "data/go-migration/capacity-profile-$kind.pprof"
-              go tool pprof -top -nodecount=30 "data/go-migration/capacity-profile-$kind.pprof" > "data/go-migration/capacity-profile-$kind.txt"
-            done
-            go tool trace -d=parsed data/go-migration/capacity-profile.json.profiles/runtime.trace | node go-core/compat/summarize-trace.mjs data/go-migration/capacity-profile-regions.json
           elif [ "$PROFILE" = "diagnostic" ]; then
             (cd go-core && go test ./internal/analysis -run '^$' -bench BenchmarkCapacityAnalysis -benchtime 3s -count 2 -cpuprofile ../data/go-migration/analysis.cpu.pprof -o ../data/go-migration/analysis.test) > data/go-migration/analysis-benchmark.log
             go tool pprof -top -nodecount=30 data/go-migration/analysis.test data/go-migration/analysis.cpu.pprof > data/go-migration/analysis-cpu-top.txt

@@ -41,7 +41,8 @@ async function start(command, args) {
 if (role === 'go') {
   process.env.AMR_GO_ASSESSOR_TOKEN = process.env.M4_ASSESSOR;
   await start(process.execPath, ['go-core/compat/assessor.mjs', '--lab', '--config', process.env.CONFIG_PATH, '--port', '8789']);
-  await start('/app/amr-core', ['--lab', '--runtime', '--auth-config', `${dir}/auth.json`, '--ledger', `${dir}/go.wal`, '--listen', '127.0.0.1:8791', '--assessor', 'http://127.0.0.1:8789/assess', '--upstream', 'http://127.0.0.1:8790/v1/chat/completions', ...(process.env.M4_PROFILE === '1' ? ['--lab-profile-dir', `${dir}/profile`] : [])]);
+  const coreInfo = await start('/app/amr-core', ['--lab', '--runtime', '--auth-config', `${dir}/auth.json`, '--ledger', `${dir}/go.wal`, '--listen', '127.0.0.1:8791', '--assessor', 'http://127.0.0.1:8789/assess', '--upstream', 'http://127.0.0.1:8790/v1/chat/completions', ...(process.env.M4_PROFILE === '1' ? ['--lab-profile-dir', `${dir}/profile`] : [])]);
+  writeFileSync(`${dir}/runtime-info.json`, JSON.stringify(coreInfo));
   if (process.env.M4_PROFILE === '1') {
     profiledCore = children.at(-1);
     writeFileSync(`${dir}/core.pid`, String(profiledCore.pid));

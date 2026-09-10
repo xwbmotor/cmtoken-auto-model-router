@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -145,7 +146,7 @@ func main() {
 	if *runtimeMode {
 		milestone = "m3"
 	}
-	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"listen": listener.Addr().String(), "milestone": milestone, "productionReady": false})
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"listen": listener.Addr().String(), "milestone": milestone, "productionReady": false, "gomaxprocs": runtime.GOMAXPROCS(0), "logicalCPUs": runtime.NumCPU(), "goVersion": runtime.Version()})
 	if err = server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, "laboratory server failed")
 		os.Exit(1)
