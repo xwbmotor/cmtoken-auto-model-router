@@ -16,7 +16,9 @@ const seconds = Number(arg('--seconds') ?? 10), rounds = Number(arg('--rounds') 
 const cpus = Number(arg('--cpus') ?? 1), memoryMiB = Number(arg('--memory-mib') ?? 512), streams = Number(arg('--streams') ?? 32);
 const rates = (arg('--rates') ?? '50,150,300').split(',').map(Number);
 const profiling = process.argv.includes('--profile');
-const goProcs = arg('--go-procs') ?? String(Math.max(1, Math.ceil(cpus)));
+// The cgroup enforces CPU throughput. Do not add a one-P scheduler restriction
+// that suppresses Go's container-aware minimum parallelism during blocking I/O.
+const goProcs = arg('--go-procs') ?? 'auto';
 assert.ok(goProcs === 'auto' || (/^[1-9]\d*$/.test(goProcs) && Number(goProcs) <= 64), 'invalid --go-procs');
 assert.ok(Number.isInteger(seconds) && seconds >= 1 && seconds <= 60 && Number.isInteger(rounds) && rounds >= 1 && rounds <= 5);
 assert.ok(Number.isInteger(streamSeconds) && streamSeconds >= 2 && streamSeconds <= 600 && Number.isInteger(streams) && streams >= 1 && streams <= 128);

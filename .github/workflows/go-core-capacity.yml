@@ -12,7 +12,7 @@ on:
       profile:
         description: Local mock workload size (never production)
         type: choice
-        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile]
+        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization]
         default: smoke
 
 permissions:
@@ -51,8 +51,13 @@ jobs:
             (cd "$RUNNER_TEMP/amr-capacity-baseline/go-core" && go test ./internal/analysis -run '^$' -bench BenchmarkCapacityAnalysis -benchtime 2s -count 2) > data/go-migration/before-benchmark.log
             (cd go-core && go test ./internal/analysis -run '^$' -bench BenchmarkCapacityAnalysis -benchtime 2s -count 2) > data/go-migration/after-benchmark.log
             BASELINE="$baseline" node -e 'require("node:fs").writeFileSync("data/go-migration/capacity-pair-source.json", JSON.stringify({before:process.env.BASELINE,after:process.env.GITHUB_SHA,order:["before","after"],sameRunner:true}))'
-            node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-before --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-before.json
-            node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-after.json
+            node go-core/compat/compare-capacity.mjs --go-procs 1 --binary data/go-migration/amr-core-before --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-before.json
+            node go-core/compat/compare-capacity.mjs --go-procs 1 --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-after.json
+          elif [ "$PROFILE" = "runtime-optimization" ]; then
+            node -e 'require("node:fs").writeFileSync("data/go-migration/capacity-runtime-source.json", JSON.stringify({kind:"scheduler-setting",commit:process.env.GITHUB_SHA,before:"1",after:"auto",sameBinary:true,order:["before","after","cold-auto"]}))'
+            node go-core/compat/compare-capacity.mjs --go-procs 1 --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-runtime-before.json
+            node go-core/compat/compare-capacity.mjs --go-procs auto --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-runtime-after.json
+            node go-core/compat/compare-capacity.mjs --go-procs auto --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 300 --stream-seconds 2 --streams 2 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-runtime-cold.json
           elif [ "$PROFILE" = "runtime-profile" ]; then
             for procs in 1 auto; do
               result="data/go-migration/capacity-profile-$procs"
