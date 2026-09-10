@@ -12,7 +12,7 @@ on:
       profile:
         description: Local mock workload size (never production)
         type: choice
-        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization]
+        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization]
         default: smoke
 
 permissions:
@@ -53,6 +53,20 @@ jobs:
             BASELINE="$baseline" node -e 'require("node:fs").writeFileSync("data/go-migration/capacity-pair-source.json", JSON.stringify({before:process.env.BASELINE,after:process.env.GITHUB_SHA,order:["before","after"],sameRunner:true}))'
             node go-core/compat/compare-capacity.mjs --go-procs 1 --binary data/go-migration/amr-core-before --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-before.json
             node go-core/compat/compare-capacity.mjs --go-procs 1 --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-after.json
+          elif [ "$PROFILE" = "cold-optimization" ]; then
+            baseline=5a97c1de583757a61d48453f34ab869e722eba57
+            git fetch --no-tags --depth=1 origin "$baseline"
+            git worktree add --detach "$RUNNER_TEMP/amr-cold-baseline" "$baseline"
+            (cd "$RUNNER_TEMP/amr-cold-baseline/go-core" && CGO_ENABLED=0 go build -trimpath -o "$GITHUB_WORKSPACE/data/go-migration/amr-core-before" ./cmd/amr-core)
+            BASELINE="$baseline" node -e 'require("node:fs").writeFileSync("data/go-migration/capacity-cold-source.json", JSON.stringify({before:process.env.BASELINE,after:process.env.GITHUB_SHA,goProcs:"auto",order:["before-1","after-1","after-2","before-2"],freshProcessAndLedgerEach:true}))'
+            for phase in before-1 after-1 after-2 before-2; do
+              binary=data/go-migration/amr-core-linux
+              if [[ "$phase" == before-* ]]; then binary=data/go-migration/amr-core-before; fi
+              node go-core/compat/compare-capacity.mjs --go-procs auto --binary "$binary" --seconds 10 --rounds 3 --rates 300 --stream-seconds 2 --streams 2 --cpus 1 --memory-mib 512 --out "data/go-migration/capacity-cold-$phase.json"
+            done
+            node go-core/compat/compare-capacity.mjs --go-procs auto --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-cold-warm-check.json
+            node go-core/compat/compare-capacity.mjs --profile --go-procs auto --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 300 --stream-seconds 2 --streams 2 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-profile-cold-after.json
+            go tool trace -d=parsed data/go-migration/capacity-profile-cold-after.json.profiles/runtime.trace | node go-core/compat/summarize-trace.mjs data/go-migration/capacity-profile-cold-after-regions.json
           elif [ "$PROFILE" = "runtime-optimization" ]; then
             node -e 'require("node:fs").writeFileSync("data/go-migration/capacity-runtime-source.json", JSON.stringify({kind:"scheduler-setting",commit:process.env.GITHUB_SHA,before:"1",after:"auto",sameBinary:true,order:["before","after","cold-auto"]}))'
             node go-core/compat/compare-capacity.mjs --go-procs 1 --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-runtime-before.json

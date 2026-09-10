@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 	_ "time/tzdata"
 )
@@ -84,6 +85,7 @@ type Ledger struct {
 	attempts map[string]attempt
 	broken   bool
 	opening  *OpeningBalance
+	view     atomic.Pointer[Snapshot]
 }
 
 func Open(path string, options Options) (*Ledger, error) {
@@ -121,6 +123,7 @@ func Open(path string, options Options) (*Ledger, error) {
 		return nil, err
 	}
 	l.rollover(l.today())
+	l.publish()
 	return l, nil
 }
 func (l *Ledger) today() string { return l.now().In(l.zone).Format("2006-01-02") }
@@ -262,15 +265,30 @@ func (l *Ledger) Release(id string) error {
 	return l.commit(event{Op: "release", ID: id})
 }
 func (l *Ledger) Snapshot() Snapshot {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.rollover(l.today())
-	s := l.snap
-	s.Sources = make(map[string]Totals, len(l.snap.Sources))
-	for k, v := range l.snap.Sources {
+	v := l.view.Load()
+	if v.Date != l.today() {
+		// Accounting-day changes still serialize with the writer. Ordinary
+		// readers use only the last durable publication, never in-flight data.
+		l.mu.Lock()
+		l.rollover(l.today())
+		l.publish()
+		v = l.view.Load()
+		l.mu.Unlock()
+	}
+	s := *v
+	s.Sources = make(map[string]Totals, len(v.Sources))
+	for k, v := range v.Sources {
 		s.Sources[k] = v
 	}
 	return s
+}
+
+// Called under the writer lock (or during Open before exposure). commit builds
+// a new Sources map for each event, so published maps are immutable. Snapshot
+// returns its own copy to prevent callers from modifying a published view.
+func (l *Ledger) publish() {
+	s := l.snap
+	l.view.Store(&s)
 }
 func (l *Ledger) Close() error {
 	l.mu.Lock()
@@ -436,6 +454,7 @@ func (l *Ledger) commit(e event) error {
 	}
 	l.opening = trial.opening
 	l.seq = e.Seq
+	l.publish()
 	return nil
 }
 func (l *Ledger) replay() error {
