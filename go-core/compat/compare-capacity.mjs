@@ -56,7 +56,8 @@ async function control(path) {
   const res = await fetch(`http://127.0.0.1:${hostPorts.control}${path}`, { headers: controlHeaders, signal: AbortSignal.timeout(5000) });
   assert.equal(res.status, 200, 'fixture control unavailable'); return res.json();
 }
-const shapes = ['short', 'history', 'tools', 'image'];
+const shapes = (arg('--shapes') || 'short,history,tools,image').split(',');
+assert.ok(shapes.length >= 1 && new Set(shapes).size === shapes.length && shapes.every(s => ['short', 'history', 'tools', 'image'].includes(s)), 'invalid --shapes');
 function bodyFor(target, shape, id, stream) {
   const body = { ...(target === 'direct' ? { model } : {}), stream, max_tokens: 128, messages: [{ role: 'system', content: `m4:${id}` }] };
   if (shape === 'history') for (let i = 0; i < 16; i++) body.messages.push({ role: i % 2 ? 'assistant' : 'user', content: '项目需求、约束条件和执行记录。'.repeat(64) });

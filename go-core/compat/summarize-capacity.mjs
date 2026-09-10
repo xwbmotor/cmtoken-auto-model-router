@@ -7,7 +7,7 @@ assert.ok(input && output, 'usage: node summarize-capacity.mjs input.json output
 const bytes = readFileSync(input), report = JSON.parse(bytes);
 assert.equal(report.experiment, 'm4-cgroup-open-loop');
 assert.ok(!report.failure, `experiment failed: ${report.failure}`);
-assert.equal(report.preflight.length, 12);
+assert.equal(report.preflight.length, report.corpus.shapes.length * 3);
 assert.ok(report.preflight.every(r => r.complete));
 assert.equal(report.runs.length, report.parameters.rates.length * report.parameters.rounds * 3 + 3);
 for (const run of report.runs) {
@@ -25,7 +25,7 @@ const percentile = (samples, q) => {
 const lines = ['# M4 同配额开放负载实测', '',
   `原始记录时间：${report.at}。原始 JSON SHA256：\`${createHash('sha256').update(bytes).digest('hex')}\`。`, '',
   `每个服务组均限制为 ${report.parameters.cpus} CPU、${report.parameters.memoryMiB} MiB 内存且不提供额外 swap。Go 组包含 Go runtime、Node 适配器和真实 Node 管理服务。模拟上游、公共 TCP 入口和发压器在配额之外。`, '',
-  '以下均为合成负载。非流式上游固定等待约 10 ms，短文本、长历史、工具消息、图片各占四分之一；关闭语义复核。延迟分位数合并各轮完整成功请求，错误和发压丢弃单列；完整吞吐按调度开始至最后请求结束的实测跨度计算，包含排空。末次发起比计划窗口结束早一个请求间隔，因此低负载下实测跨度可能略短于计划窗口。', '',
+  `以下均为合成负载。非流式上游固定等待约 10 ms，输入类型 ${report.corpus.shapes.join('/')} 均匀轮换；关闭语义复核。延迟分位数合并各轮完整成功请求，错误和发压丢弃单列；完整吞吐按调度开始至最后请求结束的实测跨度计算，包含排空。末次发起比计划窗口结束早一个请求间隔，因此低负载下实测跨度可能略短于计划窗口。`, '',
   '| 路径 | 目标 RPS | 发起/计划 | 完整成功 | 错误 | 发压丢弃 | 完整 RPS | P95 ms | P99 ms | 调度迟到 P95 ms |',
   '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|'];
 for (const rate of report.parameters.rates) for (const target of ['direct', 'node', 'go']) {

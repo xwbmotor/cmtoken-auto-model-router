@@ -12,7 +12,7 @@ on:
       profile:
         description: Local mock workload size (never production)
         type: choice
-        options: [smoke, standard]
+        options: [smoke, standard, diagnostic]
         default: smoke
 
 permissions:
@@ -42,6 +42,14 @@ jobs:
         run: |
           if [ "$PROFILE" = "standard" ]; then
             node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 50,150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-standard.json
+          elif [ "$PROFILE" = "diagnostic" ]; then
+            (cd go-core && go test ./internal/analysis -run '^$' -bench BenchmarkCapacityAnalysis -benchtime 3s -count 2 -cpuprofile ../data/go-migration/analysis.cpu.pprof -o ../data/go-migration/analysis.test) > data/go-migration/analysis-benchmark.log
+            go tool pprof -top -nodecount=30 data/go-migration/analysis.test data/go-migration/analysis.cpu.pprof > data/go-migration/analysis-cpu-top.txt
+            go tool pprof -list 'Analyzer.*Analyze' data/go-migration/analysis.test data/go-migration/analysis.cpu.pprof > data/go-migration/analysis-cpu-lines.txt
+            (cd go-core && go test ./internal/gateway -run '^$' -bench BenchmarkCapacityPersistence -benchtime 3s -count 2) > data/go-migration/persistence-benchmark.log
+            for shapes in short,history,tools,image short history; do
+              node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-linux --seconds 10 --rounds 2 --rates 150,300 --stream-seconds 2 --streams 2 --cpus 1 --memory-mib 512 --shapes "$shapes" --out "data/go-migration/capacity-diagnostic-${shapes//,/-}.json"
+            done
           else
             node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-linux --seconds 1 --rounds 1 --rates 8 --stream-seconds 2 --streams 2 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-smoke.json
           fi
@@ -50,6 +58,10 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: go-core-capacity-evidence
-          path: data/go-migration/capacity-*.json
+          path: |
+            data/go-migration/capacity-*.json
+            data/go-migration/analysis*.pprof
+            data/go-migration/analysis*.txt
+            data/go-migration/*-benchmark.log
           if-no-files-found: error
           retention-days: 14
