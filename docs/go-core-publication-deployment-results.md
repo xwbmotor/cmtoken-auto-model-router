@@ -39,4 +39,4 @@ Linux 运行记录：[Go 回归](https://github.com/xwbmotor/cmtoken-auto-model-
 
 没有进行生产发布、目标服务器安装或业务流量切换。Docker 在 Linux CI 中实际运行并验收，本机 Docker daemon 未启动；没有将 mock 容器环境称为目标环境部署完成。Node 管理页面、Python 分类/训练/评测继续保留；本容器只包含 Go 与 mock，不包含完整 Node 管理服务或真实 Python 服务。管理发布在同机真实 Node/Go 进程中独立验证。
 
-后续已完成[一小时隔离混合负载验收](go-core-soak-results.md)，包含长 SSE、取消、热更新和重启对账；长期账本历史保留、目标环境 Python 集成及灰度仍待解决或验证。本轮短时冒烟不产生新的容量或 P95 性能结论。
+后续已完成[一小时隔离混合负载验收](go-core-soak-results.md)及[账本缓存有界改造后的复验](go-core-bounded-ledger-results.md)，包含长 SSE、取消、热更新和重启对账；磁盘历史压缩、目标环境 Python 集成及灰度仍待解决或验证。本轮短时冒烟不产生新的容量或 P95 性能结论。

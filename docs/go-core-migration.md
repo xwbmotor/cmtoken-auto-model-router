@@ -94,4 +94,4 @@ M1 尚未实现 M2/M3 的完整生产行为。Go 返回了回退顺序，不代�
 
 ### 配置发布与独立部署（2026-09-10）
 
-管理台已支持快照自动发布并核对生效版本，独立隔离容器通过停止/重启/强杀后账本恢复验收。见 [验收结果](go-core-publication-deployment-results.md)。随后[一小时隔离稳定性验收](go-core-soak-results.md)通过；账本历史长期保留仍待解决，目标环境集成和生产灰度尚未验证，生产未切换。
+管理台已支持快照自动发布并核对生效版本，独立隔离容器通过停止/重启/强杀后账本恢复验收。见 [验收结果](go-core-publication-deployment-results.md)。随后[一小时隔离稳定性验收](go-core-soak-results.md)和[账本缓存有界改造后的复验](go-core-bounded-ledger-results.md)通过；磁盘历史压缩、目标环境集成和生产灰度仍未完成，生产未切换。

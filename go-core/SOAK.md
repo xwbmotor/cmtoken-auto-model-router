@@ -31,3 +31,5 @@ prepare拒绝覆盖原fixture；每次新实验须使用全新目录/工作区�
 原始证据在data/go-soak/evidence：soak-result.json、runtime-samples.jsonl、latency-windows.jsonl、long-streams.jsonl、reloads.jsonl、container-stats.jsonl，以及排空、审计和重启结果。失败写soak-failure.json并保留过程日志，不输出凭据或请求正文。持续时间、请求数和结论必须从实际完成归档读取，不将脚本实现等同实验通过。
 
 完成后运行 `node go-core/deployment/analyze-soak.mjs data/go-soak/evidence`，生成检查结果和时延/内存分析；短跑显式加 `--smoke`。分析失败返回非零退出码。2026-09-10 实际一小时结果见[验收报告](../docs/go-core-soak-results.md)。
+
+账本缓存有界改造后的同协议复验见[新报告](../docs/go-core-bounded-ledger-results.md)，含缓存、完整历史、WAL/索引文件及两轮内存和时延对比。
