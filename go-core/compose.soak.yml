@@ -1,0 +1,49 @@
+name: amr-go-soak
+services:
+  gateway:
+    build:
+      context: .
+    image: amr-go-core:soak
+    network_mode: none
+    read_only: true
+    cpus: 2
+    mem_limit: 512m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: [--lab, --runtime, --runtime-config, /config/runtime.json, --auth-config, /config/auth.json, --ledger, /ledger/runtime.wal, --listen, '127.0.0.1:8791', --upstream, 'http://127.0.0.1:8790/v1/chat/completions']
+    volumes:
+      - ../data/go-soak/config:/config:ro
+      - ../data/go-soak/ledger:/ledger
+    stop_grace_period: 20s
+    restart: 'no'
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  controller:
+    image: node:24-alpine
+    user: '65532:65532'
+    network_mode: service:gateway
+    depends_on:
+      gateway: {condition: service_healthy}
+    read_only: true
+    cpus: 2
+    mem_limit: 768m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    working_dir: /workspace
+    entrypoint: [node, go-core/deployment/soak.mjs]
+    command: [serve]
+    environment:
+      SOAK_SECONDS: ${SOAK_SECONDS:-3600}
+      SOAK_RPS: ${SOAK_RPS:-100}
+      SOAK_LONG_SECONDS: ${SOAK_LONG_SECONDS:-300}
+      SOAK_RELOAD_SECONDS: ${SOAK_RELOAD_SECONDS:-60}
+      CONFIG_PATH: /config/router.json
+    volumes:
+      - ..:/workspace:ro
+      - ../data/go-soak/config:/config
+      - ../data/go-soak/ledger:/ledger:ro
+      - ../data/go-soak/evidence:/evidence
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '2'}

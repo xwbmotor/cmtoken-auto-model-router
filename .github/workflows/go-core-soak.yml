@@ -1,0 +1,63 @@
+name: Go core stability soak
+on:
+  push:
+    branches: [codex/go-core-migration]
+    paths: ['go-core/**', 'src/go-runtime/**', '.github/workflows/go-core-soak.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with: {node-version: '24'}
+      - name: Prepare isolated fixtures
+        run: |
+          node go-core/deployment/prepare-soak.mjs
+          sudo chown -R 65532:65532 data/go-soak
+      - name: Exercise soak contract before long run
+        env:
+          SOAK_SECONDS: '60'
+          SOAK_RPS: '25'
+          SOAK_LONG_SECONDS: '10'
+          SOAK_RELOAD_SECONDS: '5'
+        run: bash go-core/deployment/soak.sh
+      - name: Capture state
+        if: always()
+        run: |
+          docker compose -f go-core/compose.soak.yml logs --no-color > data/go-soak/evidence/containers.log
+          docker compose -f go-core/compose.soak.yml down
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: always()
+        with: {name: go-core-soak-smoke, path: data/go-soak/evidence/, retention-days: 14}
+  one-hour:
+    needs: smoke
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[soak-hour]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with: {node-version: '24'}
+      - name: Prepare isolated fixtures
+        run: |
+          node go-core/deployment/prepare-soak.mjs
+          sudo chown -R 65532:65532 data/go-soak
+      - name: One hour at fixed 100 RPS
+        env:
+          SOAK_SECONDS: '3600'
+          SOAK_RPS: '100'
+          SOAK_LONG_SECONDS: '300'
+          SOAK_RELOAD_SECONDS: '60'
+        run: bash go-core/deployment/soak.sh
+      - name: Capture state
+        if: always()
+        run: |
+          docker compose -f go-core/compose.soak.yml logs --no-color > data/go-soak/evidence/containers.log
+          docker compose -f go-core/compose.soak.yml down
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: always()
+        with: {name: go-core-soak-hour, path: data/go-soak/evidence/, retention-days: 14}

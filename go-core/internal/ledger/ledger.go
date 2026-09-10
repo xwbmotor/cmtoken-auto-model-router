@@ -272,6 +272,15 @@ func (l *Ledger) Release(id string) error {
 		return l.commit(event{Op: "release", ID: id})
 	})
 }
+
+// RetainedAttempts counts the in-memory idempotency history, including settled
+// and released attempts. It does not mutate the billing snapshot or retention.
+func (l *Ledger) RetainedAttempts() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.attempts)
+}
+
 func (l *Ledger) Snapshot() Snapshot {
 	l.mu.Lock()
 	defer l.mu.Unlock()

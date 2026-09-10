@@ -167,7 +167,7 @@ func (g *Gateway) recordReview(v Review) {
 	}
 	g.reviews = append(g.reviews, v)
 }
-func (g *Gateway) runtimeStatus(w http.ResponseWriter) {
+func (g *Gateway) runtimeStatus(w http.ResponseWriter, generations ...generationDiagnostics) {
 	g.reviewsMu.Lock()
 	reviews := append([]Review{}, g.reviews...)
 	g.reviewsMu.Unlock()
@@ -178,7 +178,11 @@ func (g *Gateway) runtimeStatus(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	if g.runtime != nil {
-		_ = json.NewEncoder(w).Encode(map[string]any{"milestone": "m3", "productionReady": false, "revision": g.options.Bundle.Revision, "ledger": g.runtime.ledger.Snapshot(), "health": g.runtime.health.States(), "persistenceHealthy": !g.runtime.failed.Load(), "inflight": g.admission.Snapshot(), "semanticGuard": guard, "reviews": reviews})
+		var generation *generationDiagnostics
+		if len(generations) > 0 {
+			generation = &generations[0]
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"milestone": "m3", "productionReady": false, "revision": g.options.Bundle.Revision, "ledger": g.runtime.ledger.Snapshot(), "health": g.runtime.health.States(), "persistenceHealthy": !g.runtime.failed.Load(), "inflight": g.admission.Snapshot(), "semanticGuard": guard, "reviews": reviews, "diagnostics": g.diagnostics(generation)})
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"milestone": "m2b", "productionReady": false, "semanticGuard": guard, "reviews": reviews, "inflight": g.admission.Snapshot()})

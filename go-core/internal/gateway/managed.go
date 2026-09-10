@@ -252,6 +252,15 @@ func (m *Managed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.workers.Done()
 	}()
 	w.Header().Set("X-AMR-Runtime-Revision", gen.revision)
+	if r.URL.Path == "/internal/v1/runtime" && r.Method == "GET" && r.URL.RawQuery == "" {
+		if !gen.g.auth.AdminAuthorized(r.Header.Get("Authorization")) {
+			writeError(w, 403, "admin_required")
+			return
+		}
+		w.Header().Set("X-AMR-Config-Revision", gen.g.options.Bundle.Revision)
+		gen.g.runtimeStatus(w, m.generationDiagnostics())
+		return
+	}
 	if r.URL.Path == "/internal/v1/config" || r.URL.Path == "/internal/v1/config/reload" {
 		if !gen.g.auth.AdminAuthorized(r.Header.Get("Authorization")) {
 			writeError(w, 403, "admin_required")
