@@ -1,7 +1,6 @@
 package analysis
 
 import (
-	"regexp"
 	"strings"
 	"unicode/utf16"
 )
@@ -49,4 +48,6 @@ func regexSource(s string) string {
 	}
 	return b.String()
 }
-func mustRegex(s string) *regexp.Regexp { return regexp.MustCompile(regexSource(s)) }
+
+var toolSearch = mustRegex("search|web|检索|surf")
+var toolOps = mustRegex("devops|deploy|ops")

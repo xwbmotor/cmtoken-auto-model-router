@@ -12,7 +12,7 @@ on:
       profile:
         description: Local mock workload size (never production)
         type: choice
-        options: [smoke, standard, diagnostic]
+        options: [smoke, standard, diagnostic, optimization]
         default: smoke
 
 permissions:
@@ -42,6 +42,16 @@ jobs:
         run: |
           if [ "$PROFILE" = "standard" ]; then
             node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 50,150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-standard.json
+          elif [ "$PROFILE" = "optimization" ]; then
+            baseline=f30e8d7eddd290732b66210c9b6fbf8123f1a192
+            git fetch --no-tags --depth=1 origin "$baseline"
+            git worktree add --detach "$RUNNER_TEMP/amr-capacity-baseline" "$baseline"
+            (cd "$RUNNER_TEMP/amr-capacity-baseline/go-core" && CGO_ENABLED=0 go build -trimpath -o "$GITHUB_WORKSPACE/data/go-migration/amr-core-before" ./cmd/amr-core)
+            (cd "$RUNNER_TEMP/amr-capacity-baseline/go-core" && go test ./internal/analysis -run '^$' -bench BenchmarkCapacityAnalysis -benchtime 2s -count 2) > data/go-migration/before-benchmark.log
+            (cd go-core && go test ./internal/analysis -run '^$' -bench BenchmarkCapacityAnalysis -benchtime 2s -count 2) > data/go-migration/after-benchmark.log
+            node -e 'require("node:fs").writeFileSync("data/go-migration/capacity-pair-source.json", JSON.stringify({before:"f30e8d7eddd290732b66210c9b6fbf8123f1a192",after:process.env.GITHUB_SHA,order:["before","after"],sameRunner:true}))'
+            node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-before --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-before.json
+            node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-after.json
           elif [ "$PROFILE" = "diagnostic" ]; then
             (cd go-core && go test ./internal/analysis -run '^$' -bench BenchmarkCapacityAnalysis -benchtime 3s -count 2 -cpuprofile ../data/go-migration/analysis.cpu.pprof -o ../data/go-migration/analysis.test) > data/go-migration/analysis-benchmark.log
             go tool pprof -top -nodecount=30 data/go-migration/analysis.test data/go-migration/analysis.cpu.pprof > data/go-migration/analysis-cpu-top.txt

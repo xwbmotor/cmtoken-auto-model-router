@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -52,7 +51,7 @@ type Result struct {
 }
 type Rule struct {
 	Name    string
-	Pattern *regexp.Regexp
+	Pattern *fastRegex
 }
 type Analyzer struct {
 	config   Config
@@ -69,7 +68,7 @@ func New(c Config) (*Analyzer, error) {
 		if p := c.TaskRules.Patterns[r.name]; len(p) > 0 {
 			source = strings.Join(p, "|")
 		}
-		compiled, err := regexp.Compile(regexSource("(?i)" + strings.ReplaceAll(source, `\/`, `/`)))
+		compiled, err := compileRegex("(?i)" + strings.ReplaceAll(source, `\/`, `/`))
 		if err != nil {
 			return nil, errors.New("task pattern is not supported by Go RE2: " + r.name)
 		}
@@ -242,7 +241,7 @@ var trivialRE = mustRegex(`^(请问)?(今天|现在|当前)?(是)?(星期几|周
 var negation = mustRegex("不要|不用|无需|禁止|避免|并非|而不是|暂不|先不|别写|别用|别管|别生成|别给")
 var meta = mustRegex("什么是|通俗.{0,6}(语言|方式|词语|地)?(解释|讲解|介绍|说明)|(总结|概括|翻译|改写|解释|讲解|评审意见)(一下|下)?[^。？！]{0,10}(这段|上述|下面|以上|该段|这份)|科普")
 
-func negated(text string, re *regexp.Regexp) bool {
+func negated(text string, re *fastRegex) bool {
 	scopes := [][2]int{}
 	for _, m := range negation.FindAllStringIndex(text, -1) {
 		end := m[1]
@@ -259,6 +258,9 @@ func negated(text string, re *regexp.Regexp) bool {
 			end += len(string(r))
 		}
 		scopes = append(scopes, [2]int{m[0], end})
+	}
+	if len(scopes) == 0 {
+		return false
 	}
 	matches := re.FindAllStringIndex(text, -1)
 	if len(matches) == 0 {
@@ -301,7 +303,7 @@ func (a *Analyzer) Analyze(raw []byte) (Result, error) {
 	fullLength, textLength := jsLen(full), jsLen(text)
 	full, text = regexText(full), regexText(text)
 	task := "default"
-	var winner *regexp.Regexp
+	var winner *fastRegex
 	matched := 0
 	for _, r := range a.patterns {
 		if r.Pattern.MatchString(text) {
@@ -400,9 +402,9 @@ func (a *Analyzer) Analyze(raw []byte) (Result, error) {
 		}
 		s := "workflow-execution"
 		toolText := strings.ToLower(strings.Join(names, " "))
-		if mustRegex("search|web|检索|surf").MatchString(toolText) {
+		if toolSearch.MatchString(toolText) {
 			s = "web-search"
-		} else if mustRegex("devops|deploy|ops").MatchString(toolText) {
+		} else if toolOps.MatchString(toolText) {
 			s = "devops"
 		}
 		result.SubTask = &s
