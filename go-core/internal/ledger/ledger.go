@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 	_ "time/tzdata"
+	"unicode/utf8"
 )
 
 var (
@@ -199,7 +200,7 @@ func (l *Ledger) Reserve(id string, estimate *int64, dailyLimit int64, source st
 		if l.broken || l.file == nil {
 			return ErrClosed
 		}
-		if id == "" || len(id) > 512 || !validAmount(estimate) {
+		if id == "" || len(id) > 512 || !utf8.ValidString(id) || !validAmount(estimate) {
 			return errors.New("invalid reservation")
 		}
 		if source != "answer" && source != "probe" && source != "classifier" {
@@ -367,7 +368,7 @@ func (l *Ledger) apply(e event) error {
 		if ok {
 			return ErrConflict
 		}
-		if e.ID == "" || (e.Source != "answer" && e.Source != "probe" && e.Source != "classifier") {
+		if e.ID == "" || len(e.ID) > 512 || !utf8.ValidString(e.ID) || (e.Source != "answer" && e.Source != "probe" && e.Source != "classifier") {
 			return errors.New("invalid reservation record")
 		}
 		pending := l.snap.PendingMicros

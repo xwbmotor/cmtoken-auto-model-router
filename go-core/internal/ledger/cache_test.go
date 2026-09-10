@@ -20,6 +20,80 @@ func cacheVolumeFixture(t *testing.T, l *Ledger) {
 	l.mu.Unlock()
 }
 
+func TestAttemptCacheRejectsInvalidUTF8ID(t *testing.T) {
+	l := openTest(t, filepath.Join(t.TempDir(), "ledger.wal"), Options{})
+	id := string([]byte{'i', 'd', '-', 0xff})
+	if err := l.Reserve(id, amount(10), 0, "answer"); err != nil {
+		if s := l.Snapshot(); s.PendingReserves != 0 || s.PendingMicros != 0 {
+			t.Fatal("invalid ID rejection changed totals", s)
+		}
+		return
+	}
+	// JSON replaces invalid UTF-8, so a cached original ID and its serialized
+	// representation no longer match after eviction. Include the observed
+	// retry accounting in the failure to expose the resulting double reserve.
+	l.mu.Lock()
+	clear(l.attempts)
+	l.mu.Unlock()
+	err := l.Reserve(id, amount(10), 0, "answer")
+	t.Fatalf("accepted non-round-trippable ID: cold retry err=%v snapshot=%+v", err, l.Snapshot())
+}
+
+func TestAttemptCacheBatchReserveSettleAcrossEviction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.wal")
+	l := openTest(t, path, Options{})
+	cacheVolumeFixture(t, l)
+	for i := 0; i < attemptCacheLimit-1; i++ {
+		require(t, l.Reserve(fmt.Sprintf("pending-%d", i), amount(0), 0, "probe"))
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	unblockOnCleanup(t, release)
+	firstSync := true
+	l.mu.Lock()
+	l.syncFile = func() error {
+		if firstSync {
+			firstSync = false
+			close(entered)
+			<-release
+		}
+		return l.file.Sync()
+	}
+	l.mu.Unlock()
+	barrier := reserveAsync(l, "barrier", 0)
+	waitSignal(t, entered)
+	reserved := reserveAsync(l, "batch", 0)
+	waitQueued(t, l, 1)
+	settled := make(chan error, 1)
+	go func() { settled <- l.Settle("batch", amount(7), true) }()
+	waitQueued(t, l, 2)
+	duplicate := make(chan error, 1)
+	go func() { duplicate <- l.Settle("batch", amount(7), true) }()
+	waitQueued(t, l, 3)
+	close(release)
+	require(t, <-barrier)
+	require(t, <-reserved)
+	require(t, <-settled)
+	require(t, <-duplicate)
+	assertAttemptCacheBound(t, l)
+	assertAttemptCold(t, l, "batch")
+	require(t, l.Reserve("batch", amount(1), 0, "answer"))
+	require(t, l.Settle("batch", amount(7), true))
+	if !errors.Is(l.Release("batch"), ErrConflict) {
+		t.Fatal("index retained intermediate reserve instead of final settlement")
+	}
+	want := l.Snapshot()
+	if want.ActualMicros != 7 || want.PendingMicros != 1 || want.PendingReserves != attemptCacheLimit {
+		t.Fatal(want)
+	}
+	require(t, l.Close())
+	l = openTest(t, path, Options{})
+	require(t, l.Settle("batch", amount(7), true))
+	if got := l.Snapshot(); !reflect.DeepEqual(want, got) {
+		t.Fatalf("batched settlement changed after recovery: want=%+v got=%+v", want, got)
+	}
+	assertAttemptCacheBound(t, l)
+}
+
 func TestAttemptCacheHashCollisionKeepsExactIDs(t *testing.T) {
 	seen := make(map[uint16][]string)
 	var ids []string
