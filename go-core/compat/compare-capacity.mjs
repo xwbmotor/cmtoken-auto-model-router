@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { validateConfig } from '../../src/config.mjs';
 import { createHash, randomBytes } from 'node:crypto';
-import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync, chmodSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync, chmodSync, existsSync } from 'node:fs';
 import { resolve, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -15,6 +15,7 @@ assert.ok(arg('--binary'), '--binary <Linux binary> required');
 const seconds = Number(arg('--seconds') ?? 10), rounds = Number(arg('--rounds') ?? 3), streamSeconds = Number(arg('--stream-seconds') ?? 60);
 const cpus = Number(arg('--cpus') ?? 1), memoryMiB = Number(arg('--memory-mib') ?? 512), streams = Number(arg('--streams') ?? 32);
 const rates = (arg('--rates') ?? '50,150,300').split(',').map(Number);
+const profiling = process.argv.includes('--profile');
 assert.ok(Number.isInteger(seconds) && seconds >= 1 && seconds <= 60 && Number.isInteger(rounds) && rounds >= 1 && rounds <= 5);
 assert.ok(Number.isInteger(streamSeconds) && streamSeconds >= 2 && streamSeconds <= 600 && Number.isInteger(streams) && streams >= 1 && streams <= 128);
 assert.ok(cpus >= .25 && cpus <= 8 && Number.isInteger(memoryMiB) && memoryMiB >= 256 && memoryMiB <= 8192);
@@ -140,7 +141,7 @@ try {
   sourceHash = sha(readFileSync(resolve(root, 'src/server.mjs')));
   for (const role of ['node', 'go']) { mkdirSync(resolve(stage, role)); writeFileSync(resolve(stage, role, 'router.json'), JSON.stringify(config(role))); }
   writeFileSync(resolve(stage, 'go/auth.json'), JSON.stringify({ mode: 'strict', accessToken: credentials.M4_ACCESS, adminToken: credentials.M4_CORE_ADMIN, upstreamToken: credentials.M4_UPSTREAM }));
-  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, GOMAXPROCS: Math.max(1, Math.ceil(cpus)), NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
+  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, M4_PROFILE: profiling ? '1' : '0', GOMAXPROCS: Math.max(1, Math.ceil(cpus)), NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
   const fixture = `${runKey}-fixture`;
   const mounts = ['--mount', `type=bind,source=${resolve(stage, 'app')},target=/app,readonly`, '--mount', `type=bind,source=${stage},target=/lab`, '--env-file', envFile];
   containers.push(fixture);
@@ -189,6 +190,14 @@ try {
     longStreams.push(result); assert.equal(result.errors, 0, 'long SSE integrity failure'); assert.equal(result.upstreamCalls, streams);
   }
   const finalState = await control('/state'); assert.equal(finalState.active, 0); assert.equal(finalState.duplicates, 0); assert.equal(finalState.fixtureErrors, 0);
+  if (profiling) {
+    const pid = Number(readFileSync(resolve(stage, 'go/core.pid'), 'utf8'));
+    assert.ok(Number.isInteger(pid) && pid > 1);
+    docker(['exec', `${runKey}-go`, 'node', '-e', 'process.kill(Number(process.argv[1]), "SIGTERM")', String(pid)]);
+    for (let i = 0; i < 150 && !existsSync(resolve(stage, 'go/profile/complete')); i++) await sleep(100);
+    assert.equal(readFileSync(resolve(stage, 'go/profile/complete'), 'utf8'), 'ok\n', 'profile drain did not complete');
+    cpSync(resolve(stage, 'go/profile'), `${out}.profiles`, { recursive: true });
+  }
 } catch (error) { failure = error.message; process.exitCode = 1; }
 finally {
   const diagnostics = failure ? containers.map(name => {
@@ -198,7 +207,7 @@ finally {
     return { name, log };
   }) : undefined;
   const report = { schemaVersion: 1, experiment: 'm4-cgroup-open-loop', at: new Date().toISOString(), runKey, productionReady: false, formalAcceptance: 'not evaluated: production workload and SLO not supplied',
-    failure, diagnostics, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB }, engine, image: imageEvidence, quotas,
+    failure, diagnostics, profiling, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB }, engine, image: imageEvidence, quotas,
     groups: { node: ['Node gateway + resource endpoint'], go: ['Go runtime', 'Node adapter', 'real Node administration + resource endpoint'], outsideQuota: ['common TCP ingress', 'mock upstream', 'load generator'] },
     corpus: { model, shapes, synthetic: true, semanticReview: false, inputMix: 'equal round-robin', mockDelayMs: 10 },
     binarySha256: sha(readFileSync(binary)), nodeSourceSha256: sourceHash, preflight, runs, requests,

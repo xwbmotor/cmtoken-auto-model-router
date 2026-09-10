@@ -2,12 +2,13 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { timingSafeEqual } from 'node:crypto';
 
 const role = process.env.M4_ROLE;
 if (!['node', 'go'].includes(role) || !process.env.M4_CONTROL_TOKEN) throw new Error('isolated fixture required');
 const dir = `/lab/${role}`, children = [];
+let profiledCore;
 const metricsPort = role === 'node' ? 18786 : 18791;
 const counters = path => Object.fromEntries(readFileSync(path, 'utf8').trim().split('\n').map(line => { const [key, value] = line.split(/\s+/); return [key, Number(value)]; }));
 const authorized = req => {
@@ -40,10 +41,17 @@ async function start(command, args) {
 if (role === 'go') {
   process.env.AMR_GO_ASSESSOR_TOKEN = process.env.M4_ASSESSOR;
   await start(process.execPath, ['go-core/compat/assessor.mjs', '--lab', '--config', process.env.CONFIG_PATH, '--port', '8789']);
-  await start('/app/amr-core', ['--lab', '--runtime', '--auth-config', `${dir}/auth.json`, '--ledger', `${dir}/go.wal`, '--listen', '127.0.0.1:8791', '--assessor', 'http://127.0.0.1:8789/assess', '--upstream', 'http://127.0.0.1:8790/v1/chat/completions']);
+  await start('/app/amr-core', ['--lab', '--runtime', '--auth-config', `${dir}/auth.json`, '--ledger', `${dir}/go.wal`, '--listen', '127.0.0.1:8791', '--assessor', 'http://127.0.0.1:8789/assess', '--upstream', 'http://127.0.0.1:8790/v1/chat/completions', ...(process.env.M4_PROFILE === '1' ? ['--lab-profile-dir', `${dir}/profile`] : [])]);
+  if (process.env.M4_PROFILE === '1') {
+    profiledCore = children.at(-1);
+    writeFileSync(`${dir}/core.pid`, String(profiledCore.pid));
+  }
   process.env.AMR_GO_ADMIN_URL = 'http://127.0.0.1:8791'; process.env.AMR_GO_ADMIN_TOKEN = process.env.M4_CORE_ADMIN;
 }
 // Node group: this process serves requests. Go group: this process is the real
 // Node administration service; adapter and Go runtime remain children in its cgroup.
 await import('../../src/server.mjs');
-for (const child of children) child.once('exit', () => process.exit(1));
+for (const child of children) child.once('exit', code => {
+  // The profiling harness explicitly drains Go after every measured request.
+  if (child !== profiledCore || code !== 0) process.exit(1);
+});

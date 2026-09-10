@@ -61,6 +61,7 @@ func main() {
 	}
 	flags := flag.NewFlagSet("amr-core", flag.ExitOnError)
 	lab := flags.Bool("lab", false, "acknowledge experimental loopback-only milestone")
+	profileDir := flags.String("lab-profile-dir", "", "optional NEW directory for CPU, blocking and execution trace diagnostics")
 	runtimeMode := flags.Bool("runtime", false, "enable M3 durable runtime with production auth contracts (still loopback only)")
 	authFile := flags.String("auth-config", "", "optional protected local auth JSON, re-read on explicit hot reload")
 	ledgerPath := flags.String("ledger", "", "dedicated Go ledger path; never share a live Node ledger")
@@ -85,6 +86,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "listen must be a literal loopback address")
 		os.Exit(2)
 	}
+	stopProfile, err := startLabProfile(*profileDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "unable to start laboratory profiling")
+		os.Exit(2)
+	}
+	defer func() {
+		if stopProfile() != nil {
+			fmt.Fprintln(os.Stderr, "laboratory profiling incomplete")
+		}
+	}()
 	var tenants []gateway.Tenant
 	if raw := os.Getenv("AMR_GO_TENANTS_JSON"); raw != "" {
 		if json.Unmarshal([]byte(raw), &tenants) != nil {

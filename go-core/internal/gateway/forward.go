@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"runtime/trace"
 	"strconv"
 	"strings"
 	"time"
@@ -25,13 +26,17 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 		return
 	}
 	policy := g.options.Bundle.Runtime
+	region := trace.StartRegion(r.Context(), "gateway.budgetSnapshot")
 	snap := g.runtime.ledger.Snapshot()
+	region.End()
 	if limit := policy.limit(); limit > 0 {
 		in.Runtime.BudgetPressure = float64(snap.PendingMicros+snap.ActualMicros+snap.EstimatedMicros) / float64(limit)
 	}
 	in.Runtime.Health = g.runtime.health.Snapshot()
 	in.Runtime.NowMs = float64(time.Now().UnixMilli())
+	region = trace.StartRegion(r.Context(), "gateway.admission")
 	d, firstRelease, e := g.admission.SelectSession(in, sessionKey)
+	region.End()
 	if e != nil {
 		decisionError(w, e)
 		return
@@ -111,7 +116,10 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 		price := policy.Prices[model]
 		estimate := price.estimate(native.EstimatedInputTokens, native.EstimatedOutputTokens, d.ReasoningLevel, policy.CacheHitRatio)
 		attemptID := id + "-" + strconv.Itoa(index)
-		if e = g.runtime.ledger.Reserve(attemptID, estimate, policy.limit(), "answer"); e != nil {
+		region = trace.StartRegion(r.Context(), "gateway.reserve")
+		e = g.runtime.ledger.Reserve(attemptID, estimate, policy.limit(), "answer")
+		region.End()
+		if e != nil {
 			claim.Finish(resilience.Outcome{Scope: "configuration"})
 			release()
 			if errors.Is(e, ledger.ErrBudget) {
@@ -140,7 +148,9 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
+		region = trace.StartRegion(r.Context(), "gateway.upstreamHeaders")
 		res, callErr := g.transport.RoundTrip(req)
+		region.End()
 		status := 0
 		outputStarted, complete := false, false
 		var usage *tokenUsage
@@ -240,9 +250,11 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 		cancel()
 		duration := time.Since(started)
 		actual := price.actual(usage)
+		region = trace.StartRegion(r.Context(), "gateway.settle")
 		if g.runtime.ledger.Settle(attemptID, actual, actual != nil) != nil {
 			g.runtime.failed.Store(true)
 		}
+		region.End()
 		outcome.OK = complete
 		outcome.Status = status
 		outcome.Err = callErr
@@ -251,7 +263,9 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 		outcome.Latency = duration
 		classification := claim.Finish(outcome)
 		release()
+		region = trace.StartRegion(r.Context(), "gateway.audit")
 		_ = g.runtime.record(attemptEvent{RequestID: id, Revision: g.options.Bundle.Revision, Model: model, Attempt: index, Status: status, Outcome: classification.Scope, DurationMS: duration.Milliseconds(), HeaderMS: headerMS, FirstByteMS: firstByteMS, EstimatedMicros: estimate, ActualMicros: actual, At: time.Now().UTC().Format(time.RFC3339Nano)})
+		region.End()
 		if complete {
 			if !g.runtime.failed.Load() {
 				g.admission.CompleteSession(sessionKey, in, attemptDecision, float64(time.Now().UnixMilli()))

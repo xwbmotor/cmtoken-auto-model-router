@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"runtime/trace"
 	"strings"
 	"sync"
 	"time"
@@ -329,6 +330,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(d)
 		return
 	}
+	defer trace.StartRegion(r.Context(), "gateway.request").End()
 	ctx, cancel := context.WithTimeout(r.Context(), g.options.RequestTimeout)
 	defer cancel()
 	data, err := io.ReadAll(r.Body)
@@ -365,14 +367,18 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var native *analysis.Result
 	if g.analyzer != nil {
+		region := trace.StartRegion(ctx, "gateway.analysis")
 		result, e := g.analyzer.Analyze(data)
+		region.End()
 		if e != nil {
 			writeError(w, 400, "invalid_analysis_request")
 			return
 		}
 		native = &result
 	}
+	assessmentRegion := trace.StartRegion(ctx, "gateway.assess")
 	input, err := g.assess(ctx, data, native)
+	assessmentRegion.End()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			writeError(w, 504, "request_timeout")
