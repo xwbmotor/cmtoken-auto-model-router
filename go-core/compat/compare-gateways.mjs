@@ -15,6 +15,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const arg = name => { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; };
 assert.ok(arg('--binary'), '--binary required');
 const binary = resolve(arg('--binary'));
+const snapshotMode = process.argv.includes('--snapshot');
 const durationMs = Number(arg('--seconds') ?? 5) * 1000, rounds = Number(arg('--rounds') ?? 3);
 const levels = (arg('--concurrency') ?? '1,8,32').split(',').map(Number);
 const chunkIntervalMs = Number(arg('--chunk-ms') ?? 200);
@@ -150,7 +151,9 @@ try {
   writeFileSync(configPath, JSON.stringify(source)); writeFileSync(authPath, JSON.stringify({ mode: 'strict', accessToken: access, adminToken: coreAdmin, upstreamToken }));
   const adapter = child(process.execPath, ['go-core/compat/assessor.mjs', '--lab', '--config', configPath, '--port', '0']);
   const adapterReady = await ready(adapter);
-  const go = child(binary, ['--lab', '--runtime', '--auth-config', authPath, '--ledger', resolve(directory, 'go.wal'), '--listen', '127.0.0.1:0', '--assessor', `http://127.0.0.1:${adapterReady.port}/assess`, '--upstream', upstreamBase + '/chat/completions']);
+  const snapshotPath = resolve(directory, 'runtime.json');
+  if (snapshotMode) execFileSync(process.execPath, ['go-core/compat/export-runtime.mjs', '--config', configPath, '--out', snapshotPath], {cwd: root, windowsHide: true, stdio: 'pipe'});
+  const go = child(binary, ['--lab', '--runtime', '--auth-config', authPath, '--ledger', resolve(directory, 'go.wal'), '--listen', '127.0.0.1:0', ...(snapshotMode ? ['--runtime-config', snapshotPath] : ['--assessor', `http://127.0.0.1:${adapterReady.port}/assess`]), '--upstream', upstreamBase + '/chat/completions']);
   const goReady = await ready(go), goBase = `http://${goReady.listen}`;
   const portHolder = createServer(); await new Promise(done => portHolder.listen(0, '127.0.0.1', done));
   const nodePort = portHolder.address().port; await new Promise(done => portHolder.close(done));
@@ -158,6 +161,7 @@ try {
     CONFIG_PATH: configPath, PORT: String(nodePort), HOST: '127.0.0.1', ROUTER_KEY_MODE: 'strict', ROUTER_ACCESS_KEY: access,
     ADMIN_TOKEN: admin, UPSTREAM_API_KEY: upstreamToken, UPSTREAM_BASE_URL: upstreamBase,
     AMR_COUNTERS_PATH: resolve(directory, 'counters.json'), AMR_GO_ADMIN_URL: goBase, AMR_GO_ADMIN_TOKEN: coreAdmin,
+    ...(snapshotMode ? { AMR_GO_RUNTIME_CONFIG: snapshotPath } : {}),
   });
   node.stdout.resume(); const nodeBase = `http://127.0.0.1:${nodePort}`;
   let healthy = false;

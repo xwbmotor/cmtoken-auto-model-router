@@ -57,11 +57,14 @@ jobs:
       - name: Verify native feature reassessment and tenant scopes without an adapter
         run: node go-core/compat/demo-semantic.mjs --binary data/go-migration/amr-core --snapshot
       - name: Verify opt-in management bridge
-        run: node --test tests/go-core-admin.test.mjs
+        run: node --test tests/go-core-admin.test.mjs tests/go-core-publication.test.mjs
       - name: Verify offline rollback accounting continuity
         run: node go-core/compat/demo-rollback.mjs --binary data/go-migration/amr-core
       - name: Exercise same-host gateway comparison (smoke only, no capacity claim)
         run: node go-core/compat/compare-gateways.mjs --binary data/go-migration/amr-core --seconds 1 --rounds 1 --concurrency 1,8 --chunk-ms 40 --out data/go-migration/gateway-smoke.json
+        # Includes real cookie-authenticated Node config save -> snapshot -> Go.
+      - name: Verify management snapshot publication end to end
+        run: node go-core/compat/compare-gateways.mjs --binary data/go-migration/amr-core --snapshot --seconds 1 --rounds 1 --concurrency 1 --chunk-ms 40 --out data/go-migration/publication-management.json
       - name: Preserve verification evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

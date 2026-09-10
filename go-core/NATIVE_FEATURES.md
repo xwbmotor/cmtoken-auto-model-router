@@ -27,7 +27,7 @@ node go-core/compat/export-runtime.mjs --config data/go-migration/lab/router.jso
 
 1. 保存并验证新的 `router.json`，重新导出到相同 `runtime.json` 路径；如需轮换凭据，另行原子更新 `auth.json`。
 2. 获取 Go `/internal/v1/config` 当前 `revision`，使用 `If-Match` 调用 `/internal/v1/config/reload`；已启用的 Node 管理桥仍可执行此步骤。
-3. 核对 `configRevision` 与源配置原始字节 SHA256 对应，并核对管理台保存与生效版本一致。**本地快照模式下，仅保存 `router.json` 不会自动重新导出或生效。**
+3. 核对 `configRevision` 与源配置原始字节 SHA256 对应，并核对管理台保存与生效版本一致。启用 `AMR_GO_RUNTIME_CONFIG` 后，管理台发布入口会自动导出并核验生效版本，见 [配置发布闭环](PUBLICATION.md)。仅保存 `router.json` 仍不会自动发布到 Go。
 
 Go 一次发布完整鉴权、分析、语义、特征与计费配置代；在途请求继续旧代，包括热更新后才结束的语义复核。陈旧 `If-Match`、无效特征、缺失计费模型或损坏文件均拒绝发布并保留原代；时区改变仍要求受控重启。账本与审计提交/恢复规则没有改变。
 

@@ -15,6 +15,8 @@ export function setupGoCorePanel({ api }) {
       const state = await api('/admin/api/go-core');
       enabled = true; panel.hidden = false; revision = state.revision;
       status.textContent = state.synchronized ? 'Go 已加载当前保存的配置。' : '已保存配置与 Go 生效配置不同，尚未同步。';
+      if (state.publicationPending) status.textContent += ' 上次发布仍待核对，再次加载会先恢复；完成前请勿重启 Go。';
+      reload.textContent = state.snapshotPublication ? '发布已保存配置到 Go' : '将已保存配置加载到 Go';
       versions.textContent = `管理服务保存：${state.savedConfigRevision}\nGo 当前配置：${state.configRevision}\nGo 运行版本：${state.revision}`;
     } catch (error) {
       revision = null;

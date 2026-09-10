@@ -123,6 +123,11 @@ func (m *Managed) build(c generationConfig) (*Gateway, error) {
 	return New(o)
 }
 func NewManaged(o ManagedOptions) (*Managed, error) {
+	if o.RuntimeConfigFile != "" {
+		if _, err := os.Stat(o.RuntimeConfigFile + ".pending"); err == nil || !os.IsNotExist(err) {
+			return nil, errors.New("unresolved snapshot publication; reconcile before restart")
+		}
+	}
 	if o.LedgerPath == "" {
 		return nil, errors.New("managed runtime requires a dedicated ledger path")
 	}

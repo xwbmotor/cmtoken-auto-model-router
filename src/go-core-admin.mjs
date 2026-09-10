@@ -1,6 +1,8 @@
 // Opt-in migration control bridge. Caller authentication belongs to server.mjs.
 // A fixed literal loopback destination and fixed paths prevent an admin proxy.
 import { request } from 'node:http';
+import { createSnapshotPublisher } from './go-runtime/publisher.mjs';
+import { access } from 'node:fs/promises';
 
 export function createGoCoreAdmin(env = process.env) {
   if (!env.AMR_GO_ADMIN_URL) return null;
@@ -38,12 +40,20 @@ export function createGoCoreAdmin(env = process.env) {
     req.on('error', reject);
     req.end();
   });
+  const publish = env.AMR_GO_RUNTIME_CONFIG ? createSnapshotPublisher(env.AMR_GO_RUNTIME_CONFIG, call) : null;
   return {
-    status: () => call('/internal/v1/config'),
+    status: async () => {
+      const state = await call('/internal/v1/config');
+      if (!publish) return state;
+      let publicationPending = false;
+      try { await access(env.AMR_GO_RUNTIME_CONFIG + '.pending'); publicationPending = true; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      return { ...state, publicationPending, snapshotPublication: true };
+    },
     reload: revision => {
       if (!revision) return Promise.resolve({ status: 428, error: 'core_revision_required' });
       if (typeof revision !== 'string' || !/^"[a-f0-9]{64}"$/.test(revision)) return Promise.resolve({ status: 400, error: 'invalid_core_revision' });
-      return call('/internal/v1/config/reload', 'POST', revision);
+      return publish ? publish(revision) : call('/internal/v1/config/reload', 'POST', revision);
     },
   };
 }

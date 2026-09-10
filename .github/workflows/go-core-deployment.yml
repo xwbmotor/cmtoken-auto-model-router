@@ -1,0 +1,37 @@
+name: Go core isolated deployment
+on:
+  push:
+    branches: [codex/go-core-migration]
+    paths: ['go-core/**', 'src/**', 'config/**', '.github/workflows/go-core-deployment.yml']
+  pull_request:
+    paths: ['go-core/**', '.github/workflows/go-core-deployment.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  container-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Prepare disposable local fixtures
+        run: |
+          node go-core/deployment/prepare.mjs
+          sudo chown -R 65532:65532 data/go-deployment/config data/go-deployment/ledger
+      - name: Build and test isolated containers
+        run: bash go-core/deployment/smoke.sh
+      - name: Capture container state and logs
+        if: always()
+        run: |
+          mkdir -p data/go-deployment/evidence
+          docker compose -f go-core/compose.lab.yml ps -a > data/go-deployment/evidence/containers.txt
+          docker compose -f go-core/compose.lab.yml logs --no-color > data/go-deployment/evidence/containers.log
+          docker compose -f go-core/compose.lab.yml down
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: go-core-deployment-evidence
+          path: data/go-deployment/evidence/

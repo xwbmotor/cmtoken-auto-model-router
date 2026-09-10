@@ -1,0 +1,37 @@
+name: amr-go-lab
+services:
+  gateway:
+    build:
+      context: .
+    image: amr-go-core:lab
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: [--lab, --runtime, --runtime-config, /config/runtime.json, --auth-config, /config/auth.json, --ledger, /ledger/runtime.wal, --listen, '127.0.0.1:8791', --upstream, 'http://127.0.0.1:8790/v1/chat/completions']
+    volumes:
+      - ../data/go-deployment/config:/config:ro
+      - ../data/go-deployment/ledger:/ledger
+    stop_grace_period: 20s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  mock:
+    image: node:24-alpine
+    user: '65532:65532'
+    network_mode: service:gateway
+    depends_on:
+      gateway: {condition: service_healthy}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    entrypoint: [node, /lab/container.mjs]
+    command: [serve]
+    volumes:
+      - ./deployment:/lab:ro
+      - ../data/go-deployment/config:/config:ro
+      - ../data/go-deployment/ledger:/ledger:ro
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '2'}

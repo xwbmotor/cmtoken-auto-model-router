@@ -118,3 +118,7 @@ GitHub 的 `Go core migration` 工作流独立运行 `go vet`、`go test -race`�
 - `compat/demo.mjs`：无需手动部署服务的进程级验证。
 
 生产运行合同见 [RUNTIME.md](RUNTIME.md)。协议与后续迁移验收见 [语义与租户接口](SEMANTICS.md)、[合同说明](CONTRACT.md)、[迁移路线](../docs/go-core-migration.md)。
+
+## 配置发布与独立部署
+
+参见 [配置发布闭环](PUBLICATION.md) 与 [独立容器实验部署](DEPLOYMENT.md)。本轮保持迁移实验分支和 loopback 限制，未切换生产。
