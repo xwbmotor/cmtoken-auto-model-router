@@ -12,10 +12,12 @@ import (
 // retain RE2, optionally preceded by a necessary-literal rejection filter.
 // Compilation and traversal preserve leftmost-first alternative priority.
 type fastRegex struct {
-	re     *regexp.Regexp
-	trie   *literalNode
-	fold   bool
-	guards []string
+	re           *regexp.Regexp
+	trie         *literalNode
+	fold         bool
+	guards       []string
+	starts       [256]bool
+	filterStarts bool
 }
 type literalNode struct {
 	next map[rune]*literalNode
@@ -71,6 +73,20 @@ func compileRegex(source string) (*fastRegex, error) {
 			}
 		}
 		p.trie, p.fold = root, mode == 1
+		p.filterStarts = true
+		for r := range root.next {
+			// Invalid UTF-8 is one RuneError per byte in RE2. Keep rune
+			// traversal for this case instead of entering a continuation byte.
+			if r == utf8.RuneError {
+				p.filterStarts = false
+			}
+			p.starts[string(r)[0]] = true
+			if p.fold {
+				for c := unicode.SimpleFold(r); c != r; c = unicode.SimpleFold(c) {
+					p.starts[string(c)[0]] = true
+				}
+			}
+		}
 	} else {
 		p.guards = requiredLiterals(ast)
 	}
@@ -228,6 +244,17 @@ func (p *fastRegex) possible(text string) bool {
 }
 func (p *fastRegex) first(text string, from int) (int, int) {
 	for start := from; start < len(text); {
+		if p.filterStarts {
+			// A valid literal starts at an ASCII or UTF-8 leading byte,
+			// never a continuation byte. No decoding/folding is needed
+			// for bytes that cannot begin any alternative.
+			for start < len(text) && !p.starts[text[start]] {
+				start++
+			}
+			if start == len(text) {
+				break
+			}
+		}
 		node, end, rank := p.trie, -1, literalLimit
 		for offset, c := range text[start:] {
 			width := utf8.RuneLen(c)

@@ -8,7 +8,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"unicode/utf16"
 )
 
 type Config struct {
@@ -88,7 +87,16 @@ func New(c Config) (*Analyzer, error) {
 	}
 	return a, nil
 }
-func jsLen(s string) int { return len(utf16.Encode([]rune(s))) }
+func jsLen(s string) int {
+	n := 0
+	for _, r := range s {
+		n++
+		if r > 0xffff {
+			n++
+		}
+	}
+	return n
+}
 func truth(v any) bool {
 	switch x := v.(type) {
 	case nil:
