@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"time"
 	_ "time/tzdata"
 )
@@ -85,7 +84,13 @@ type Ledger struct {
 	attempts map[string]attempt
 	broken   bool
 	opening  *OpeningBalance
-	view     atomic.Pointer[Snapshot]
+	queue    chan *mutation
+	submitMu sync.RWMutex
+	closing  bool
+	stopped  chan struct{}
+	closeErr error
+	batch    *commitBatch
+	syncFile func() error
 }
 
 func Open(path string, options Options) (*Ledger, error) {
@@ -123,7 +128,10 @@ func Open(path string, options Options) (*Ledger, error) {
 		return nil, err
 	}
 	l.rollover(l.today())
-	l.publish()
+	l.queue = make(chan *mutation, 256)
+	l.stopped = make(chan struct{})
+	l.syncFile = f.Sync
+	go l.writeLoop()
 	return l, nil
 }
 func (l *Ledger) today() string { return l.now().In(l.zone).Format("2006-01-02") }
@@ -152,154 +160,138 @@ func add(a, b int64) (int64, error) {
 // sourceID must be its lowercase SHA256 digest. Old unresolved reserves become
 // conservative estimated spend because Node does not persist attempt identities.
 func (l *Ledger) ImportOpeningBalance(sourceID, date string, actual, estimated, pending int64) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.broken || l.file == nil {
-		return ErrClosed
-	}
-	o := OpeningBalance{sourceID, date, actual, estimated, pending}
-	if l.opening != nil {
-		if *l.opening == o {
-			return nil
+	return l.mutate(func() error {
+		if l.broken || l.file == nil {
+			return ErrClosed
 		}
-		return ErrConflict
-	}
-	digest, err := hex.DecodeString(sourceID)
-	if err != nil || len(digest) != 32 || hex.EncodeToString(digest) != sourceID || date != l.today() {
-		return errors.New("opening balance requires source SHA256 and current accounting date")
-	}
-	if l.seq != 0 {
-		return errors.New("opening balance requires an empty ledger")
-	}
-	return l.commit(event{Op: "opening", Opening: &o})
+		o := OpeningBalance{sourceID, date, actual, estimated, pending}
+		if l.opening != nil {
+			if *l.opening == o {
+				return nil
+			}
+			return ErrConflict
+		}
+		digest, err := hex.DecodeString(sourceID)
+		if err != nil || len(digest) != 32 || hex.EncodeToString(digest) != sourceID || date != l.today() {
+			return errors.New("opening balance requires source SHA256 and current accounting date")
+		}
+		if l.seq != 0 {
+			return errors.New("opening balance requires an empty ledger")
+		}
+		return l.commit(event{Op: "opening", Opening: &o})
+	})
 }
 
 // Reserve is durably committed before returning. Repeating identical IDs is idempotent.
 // Use a fresh ID for every upstream attempt, including probes and classifier calls.
 // A positive limit enables an atomic admission guard; unpriced attempts fail closed.
 func (l *Ledger) Reserve(id string, estimate *int64, dailyLimit int64, source string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.broken || l.file == nil {
-		return ErrClosed
-	}
-	if id == "" || len(id) > 512 || !validAmount(estimate) {
-		return errors.New("invalid reservation")
-	}
-	if source != "answer" && source != "probe" && source != "classifier" {
-		return errors.New("invalid ledger source")
-	}
-	if old, ok := l.attempts[id]; ok {
-		if same(old.Estimate, estimate) && old.Source == source {
-			return nil
+	return l.mutate(func() error {
+		if l.broken || l.file == nil {
+			return ErrClosed
 		}
-		return ErrConflict
-	}
-	l.rollover(l.today())
-	if dailyLimit > 0 {
-		if estimate == nil {
-			return ErrBudget
+		if id == "" || len(id) > 512 || !validAmount(estimate) {
+			return errors.New("invalid reservation")
 		}
-		total, err := add(l.snap.PendingMicros, l.snap.ActualMicros)
-		if err != nil {
-			return err
+		if source != "answer" && source != "probe" && source != "classifier" {
+			return errors.New("invalid ledger source")
 		}
-		total, err = add(total, l.snap.EstimatedMicros)
-		if err != nil {
-			return err
+		if old, ok := l.attempts[id]; ok {
+			if same(old.Estimate, estimate) && old.Source == source {
+				return nil
+			}
+			return ErrConflict
 		}
-		if total > dailyLimit || *estimate > dailyLimit-total {
-			return ErrBudget
+		l.rollover(l.today())
+		if dailyLimit > 0 {
+			if estimate == nil {
+				return ErrBudget
+			}
+			total, err := add(l.snap.PendingMicros, l.snap.ActualMicros)
+			if err != nil {
+				return err
+			}
+			total, err = add(total, l.snap.EstimatedMicros)
+			if err != nil {
+				return err
+			}
+			if total > dailyLimit || *estimate > dailyLimit-total {
+				return ErrBudget
+			}
 		}
-	}
-	return l.commit(event{Op: "reserve", ID: id, Amount: copyAmount(estimate), Source: source})
+		return l.commit(event{Op: "reserve", ID: id, Amount: copyAmount(estimate), Source: source})
+	})
 }
 
 // Settle keeps missing usage in the estimated column. Actual may exceed the admission estimate.
 func (l *Ledger) Settle(id string, actual *int64, fromUsage bool) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.broken || l.file == nil {
-		return ErrClosed
-	}
-	if !validAmount(actual) {
-		return errors.New("invalid settlement")
-	}
-	old, ok := l.attempts[id]
-	if !ok {
-		return ErrUnknown
-	}
-	if !fromUsage || actual == nil {
-		actual = nil
-		fromUsage = false
-	}
-	if old.State == "settle" {
-		if same(old.Actual, actual) && old.FromUsage == fromUsage {
-			return nil
+	return l.mutate(func() error {
+		if l.broken || l.file == nil {
+			return ErrClosed
 		}
-		return ErrConflict
-	}
-	if old.State != "reserve" {
-		return ErrConflict
-	}
-	return l.commit(event{Op: "settle", ID: id, Amount: copyAmount(actual), FromUsage: fromUsage})
+		if !validAmount(actual) {
+			return errors.New("invalid settlement")
+		}
+		old, ok := l.attempts[id]
+		if !ok {
+			return ErrUnknown
+		}
+		if !fromUsage || actual == nil {
+			actual = nil
+			fromUsage = false
+		}
+		if old.State == "settle" {
+			if same(old.Actual, actual) && old.FromUsage == fromUsage {
+				return nil
+			}
+			return ErrConflict
+		}
+		if old.State != "reserve" {
+			return ErrConflict
+		}
+		return l.commit(event{Op: "settle", ID: id, Amount: copyAmount(actual), FromUsage: fromUsage})
+	})
 }
 
 // Release is only valid when the caller knows upstream generation never started.
 func (l *Ledger) Release(id string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.broken || l.file == nil {
-		return ErrClosed
-	}
-	old, ok := l.attempts[id]
-	if !ok {
-		return ErrUnknown
-	}
-	if old.State == "release" {
-		return nil
-	}
-	if old.State != "reserve" {
-		return ErrConflict
-	}
-	return l.commit(event{Op: "release", ID: id})
+	return l.mutate(func() error {
+		if l.broken || l.file == nil {
+			return ErrClosed
+		}
+		old, ok := l.attempts[id]
+		if !ok {
+			return ErrUnknown
+		}
+		if old.State == "release" {
+			return nil
+		}
+		if old.State != "reserve" {
+			return ErrConflict
+		}
+		return l.commit(event{Op: "release", ID: id})
+	})
 }
 func (l *Ledger) Snapshot() Snapshot {
-	v := l.view.Load()
-	if v.Date != l.today() {
-		// Accounting-day changes still serialize with the writer. Ordinary
-		// readers use only the last durable publication, never in-flight data.
-		l.mu.Lock()
-		l.rollover(l.today())
-		l.publish()
-		v = l.view.Load()
-		l.mu.Unlock()
-	}
-	s := *v
-	s.Sources = make(map[string]Totals, len(v.Sources))
-	for k, v := range v.Sources {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rollover(l.today())
+	s := l.snap
+	s.Sources = make(map[string]Totals, len(l.snap.Sources))
+	for k, v := range l.snap.Sources {
 		s.Sources[k] = v
 	}
 	return s
 }
-
-// Called under the writer lock (or during Open before exposure). commit builds
-// a new Sources map for each event, so published maps are immutable. Snapshot
-// returns its own copy to prevent callers from modifying a published view.
-func (l *Ledger) publish() {
-	s := l.snap
-	l.view.Store(&s)
-}
 func (l *Ledger) Close() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.file == nil {
-		return nil
+	l.submitMu.Lock()
+	if !l.closing {
+		l.closing = true
+		l.queue <- &mutation{close: true}
 	}
-	f := l.file
-	l.file = nil
-	unlockFile(f)
-	return f.Close()
+	l.submitMu.Unlock()
+	<-l.stopped
+	return l.closeErr
 }
 
 // apply validates arithmetic before mutating. Failed writes poison the writer until reopen.
@@ -437,16 +429,12 @@ func (l *Ledger) commit(e event) error {
 		return err
 	}
 	line = append(line, '\n')
-	if n, err := l.file.Write(line); err != nil || n != len(line) {
-		l.broken = true
-		if err != nil {
-			return err
+	l.batch.data = append(l.batch.data, line...)
+	if e.Op != "opening" {
+		if _, exists := l.batch.undo[e.ID]; !exists {
+			old, ok := l.attempts[e.ID]
+			l.batch.undo[e.ID] = priorAttempt{value: old, exists: ok}
 		}
-		return io.ErrShortWrite
-	}
-	if err = l.file.Sync(); err != nil {
-		l.broken = true
-		return err
 	}
 	l.snap = trial.snap
 	if e.Op != "opening" {
@@ -454,7 +442,6 @@ func (l *Ledger) commit(e event) error {
 	}
 	l.opening = trial.opening
 	l.seq = e.Seq
-	l.publish()
 	return nil
 }
 func (l *Ledger) replay() error {

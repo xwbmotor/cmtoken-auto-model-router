@@ -85,14 +85,34 @@ func TestCrashChild(t *testing.T) {
 	if err = l.Reserve("crashed-attempt", amount(123), 0, "answer"); err != nil {
 		t.Fatal(err)
 	}
+	if os.Getenv("LEDGER_CRASH_TEST_BATCH") == "1" {
+		results := make(chan error, 32)
+		for i := 0; i < 32; i++ {
+			go func(i int) { results <- l.Reserve(fmt.Sprintf("batch-%d", i), amount(1), 0, "answer") }(i)
+		}
+		for i := 0; i < 32; i++ {
+			if err := <-results; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	fmt.Println("LEDGER_READY")
 	time.Sleep(30 * time.Second)
 	l.Close()
 }
 func TestProcessKillReleasesLockRetainsReservation(t *testing.T) {
+	t.Run("single", func(t *testing.T) { testProcessKill(t, false) })
+	t.Run("concurrent", func(t *testing.T) { testProcessKill(t, true) })
+}
+func testProcessKill(t *testing.T, batch bool) {
 	path := filepath.Join(t.TempDir(), "ledger.wal")
 	cmd := exec.Command(os.Args[0], "-test.run=^TestCrashChild$")
 	cmd.Env = append(os.Environ(), "LEDGER_CRASH_TEST_PATH="+path)
+	var extra int64
+	if batch {
+		cmd.Env = append(cmd.Env, "LEDGER_CRASH_TEST_BATCH=1")
+		extra = 32
+	}
 	stdout, err := cmd.StdoutPipe()
 	require(t, err)
 	cmd.Stderr = os.Stderr
@@ -131,11 +151,11 @@ func TestProcessKillReleasesLockRetainsReservation(t *testing.T) {
 	_ = cmd.Wait()
 	l := openTest(t, path, Options{})
 	s := l.Snapshot()
-	if s.PendingMicros != 123 || s.PendingReserves != 1 {
+	if s.PendingMicros != 123+extra || s.PendingReserves != 1+int(extra) {
 		t.Fatal(s)
 	}
 	require(t, l.Settle("crashed-attempt", nil, false))
-	if l.Snapshot().EstimatedMicros != 123 {
+	if l.Snapshot().EstimatedMicros != 123 || l.Snapshot().PendingMicros != extra {
 		t.Fatal(l.Snapshot())
 	}
 }
