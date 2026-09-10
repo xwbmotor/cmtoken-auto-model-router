@@ -82,6 +82,7 @@ type Ledger struct {
 	seq      uint64
 	snap     Snapshot
 	attempts map[string]attempt
+	index    *attemptIndex
 	broken   bool
 	opening  *OpeningBalance
 	queue    chan *mutation
@@ -117,12 +118,20 @@ func Open(path string, options Options) (*Ledger, error) {
 		return nil, err
 	}
 	l := &Ledger{file: f, now: options.Now, zone: zone, attempts: make(map[string]attempt)}
+	l.index, err = openAttemptIndex(path + ".attempt-index")
+	if err != nil {
+		unlockFile(f)
+		f.Close()
+		return nil, err
+	}
 	if err = l.replay(); err != nil {
+		l.index.file.Close()
 		unlockFile(f)
 		f.Close()
 		return nil, err
 	}
 	if err = syncParent(path); err != nil {
+		l.index.file.Close()
 		unlockFile(f)
 		f.Close()
 		return nil, err
@@ -196,7 +205,11 @@ func (l *Ledger) Reserve(id string, estimate *int64, dailyLimit int64, source st
 		if source != "answer" && source != "probe" && source != "classifier" {
 			return errors.New("invalid ledger source")
 		}
-		if old, ok := l.attempts[id]; ok {
+		old, ok, err := l.lookup(id)
+		if err != nil {
+			return err
+		}
+		if ok {
 			if same(old.Estimate, estimate) && old.Source == source {
 				return nil
 			}
@@ -232,7 +245,10 @@ func (l *Ledger) Settle(id string, actual *int64, fromUsage bool) error {
 		if !validAmount(actual) {
 			return errors.New("invalid settlement")
 		}
-		old, ok := l.attempts[id]
+		old, ok, err := l.lookup(id)
+		if err != nil {
+			return err
+		}
 		if !ok {
 			return ErrUnknown
 		}
@@ -259,7 +275,10 @@ func (l *Ledger) Release(id string) error {
 		if l.broken || l.file == nil {
 			return ErrClosed
 		}
-		old, ok := l.attempts[id]
+		old, ok, err := l.lookup(id)
+		if err != nil {
+			return err
+		}
 		if !ok {
 			return ErrUnknown
 		}
@@ -273,12 +292,18 @@ func (l *Ledger) Release(id string) error {
 	})
 }
 
-// RetainedAttempts counts the in-memory idempotency history, including settled
-// and released attempts. It does not mutate the billing snapshot or retention.
+// RetainedAttempts counts cached records, not the complete on-disk history.
 func (l *Ledger) RetainedAttempts() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.attempts)
+}
+
+// AttemptStorage reports a coherent cache and durable-history diagnostic.
+func (l *Ledger) AttemptStorage() (cached, total, limit int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.attempts), l.index.count, attemptCacheLimit
 }
 
 func (l *Ledger) Snapshot() Snapshot {
@@ -335,14 +360,18 @@ func (l *Ledger) apply(e event) error {
 		return errors.New("unexpected opening balance")
 	}
 	if e.Op == "reserve" {
-		if _, ok := l.attempts[e.ID]; ok {
+		_, ok, err := l.lookup(e.ID)
+		if err != nil {
+			return err
+		}
+		if ok {
 			return ErrConflict
 		}
 		if e.ID == "" || (e.Source != "answer" && e.Source != "probe" && e.Source != "classifier") {
 			return errors.New("invalid reservation record")
 		}
 		pending := l.snap.PendingMicros
-		var err error
+		err = nil
 		if e.Amount != nil {
 			pending, err = add(pending, *e.Amount)
 			if err != nil {
@@ -360,7 +389,10 @@ func (l *Ledger) apply(e event) error {
 		l.attempts[e.ID] = attempt{Estimate: copyAmount(e.Amount), Source: e.Source, State: "reserve"}
 		return nil
 	}
-	a, ok := l.attempts[e.ID]
+	a, ok, lookupErr := l.lookup(e.ID)
+	if lookupErr != nil {
+		return lookupErr
+	}
 	if !ok {
 		return ErrUnknown
 	}
@@ -497,6 +529,12 @@ func (l *Ledger) replay() error {
 		}
 		if err = l.apply(e); err != nil {
 			return fmt.Errorf("ledger replay: %w", err)
+		}
+		if e.Op != "opening" {
+			if err = l.index.put(e.ID, l.attempts[e.ID], e.Op == "reserve"); err != nil {
+				return err
+			}
+			l.trimCache()
 		}
 		l.seq = e.Seq
 		offset += int64(len(line))

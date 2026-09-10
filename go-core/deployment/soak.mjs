@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
-import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, mkdir, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -77,7 +77,7 @@ if(mode==='serve'){
  const bin=(map,key,value)=>{let bins=map.get(key);if(!bins){bins=new Uint32Array(10001);map.set(key,bins)}bins[Math.min(10000,Math.max(0,Math.ceil(value)))]++};
  const distribution=bins=>{const total=bins.reduce((a,b)=>a+b,0);const quantile=q=>{let sum=0;for(let i=0;i<bins.length;i++){sum+=bins[i];if(sum>=Math.ceil(total*q))return i}return null};return {count:total,p50Ms:quantile(.5),p95Ms:quantile(.95),p99Ms:quantile(.99),overflow:bins[10000]}};
  const flushWindow=async()=>{const window={at:Date.now(),from:windowAt,latency:Object.fromEntries([...hist].map(([k,b])=>[k,distribution(b)]))};hist=new Map();windowAt=window.at;windowResults.push(window);await appendFile(evidence+'/latency-windows.jsonl',JSON.stringify(window)+'\n')};
- const sample=async(label)=>{const value={at:Date.now(),label,...await runtime(),mock:await json(mockBase+'/lab/stats')};samples.push(value);await appendFile(evidence+'/runtime-samples.jsonl',JSON.stringify(value)+'\n');return value};
+ const sample=async(label)=>{const value={at:Date.now(),label,...await runtime(),mock:await json(mockBase+'/lab/stats'),storage:{walBytes:(await stat(ledgerDir+'/runtime.wal')).size,indexBytes:(await stat(ledgerDir+'/runtime.wal.attempt-index')).size}};samples.push(value);await appendFile(evidence+'/runtime-samples.jsonl',JSON.stringify(value)+'\n');return value};
  const send=async(scenario)=>{
   const id=++sequence,stream=['short','cancel','long','drain'].includes(scenario),controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),(scenario==='long'?longSeconds+30:15)*1000);
@@ -149,11 +149,13 @@ if(mode==='serve'){
    assert.equal(end.ledger.pendingReserves,0);assert.equal(end.ledger.pendingMicros,0);assert.equal(end.ledger.actualMicros,expectedActual);
    assert.equal(end.diagnostics.runtime.activeRequests,0);assert.equal(end.diagnostics.generations.retired,0);assert.equal(end.diagnostics.generations.live,1);
    assert.ok(Object.values(end.inflight).every(n=>n===0));assert.equal(end.mock.active,0);assert.equal(end.mock.retryMarkers,0);
-   assert.equal(end.diagnostics.runtime.retainedAttempts,end.mock.attempts);
+   assert.equal(end.diagnostics.runtime.totalAttempts,end.mock.attempts);
+   assert.ok(end.diagnostics.runtime.retainedAttempts<=end.diagnostics.runtime.attemptCacheLimit);
+   assert.equal(end.diagnostics.runtime.attemptCacheLimit,4096);
    assert.ok(end.diagnostics.process.goroutines<=baseline.diagnostics.process.goroutines+16,'idle goroutines did not return near baseline');
    assert.ok(reloads.length>=Math.floor(seconds/reloadSeconds)-1);assert.ok(longs.length>0);
    assert.ok(longs.some(stream=>reloads.some(reload=>reload.at>stream.startedAt&&reload.at<stream.finishedAt&&reload.to!==stream.revision)),'long stream must span configuration changes');
-   const report={at:new Date().toISOString(),productionReady:false,scope:'isolated mock deployment, not production capacity',parameters:{seconds,rps,longSeconds,reloadSeconds},startedAt,loadEndedAt:startedAt+loadDurationMs,loadDurationMs,elapsedSeconds:(Date.now()-startedAt)/1000,plannedRequests:seconds*rps,counts,failures,reloads:reloads.length,longStreams:longs.length,expectedActualMicros:expectedActual,baseline,final:end,windows:windowResults,checks:{noUnexpectedErrors:true,noDroppedWork:true,actualBillingMatchesClients:true,idleRequestsZero:true,idlePendingZero:true,retiredGenerationsZero:true}};
+   const report={at:new Date().toISOString(),attemptStorage:'bounded-cache-v1',productionReady:false,scope:'isolated mock deployment, not production capacity',parameters:{seconds,rps,longSeconds,reloadSeconds},startedAt,loadEndedAt:startedAt+loadDurationMs,loadDurationMs,elapsedSeconds:(Date.now()-startedAt)/1000,plannedRequests:seconds*rps,counts,failures,reloads:reloads.length,longStreams:longs.length,expectedActualMicros:expectedActual,baseline,final:end,windows:windowResults,checks:{noUnexpectedErrors:true,noDroppedWork:true,actualBillingMatchesClients:true,idleRequestsZero:true,idlePendingZero:true,retiredGenerationsZero:true}};
    await save('soak-result.json',report);await save('before-restart.json',end.ledger);console.log(JSON.stringify({result:'soak passed',counts,reloads:reloads.length}));
   }catch(error){await save('soak-failure.json',{at:new Date().toISOString(),error:error.message,counts,failures,reloads:reloads.length});throw error}
  }

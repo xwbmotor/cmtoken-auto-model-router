@@ -12,7 +12,7 @@ Go 配额 2 CPU / 512 MiB；mock 与负载发生器独立容器 2 CPU / 768 MiB�
 
 每30秒采集运行诊断和分场景时延直方图；时延单位向上取整到毫秒，10秒及以上记录在溢出桶（长流另有实际时长）。Docker每约30秒记录CPU与容器内存；Go采样包含heap、goroutines、GC和保留账本条目数。诊断不强制GC，也不是跨组件原子快照。
 
-负载结束后等待38秒，要求activeRequests、inflight、pendingReserves和retired配置代归零，live配置代为1，goroutines不超过基线+16，retainedAttempts与mock实际尝试数一致。内存增长需结合账本保留条目分析：本实验不把所有增长判为泄漏，也不把一次有界运行称为长期内存有界证明。
+负载结束后等待38秒，要求activeRequests、inflight、pendingReserves和retired配置代归零，live配置代为1，goroutines不超过基线+16，totalAttempts与mock实际尝试数一致，retainedAttempts缓存不超过attemptCacheLimit=4096。新报告带attemptStorage=bounded-cache-v1；旧报告没有此标记，retainedAttempts当时代表完整历史，分析器分别检查两种口径。内存增长需结合缓存和历史条目分析：本实验不把所有增长判为泄漏，也不把一次有界运行称为长期内存有界证明。
 
 随后带5秒在途SSE执行SIGTERM，必须完成响应并以0退出；逐条流式读取审计，检查无重复attempt、无凭据或原文、实际/估算与账本一致。重启及随后SIGKILL后的已结算账本须与停止前预期相同。SIGKILL发生在空闲，不宣称验证所有在途断电场景。
 

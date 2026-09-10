@@ -1,6 +1,9 @@
 package ledger
 
-import "io"
+import (
+	"errors"
+	"io"
+)
 
 // A caller is acknowledged only after its batch is durable. There is no timer
 // or deliberate batching delay: only mutations already queued are combined.
@@ -61,7 +64,7 @@ func (l *Ledger) writeLoop() {
 			f := l.file
 			l.file = nil
 			unlockFile(f)
-			l.closeErr = f.Close()
+			l.closeErr = errors.Join(f.Close(), l.index.file.Close())
 			l.mu.Unlock()
 			close(l.stopped)
 			return
@@ -86,6 +89,13 @@ func (l *Ledger) flush(group []*mutation) {
 		if err == nil {
 			err = l.syncFile()
 		}
+		if err == nil {
+			for id, old := range b.undo {
+				if err = l.index.put(id, l.attempts[id], !old.exists); err != nil {
+					break
+				}
+			}
+		}
 		if err != nil {
 			// Never expose staged totals or acknowledge a mutation on a failed
 			// write/sync. Recovery decides the durable prefix on the next Open.
@@ -104,6 +114,9 @@ func (l *Ledger) flush(group []*mutation) {
 				}
 			}
 		}
+	}
+	if !l.broken {
+		l.trimCache()
 	}
 	l.mu.Unlock()
 	for i, m := range group {

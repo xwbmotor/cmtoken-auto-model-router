@@ -18,9 +18,11 @@ type processDiagnostics struct {
 }
 
 type runtimeDiagnostics struct {
-	ActiveRequests   int `json:"activeRequests"`
-	RequestCapacity  int `json:"requestCapacity"`
-	RetainedAttempts int `json:"retainedAttempts"`
+	ActiveRequests    int `json:"activeRequests"`
+	RequestCapacity   int `json:"requestCapacity"`
+	RetainedAttempts  int `json:"retainedAttempts"`
+	TotalAttempts     int `json:"totalAttempts"`
+	AttemptCacheLimit int `json:"attemptCacheLimit"`
 }
 
 type generationDiagnostics struct {
@@ -39,9 +41,10 @@ type diagnostics struct {
 func (g *Gateway) diagnostics(generations *generationDiagnostics) diagnostics {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
+	cached, total, limit := g.runtime.ledger.AttemptStorage()
 	return diagnostics{
 		Process:     processDiagnostics{Scope: "process", PID: os.Getpid(), Goroutines: runtime.NumGoroutine(), HeapAllocBytes: mem.HeapAlloc, HeapInuseBytes: mem.HeapInuse, HeapObjects: mem.HeapObjects, NumGC: mem.NumGC},
-		Runtime:     runtimeDiagnostics{ActiveRequests: len(g.requests), RequestCapacity: cap(g.requests), RetainedAttempts: g.runtime.ledger.RetainedAttempts()},
+		Runtime:     runtimeDiagnostics{ActiveRequests: len(g.requests), RequestCapacity: cap(g.requests), RetainedAttempts: cached, TotalAttempts: total, AttemptCacheLimit: limit},
 		Generations: generations,
 	}
 }
