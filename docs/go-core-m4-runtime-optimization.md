@@ -99,3 +99,5 @@ Go 1.27.1 本地源码 `runtime/debug.go` 的 GOMAXPROCS 说明和 `runtime/cgro
 | `capacity-runtime-cold.json` | `d65b7d9a6ea65c33fed93a8012de7ba455d19de919eabe842c28b36f4a6937f5` |
 
 复现选择[容量工作流](../.github/workflows/go-core-capacity.yml)的 `runtime-profile` 或 `runtime-optimization`；阶段统计使用 `go tool trace -d=parsed <runtime.trace> | node go-core/compat/summarize-trace.mjs <output.json>`，单组负载汇总使用 `node go-core/compat/summarize-capacity.mjs <raw.json> <summary.md>`。大型原始证据未提交 Git，CI 保留 14 天，本地副本留存。后续文档提交不改变本次执行代码。
+
+后续直接 300 RPS 启动排队已完成[第四轮耐久写入优化](go-core-m4-cold-optimization.md)：合并账本与审计同步提交有部分改善，但启动未发起计划仍存在，正式切换出口仍未满足。
