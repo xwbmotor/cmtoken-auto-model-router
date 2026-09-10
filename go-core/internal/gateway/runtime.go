@@ -4,8 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"os"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -74,8 +72,7 @@ type runtimeState struct {
 	requests      chan struct{}
 	sessionSecret []byte
 	semanticGuard *semantic.Guard
-	audit         *os.File
-	auditMu       sync.Mutex
+	audit         *auditJournal
 	failed        atomic.Bool
 }
 
@@ -97,19 +94,9 @@ type attemptEvent struct {
 }
 
 func (s *runtimeState) record(e attemptEvent) error {
-	s.auditMu.Lock()
-	defer s.auditMu.Unlock()
 	data, err := json.Marshal(e)
 	if err == nil {
-		data = append(data, '\n')
-		var n int
-		n, err = s.audit.Write(data)
-		if err == nil && n != len(data) {
-			err = errors.New("short audit write")
-		}
-	}
-	if err == nil {
-		err = s.audit.Sync()
+		err = s.audit.append(append(data, '\n'))
 	}
 	if err != nil {
 		s.failed.Store(true)

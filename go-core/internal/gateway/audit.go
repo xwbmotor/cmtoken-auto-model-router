@@ -11,12 +11,12 @@ import (
 
 // The ledger lock must already be held. Audit is supplementary to the WAL;
 // an incomplete last audit line is recoverable, a damaged complete line is not.
-func openAudit(path string) (*os.File, error) {
+func openAudit(path string) (*auditJournal, error) {
 	f, e := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if e != nil {
 		return nil, e
 	}
-	fail := func(e error) (*os.File, error) { f.Close(); return nil, e }
+	fail := func(e error) (*auditJournal, error) { f.Close(); return nil, e }
 	reader := bufio.NewReaderSize(f, 16384)
 	var offset int64
 	for {
@@ -43,5 +43,7 @@ func openAudit(path string) (*os.File, error) {
 	if e = f.Sync(); e != nil {
 		return fail(e)
 	}
-	return f, nil
+	j := &auditJournal{file: f, queue: make(chan *auditEntry, 256), stopped: make(chan struct{}), syncFile: f.Sync}
+	go j.writeLoop()
+	return j, nil
 }
