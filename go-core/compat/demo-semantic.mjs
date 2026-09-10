@@ -1,7 +1,7 @@
 // Real Go/Node processes and local HTTP fixtures. No production credentials,
 // production endpoints, paid models, or source configuration writes.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
 import { randomBytes, createHash } from 'node:crypto';
@@ -16,8 +16,10 @@ import { classifySemantically } from '../../src/semantic-router.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 const flag=process.argv.indexOf('--binary');if(flag<0)throw Error('--binary is required');const binary=resolve(process.argv[flag+1]);
 const dir=mkdtempSync(resolve(tmpdir(),'amr-go-semantic-'));
+const snapshotMode=process.argv.includes('--snapshot');
 const random=()=>randomBytes(24).toString('hex');
 const access=random(),assessorToken=random(),upstreamToken=random(),smallToken=random(),largeToken=random(),secret=random();
+const admin=random();
 const tenants=[{accessToken:random(),upstreamToken:random()},{accessToken:random(),upstreamToken:random()}];
 const children=[],observed=[],largeBodies=[],smallBodies=[];let assertionError=null,releaseShadow=null;
 let ids=[];
@@ -55,8 +57,17 @@ async function start(command,args){
 }
 async function startMode(source,mode){
  const copy=structuredClone(source);copy.semanticRouter.mode=mode;const configPath=resolve(dir,`${mode}.json`);writeFileSync(configPath,JSON.stringify(copy));process.env.CONFIG_PATH=configPath;const config=await loadConfig();
- const adapter=await start(process.execPath,['go-core/compat/assessor.mjs','--lab','--native-semantics','--config',configPath,'--port','0']);
- const go=await start(binary,['--lab','--native-analysis','--native-semantics','--listen','127.0.0.1:0','--assessor',`http://127.0.0.1:${adapter.port}/assess`,'--upstream',`http://127.0.0.1:${upstream.address().port}/v1/chat/completions`,'--scope-url',`http://127.0.0.1:${upstream.address().port}/v1/models`,'--semantic-small',`http://127.0.0.1:${small.address().port}/classify`,'--semantic-large',`http://127.0.0.1:${upstream.address().port}/classifier/chat/completions`]);
+ let configArgs;
+ if(snapshotMode){
+  const runtimePath=resolve(dir,`${mode}-runtime.json`),authPath=resolve(dir,`${mode}-auth.json`);
+  execFileSync(process.execPath,['go-core/compat/export-runtime.mjs','--config',configPath,'--out',runtimePath],{cwd:root,windowsHide:true,stdio:'pipe'});
+  writeFileSync(authPath,JSON.stringify({mode:'strict',accessToken:access,upstreamToken,adminToken:admin,tenants}));
+  configArgs=['--runtime','--runtime-config',runtimePath,'--auth-config',authPath,'--ledger',resolve(dir,`${mode}.wal`)];
+ }else{
+  const adapter=await start(process.execPath,['go-core/compat/assessor.mjs','--lab','--native-semantics','--config',configPath,'--port','0']);
+  configArgs=['--assessor',`http://127.0.0.1:${adapter.port}/assess`];
+ }
+ const go=await start(binary,['--lab','--native-analysis','--native-semantics','--listen','127.0.0.1:0',...configArgs,'--upstream',`http://127.0.0.1:${upstream.address().port}/v1/chat/completions`,'--scope-url',`http://127.0.0.1:${upstream.address().port}/v1/models`,'--semantic-small',`http://127.0.0.1:${small.address().port}/classify`,'--semantic-large',`http://127.0.0.1:${upstream.address().port}/classifier/chat/completions`]);
  return {base:`http://${go.listen}`,config};
 }
 try{
@@ -76,13 +87,14 @@ try{
   assert.equal(response.status,200,text);assert.equal(response.headers.get('x-amr-semantic-status'),status);assert.equal(response.headers.get('x-amr-selected-model'),expected);if(stream)assert.ok(text.includes('data: [DONE]'));
   assert.deepEqual(smallBodies.slice(beforeSmall),referenceSmall);assert.deepEqual(largeBodies.slice(beforeLarge),referenceLarge,'Go changed the reference classifier request');checks.push({tag,status,stream,selectedModelMatchesNode:true});
  }
- const stats=await(await fetch(active.base+'/internal/v1/runtime',{headers:{Authorization:`Bearer ${access}`}})).json();assert.equal(stats.semanticGuard.largeCalls,4);assert.equal(stats.semanticGuard.actualTokens,60);assert.ok(stats.semanticGuard.estimatedTokens>0);assert.equal(stats.semanticGuard.pendingTokens,0);assert.equal(observed.length,7);
+ const stats=await(await fetch(active.base+'/internal/v1/runtime',{headers:{Authorization:`Bearer ${snapshotMode?admin:access}`}})).json();assert.equal(stats.semanticGuard.largeCalls,4);assert.equal(stats.semanticGuard.actualTokens,60);assert.ok(stats.semanticGuard.estimatedTokens>0);assert.equal(stats.semanticGuard.pendingTokens,0);assert.equal(observed.length,7);
  const shadow=await startMode(source,'shadow');const response=await fetch(shadow.base+'/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${access}`,'Content-Type':'application/json'},body:JSON.stringify({model:shadow.config.routing.autoModelId,messages:[{role:'user',content:'请解释一下这段话的含义 case-shadow'}]})});await response.text();assert.equal(response.headers.get('x-amr-semantic-status'),'shadow_pending');assert.equal(response.headers.get('x-amr-selected-model'),ids[0]);
  for(let i=0;i<100&&!releaseShadow;i++)await new Promise(r=>setTimeout(r,10));assert.ok(releaseShadow);releaseShadow();
- let shadowStats;for(let i=0;i<100;i++){shadowStats=await(await fetch(shadow.base+'/internal/v1/runtime',{headers:{Authorization:`Bearer ${access}`}})).json();if(shadowStats.reviews.length)break;await new Promise(r=>setTimeout(r,10))};assert.equal(shadowStats.reviews[0]?.status,'shadow_complete');assert.equal(observed.length,8);
+ let shadowStats;for(let i=0;i<100;i++){shadowStats=await(await fetch(shadow.base+'/internal/v1/runtime',{headers:{Authorization:`Bearer ${snapshotMode?admin:access}`}})).json();if(shadowStats.reviews.length)break;await new Promise(r=>setTimeout(r,10))};assert.equal(shadowStats.reviews[0]?.status,'shadow_complete');assert.equal(observed.length,8);
  if(assertionError)throw assertionError;
  const report={milestone:'m2b',productionReady:false,at:new Date().toISOString(),upstream:'local mocks only',checks,shadowNonblocking:true,shadowNoDuplicateAnswer:true,tenantCredentialIsolation:true,classifierRequestMatchesNode:true,guard:stats.semanticGuard,answerCalls:observed.length,binarySha256:createHash('sha256').update(readFileSync(binary)).digest('hex')};
- mkdirSync(resolve(root,'data/go-migration'),{recursive:true});writeFileSync(resolve(root,'data/go-migration/semantic-demo.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report));
+ report.featureMode=snapshotMode?'native-local-snapshot':'legacy-request-adapter';report.adapterProcessRequired=!snapshotMode;
+ mkdirSync(resolve(root,'data/go-migration'),{recursive:true});writeFileSync(resolve(root,`data/go-migration/${snapshotMode?'native-snapshot-semantic-demo':'semantic-demo'}.json`),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report));
 }finally{
  if(releaseShadow)releaseShadow();for(const child of children.reverse()){if(child.exitCode!==null||child.signalCode!==null)continue;await new Promise(r=>{const timer=setTimeout(r,3000);child.once('exit',()=>{clearTimeout(timer);r()});child.kill()})};small.closeAllConnections();upstream.closeAllConnections();await Promise.all([new Promise(r=>small.close(r)),new Promise(r=>upstream.close(r))]);rmSync(dir,{recursive:true,force:true});
 }

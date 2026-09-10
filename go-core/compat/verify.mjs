@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../../src/config.mjs';
 import { analyzeRequest, routeRequest } from '../../src/router.mjs';
 import { decisionInput, referenceError, selectionProjection } from './contract.mjs';
+import { featureConfig } from './feature-config.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const arg = name => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; };
@@ -92,6 +93,27 @@ for (let index = 0; index < numberOfRandomCases; index++) scenario(`seed:2026090
 });
 
 const inputs = cases.map(c => decisionInput(c.body, c.config, c.runtime));
+// A second, independent boundary exercises Go configuration default resolution
+// and per-task/subtask construction, not just already-normalized kernel inputs.
+const featureRows = cases.map((c,i) => ({ config:featureConfig(c.config), body:c.body, analysis:inputs[i].analysis, now, bucket:inputs[i].runtime.trafficBucket }));
+const featureText = featureRows.map(x => JSON.stringify(x)).join('\n') + '\n';
+const featureRun = spawnSync(binary, ['features-replay'], { input:featureText, encoding:'utf8', maxBuffer:96*1024*1024, timeout:90000, windowsHide:true });
+if (featureRun.error || featureRun.status !== 0) throw new Error(`Go feature replay failed: ${featureRun.error?.message || featureRun.stderr}`);
+const featureResults = featureRun.stdout.trim().split(/\r?\n/).map(s => JSON.parse(s));
+assert.equal(featureResults.length, cases.length);
+let nativeFeatureCases = 0, nativeFeatureRejections = 0;
+for (let i=0;i<cases.length;i++) {
+  const expected = decisionInput(cases[i].body,cases[i].config,{nativeAnalysis:inputs[i].analysis,now,trafficBucket:inputs[i].runtime.trafficBucket});
+  if (cases[i].config.routing.scoreStrategy === 'not-implemented') {
+    assert.equal(featureResults[i].error,'only weighted scoring is implemented'); nativeFeatureRejections++; continue;
+  }
+  assert.deepEqual(featureResults[i],expected,`native feature mismatch: ${cases[i].id}`);
+  nativeFeatureCases++;
+}
+const featureOut=resolve(root,'data/go-migration/features-verification.json');
+mkdirSync(dirname(featureOut),{recursive:true});
+writeFileSync(featureOut,JSON.stringify({cases:cases.length,nativeFeatureCases,nativeFeatureRejections,mismatches:0,corpusSha256:createHash('sha256').update(featureText).digest('hex'),binarySha256:createHash('sha256').update(readFileSync(binary)).digest('hex')},null,2)+'\n');
+console.log(JSON.stringify({nativeFeatureCases,nativeFeatureRejections,mismatches:0}));
 const inputText = inputs.map(x => JSON.stringify(x)).join('\n') + '\n';
 const run = spawnSync(binary, ['replay'], { input: inputText, encoding: 'utf8', maxBuffer: 96*1024*1024, timeout: 90000, windowsHide: true });
 if (run.error || run.status !== 0) throw new Error(`Go replay failed: ${run.error?.message || run.stderr}`);

@@ -40,6 +40,8 @@ jobs:
         run: go build -trimpath -o ../data/go-migration/amr-core ./cmd/amr-core
       - name: Compare with Node reference
         run: node go-core/compat/verify.mjs --binary data/go-migration/amr-core
+      - name: Compare native feature defaults and boundary types
+        run: node go-core/compat/verify-features.mjs --binary data/go-migration/amr-core
       - name: Compare native request semantics
         run: node go-core/compat/verify-analysis.mjs --binary data/go-migration/amr-core
       - name: Compare semantic review contract
@@ -50,6 +52,10 @@ jobs:
         run: node go-core/compat/demo-semantic.mjs --binary data/go-migration/amr-core
       - name: Verify durable runtime, retry and atomic hot reload
         run: node go-core/compat/demo-runtime.mjs --binary data/go-migration/amr-core
+      - name: Verify native runtime without an adapter process
+        run: node go-core/compat/demo-runtime.mjs --binary data/go-migration/amr-core --snapshot
+      - name: Verify native feature reassessment and tenant scopes without an adapter
+        run: node go-core/compat/demo-semantic.mjs --binary data/go-migration/amr-core --snapshot
       - name: Verify opt-in management bridge
         run: node --test tests/go-core-admin.test.mjs
       - name: Verify offline rollback accounting continuity

@@ -30,9 +30,13 @@ const server = createServer(async (req, res) => {
     try {
       const next = await loadConfig();
       const bundle = runtimeBundle(next);
-      // Retain pinned revisions, never evict an in-flight request's configuration.
-      if (!snapshots.has(bundle.revision) && snapshots.size >= 64) return send(503, { error: 'snapshot_capacity_exhausted' });
-      snapshots.set(bundle.revision, next);
+      // Native clients own a complete immutable generation. Only legacy clients
+      // need historical /assess snapshots; preserve their original wire schema.
+      if (req.headers['x-amr-native-features'] !== '1') {
+        delete bundle.features;
+        if (!snapshots.has(bundle.revision) && snapshots.size >= 64) return send(503, { error: 'snapshot_capacity_exhausted' });
+        snapshots.set(bundle.revision, next);
+      }
       return send(200, bundle);
     } catch { return send(400, { error: 'invalid_runtime_configuration' }); }
   }

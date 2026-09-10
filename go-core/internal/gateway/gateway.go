@@ -23,6 +23,7 @@ import (
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/analysis"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/auth"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/decision"
+	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/features"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/labnet"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/scope"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/semantic"
@@ -68,6 +69,7 @@ type Gateway struct {
 	reviews           []Review
 	sessionSecret     []byte
 	analyzer          *analysis.Analyzer
+	features          *features.Builder
 	options           Options
 	assessor          *url.URL
 	upstream          *url.URL
@@ -82,15 +84,22 @@ func LoopbackURL(raw string) (*url.URL, error) {
 }
 
 func New(o Options) (*Gateway, error) {
-	assessor, err := LoopbackURL(o.AssessorURL)
-	if err != nil {
-		return nil, err
+	nativeFeatures := o.Bundle != nil && o.Bundle.Features != nil
+	var assessor *url.URL
+	var err error
+	if !nativeFeatures {
+		assessor, err = LoopbackURL(o.AssessorURL)
+		if err != nil {
+			return nil, err
+		}
+	} else if !o.NativeAnalysis {
+		return nil, errors.New("native features require native analysis")
 	}
 	upstream, err := LoopbackURL(o.UpstreamURL)
 	if err != nil {
 		return nil, err
 	}
-	if (o.Authenticator == nil && len(o.AccessToken) < 16) || len(o.AssessorToken) < 16 {
+	if (o.Authenticator == nil && len(o.AccessToken) < 16) || (!nativeFeatures && len(o.AssessorToken) < 16) {
 		return nil, errors.New("access and assessor tokens must each contain at least 16 characters")
 	}
 	if o.RequestTimeout <= 0 || o.AssessmentTimeout <= 0 || o.MaxRequests < 1 || o.MaxRequests > 10000 {
@@ -139,6 +148,13 @@ func New(o Options) (*Gateway, error) {
 		if e := o.Bundle.validate(); e != nil {
 			g.Close()
 			return nil, e
+		}
+		if nativeFeatures {
+			g.features, err = features.New(*o.Bundle.Features)
+			if err != nil {
+				g.Close()
+				return nil, err
+			}
 		}
 	}
 	if o.NativeAnalysis && o.Bundle != nil {

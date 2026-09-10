@@ -12,7 +12,7 @@ on:
       profile:
         description: Local mock workload size (never production)
         type: choice
-        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization]
+        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features]
         default: smoke
 
 permissions:
@@ -53,6 +53,15 @@ jobs:
             BASELINE="$baseline" node -e 'require("node:fs").writeFileSync("data/go-migration/capacity-pair-source.json", JSON.stringify({before:process.env.BASELINE,after:process.env.GITHUB_SHA,order:["before","after"],sameRunner:true}))'
             node go-core/compat/compare-capacity.mjs --go-procs 1 --binary data/go-migration/amr-core-before --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-before.json
             node go-core/compat/compare-capacity.mjs --go-procs 1 --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-after.json
+          elif [ "$PROFILE" = "native-features" ]; then
+            baseline=cf991161186dd17d2452773060a426e46bccef7c
+            git fetch --no-tags --depth=1 origin "$baseline"
+            git worktree add --detach "$RUNNER_TEMP/amr-feature-baseline" "$baseline"
+            (cd "$RUNNER_TEMP/amr-feature-baseline/go-core" && CGO_ENABLED=0 go build -trimpath -o "$GITHUB_WORKSPACE/data/go-migration/amr-core-before" ./cmd/amr-core)
+            BASELINE="$baseline" node -e 'require("node:fs").writeFileSync("data/go-migration/capacity-feature-source.json", JSON.stringify({before:process.env.BASELINE,after:process.env.GITHUB_SHA,order:["before","after","cold-after"],beforeFeatures:"legacy-request-adapter",afterFeatures:"native-local-snapshot",sameRunner:true}))'
+            node go-core/compat/compare-capacity.mjs --feature-mode bootstrap --go-procs auto --binary data/go-migration/amr-core-before --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-feature-before.json
+            node go-core/compat/compare-capacity.mjs --feature-mode snapshot --go-procs auto --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-feature-after.json
+            node go-core/compat/compare-capacity.mjs --feature-mode snapshot --go-procs auto --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 300 --stream-seconds 2 --streams 2 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-feature-cold-after.json
           elif [ "$PROFILE" = "cold-optimization" ]; then
             baseline=5a97c1de583757a61d48453f34ab869e722eba57
             git fetch --no-tags --depth=1 origin "$baseline"

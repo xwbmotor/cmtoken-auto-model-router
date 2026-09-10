@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math/big"
 	"net/http"
+	"time"
 
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/analysis"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/decision"
@@ -60,6 +62,23 @@ func (g *Gateway) loadPolicy(path string, out any) error {
 }
 func (g *Gateway) assess(ctx context.Context, data []byte, native *analysis.Result) (decision.Input, error) {
 	var input decision.Input
+	if g.features != nil {
+		if e := ctx.Err(); e != nil {
+			return input, e
+		}
+		if native == nil {
+			return input, errors.New("native_analysis_required")
+		}
+		bucket, e := rand.Int(rand.Reader, big.NewInt(1000000))
+		if e != nil {
+			return input, errors.New("traffic_bucket_unavailable")
+		}
+		in, e := g.features.Input(data, *native, float64(time.Now().UnixMilli()), float64(bucket.Int64())/10000)
+		if e != nil {
+			return input, errors.New("invalid_assessment_contract")
+		}
+		return in, nil
+	}
 	payload := data
 	if native != nil {
 		payload, _ = json.Marshal(map[string]any{"nativeAnalysisVersion": 1, "request": json.RawMessage(data), "analysis": native})

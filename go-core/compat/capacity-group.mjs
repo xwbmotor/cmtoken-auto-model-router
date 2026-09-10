@@ -40,8 +40,18 @@ async function start(command, args) {
 }
 if (role === 'go') {
   process.env.AMR_GO_ASSESSOR_TOKEN = process.env.M4_ASSESSOR;
-  await start(process.execPath, ['go-core/compat/assessor.mjs', '--lab', '--config', process.env.CONFIG_PATH, '--port', '8789']);
-  const coreInfo = await start('/app/amr-core', ['--lab', '--runtime', '--auth-config', `${dir}/auth.json`, '--ledger', `${dir}/go.wal`, '--listen', '127.0.0.1:8791', '--assessor', 'http://127.0.0.1:8789/assess', '--upstream', 'http://127.0.0.1:8790/v1/chat/completions', ...(process.env.M4_PROFILE === '1' ? ['--lab-profile-dir', `${dir}/profile`] : [])]);
+  let configArgs;
+  if (process.env.M4_FEATURE_MODE === 'snapshot') {
+    const { loadConfig } = await import('../../src/config.mjs');
+    const { runtimeBundle } = await import('./runtime-policy.mjs');
+    writeFileSync(`${dir}/runtime.json`, JSON.stringify(runtimeBundle(await loadConfig())));
+    delete process.env.AMR_GO_ASSESSOR_TOKEN;
+    configArgs = ['--runtime-config', `${dir}/runtime.json`];
+  } else {
+    await start(process.execPath, ['go-core/compat/assessor.mjs', '--lab', '--config', process.env.CONFIG_PATH, '--port', '8789']);
+    configArgs = ['--assessor', 'http://127.0.0.1:8789/assess'];
+  }
+  const coreInfo = await start('/app/amr-core', ['--lab', '--runtime', '--auth-config', `${dir}/auth.json`, '--ledger', `${dir}/go.wal`, '--listen', '127.0.0.1:8791', ...configArgs, '--upstream', 'http://127.0.0.1:8790/v1/chat/completions', ...(process.env.M4_PROFILE === '1' ? ['--lab-profile-dir', `${dir}/profile`] : [])]);
   writeFileSync(`${dir}/runtime-info.json`, JSON.stringify(coreInfo));
   if (process.env.M4_PROFILE === '1') {
     profiledCore = children.at(-1);
@@ -50,7 +60,7 @@ if (role === 'go') {
   process.env.AMR_GO_ADMIN_URL = 'http://127.0.0.1:8791'; process.env.AMR_GO_ADMIN_TOKEN = process.env.M4_CORE_ADMIN;
 }
 // Node group: this process serves requests. Go group: this process is the real
-// Node administration service; adapter and Go runtime remain children in its cgroup.
+// Node administration service; Go and any bootstrap adapter share its cgroup.
 await import('../../src/server.mjs');
 for (const child of children) child.once('exit', code => {
   // The profiling harness explicitly drains Go after every measured request.

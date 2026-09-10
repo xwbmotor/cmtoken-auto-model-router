@@ -2,12 +2,14 @@
 // Credentials and endpoint URLs are deliberately supplied separately by the host.
 import { getConfigRevision } from '../../src/config.mjs';
 import { semanticPolicy } from './semantic-policy.mjs';
+import { featureConfig } from './feature-config.mjs';
 
 export function runtimeBundle(config) {
   const finite = (v, d) => { const n = Number(v ?? d); if (!Number.isFinite(n)) throw new Error('invalid runtime number'); return n; };
   const price = v => v == null ? null : finite(v);
   return {
     revision: getConfigRevision(config),
+    features: featureConfig(config),
     analysis: { semanticRequired: config.semanticRouter?.enabled === true && config.semanticRouter.mode === 'active', taskRules: { simpleMaxComplexity: config.taskRules.simpleMaxComplexity, complexMinComplexity: config.taskRules.complexMinComplexity, patterns: config.taskRules.patterns }, budget: { defaultEstimatedOutputTokens: config.budget?.defaultEstimatedOutputTokens } },
     semantic: semanticPolicy(config),
     runtime: {

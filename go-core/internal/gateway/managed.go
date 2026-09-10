@@ -20,10 +20,11 @@ import (
 )
 
 type ManagedOptions struct {
-	Gateway    Options
-	Auth       auth.Config
-	AuthFile   string
-	LedgerPath string
+	Gateway           Options
+	Auth              auth.Config
+	AuthFile          string
+	RuntimeConfigFile string
+	LedgerPath        string
 }
 type generationConfig struct {
 	Auth   auth.Config `json:"auth"`
@@ -75,6 +76,18 @@ func (m *Managed) readConfig() (generationConfig, error) {
 			return c, errors.New("invalid credential configuration")
 		}
 	}
+	if m.options.RuntimeConfigFile != "" {
+		f, e := os.Open(m.options.RuntimeConfigFile)
+		if e != nil {
+			return c, errors.New("runtime snapshot unavailable")
+		}
+		raw, e := io.ReadAll(io.LimitReader(f, MaxBodyBytes+1))
+		f.Close()
+		if e != nil || len(raw) > MaxBodyBytes || decodeStrict(bytes.NewReader(raw), &c.Bundle) != nil || c.Bundle.Features == nil {
+			return c, errors.New("invalid native runtime snapshot")
+		}
+		return c, nil
+	}
 	u, e := LoopbackURL(m.options.Gateway.AssessorURL)
 	if e != nil {
 		return c, e
@@ -84,6 +97,7 @@ func (m *Managed) readConfig() (generationConfig, error) {
 	defer client.CloseIdleConnections()
 	req, _ := http.NewRequest("GET", u.String(), nil)
 	req.Header.Set("Authorization", "Bearer "+m.options.Gateway.AssessorToken)
+	req.Header.Set("X-AMR-Native-Features", "1")
 	res, e := client.Do(req)
 	if e != nil {
 		return c, errors.New("runtime configuration unavailable")

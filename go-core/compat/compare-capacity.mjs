@@ -19,6 +19,8 @@ const profiling = process.argv.includes('--profile');
 // The cgroup enforces CPU throughput. Do not add a one-P scheduler restriction
 // that suppresses Go's container-aware minimum parallelism during blocking I/O.
 const goProcs = arg('--go-procs') ?? 'auto';
+const featureMode = arg('--feature-mode') ?? 'bootstrap';
+assert.ok(['bootstrap','snapshot'].includes(featureMode), 'invalid --feature-mode');
 assert.ok(goProcs === 'auto' || (/^[1-9]\d*$/.test(goProcs) && Number(goProcs) <= 64), 'invalid --go-procs');
 assert.ok(Number.isInteger(seconds) && seconds >= 1 && seconds <= 60 && Number.isInteger(rounds) && rounds >= 1 && rounds <= 5);
 assert.ok(Number.isInteger(streamSeconds) && streamSeconds >= 2 && streamSeconds <= 600 && Number.isInteger(streams) && streams >= 1 && streams <= 128);
@@ -140,12 +142,12 @@ try {
   mkdirSync(stage, { recursive: true }); mkdirSync(resolve(stage, 'app/go-core/compat'), { recursive: true });
   cpSync(resolve(root, 'src'), resolve(stage, 'app/src'), { recursive: true });
   cpSync(resolve(root, 'package.json'), resolve(stage, 'app/package.json'));
-  for (const name of ['assessor.mjs', 'contract.mjs', 'semantic-policy.mjs', 'runtime-policy.mjs', 'capacity-group.mjs', 'capacity-fixture.mjs']) cpSync(resolve(root, 'go-core/compat', name), resolve(stage, 'app/go-core/compat', name));
+  for (const name of ['assessor.mjs', 'contract.mjs', 'feature-config.mjs', 'semantic-policy.mjs', 'runtime-policy.mjs', 'capacity-group.mjs', 'capacity-fixture.mjs']) cpSync(resolve(root, 'go-core/compat', name), resolve(stage, 'app/go-core/compat', name));
   cpSync(binary, resolve(stage, 'app/amr-core')); chmodSync(resolve(stage, 'app/amr-core'), 0o755);
   sourceHash = sha(readFileSync(resolve(root, 'src/server.mjs')));
   for (const role of ['node', 'go']) { mkdirSync(resolve(stage, role)); writeFileSync(resolve(stage, role, 'router.json'), JSON.stringify(config(role))); }
   writeFileSync(resolve(stage, 'go/auth.json'), JSON.stringify({ mode: 'strict', accessToken: credentials.M4_ACCESS, adminToken: credentials.M4_CORE_ADMIN, upstreamToken: credentials.M4_UPSTREAM }));
-  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, M4_PROFILE: profiling ? '1' : '0', ...(goProcs === 'auto' ? {} : {GOMAXPROCS: goProcs}), NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
+  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, M4_PROFILE: profiling ? '1' : '0', M4_FEATURE_MODE:featureMode, ...(goProcs === 'auto' ? {} : {GOMAXPROCS: goProcs}), NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
   const fixture = `${runKey}-fixture`;
   const mounts = ['--mount', `type=bind,source=${resolve(stage, 'app')},target=/app,readonly`, '--mount', `type=bind,source=${stage},target=/lab`, '--env-file', envFile];
   containers.push(fixture);
@@ -222,7 +224,7 @@ finally {
     return { name, log };
   }) : undefined;
   const report = { schemaVersion: 1, experiment: 'm4-cgroup-open-loop', at: new Date().toISOString(), runKey, productionReady: false, formalAcceptance: 'not evaluated: production workload and SLO not supplied',
-    failure, diagnostics, profiling, goRuntime, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB, goProcs }, engine, image: imageEvidence, quotas,
+    failure, diagnostics, profiling, goRuntime, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB, goProcs, featureMode }, engine, image: imageEvidence, quotas,
     groups: { node: ['Node gateway + resource endpoint'], go: ['Go runtime', 'Node adapter', 'real Node administration + resource endpoint'], outsideQuota: ['common TCP ingress', 'mock upstream', 'load generator'] },
     corpus: { model, shapes, synthetic: true, semanticReview: false, inputMix: 'equal round-robin', mockDelayMs: 10 },
     binarySha256: sha(readFileSync(binary)), nodeSourceSha256: sourceHash, preflight, runs, requests,

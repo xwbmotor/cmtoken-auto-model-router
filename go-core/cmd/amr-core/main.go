@@ -25,6 +25,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "features-replay" {
+		if e := featuresReplay(os.Stdin, os.Stdout); e != nil {
+			fmt.Fprintln(os.Stderr, "feature replay failed")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "ledger-export" {
 		if e := exportLedger(os.Args[2:], os.Stdout); e != nil {
 			fmt.Fprintln(os.Stderr, e)
@@ -65,6 +72,7 @@ func main() {
 	profileDir := flags.String("lab-profile-dir", "", "optional NEW directory for CPU, blocking and execution trace diagnostics")
 	runtimeMode := flags.Bool("runtime", false, "enable M3 durable runtime with production auth contracts (still loopback only)")
 	authFile := flags.String("auth-config", "", "optional protected local auth JSON, re-read on explicit hot reload")
+	runtimeConfig := flags.String("runtime-config", "", "local exported runtime snapshot; no Node adapter required, re-read on explicit reload")
 	ledgerPath := flags.String("ledger", "", "dedicated Go ledger path; never share a live Node ledger")
 	nativeAnalysis := flags.Bool("native-analysis", false, "compute L1 and capacity in Go with a startup policy snapshot")
 	nativeSemantics := flags.Bool("native-semantics", false, "enable native semantic review against explicit local endpoints")
@@ -78,6 +86,10 @@ func main() {
 	upstream := flags.String("upstream", "http://127.0.0.1:8790/v1/chat/completions", "local mock upstream")
 	timeout := flags.Duration("timeout", 30*time.Second, "laboratory request total deadline")
 	_ = flags.Parse(os.Args[1:])
+	if *runtimeConfig != "" && !*runtimeMode {
+		fmt.Fprintln(os.Stderr, "--runtime-config requires --runtime")
+		os.Exit(2)
+	}
 	if !*lab {
 		fmt.Fprintln(os.Stderr, "Requires --lab; this milestone is not production-ready")
 		os.Exit(2)
@@ -115,7 +127,7 @@ func main() {
 		Close()
 	}
 	if *runtimeMode {
-		g, err = gateway.NewManaged(gateway.ManagedOptions{Gateway: options, AuthFile: *authFile, LedgerPath: *ledgerPath, Auth: auth.Config{Mode: os.Getenv("ROUTER_KEY_MODE"), AccessToken: os.Getenv("ROUTER_ACCESS_KEY"), UpstreamToken: firstNonempty(os.Getenv("UPSTREAM_API_KEY"), os.Getenv("MAAS_API_KEY")), AdminToken: os.Getenv("AMR_GO_ADMIN_TOKEN")}})
+		g, err = gateway.NewManaged(gateway.ManagedOptions{Gateway: options, AuthFile: *authFile, RuntimeConfigFile: *runtimeConfig, LedgerPath: *ledgerPath, Auth: auth.Config{Mode: os.Getenv("ROUTER_KEY_MODE"), AccessToken: os.Getenv("ROUTER_ACCESS_KEY"), UpstreamToken: firstNonempty(os.Getenv("UPSTREAM_API_KEY"), os.Getenv("MAAS_API_KEY")), AdminToken: os.Getenv("AMR_GO_ADMIN_TOKEN")}})
 	} else {
 		g, err = gateway.New(options)
 	}
@@ -146,7 +158,7 @@ func main() {
 	if *runtimeMode {
 		milestone = "m3"
 	}
-	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"listen": listener.Addr().String(), "milestone": milestone, "productionReady": false, "gomaxprocs": runtime.GOMAXPROCS(0), "logicalCPUs": runtime.NumCPU(), "goVersion": runtime.Version()})
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"listen": listener.Addr().String(), "milestone": milestone, "productionReady": false, "gomaxprocs": runtime.GOMAXPROCS(0), "logicalCPUs": runtime.NumCPU(), "goVersion": runtime.Version(), "localRuntimeSnapshot": *runtimeConfig != ""})
 	if err = server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, "laboratory server failed")
 		os.Exit(1)

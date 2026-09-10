@@ -12,16 +12,16 @@ flowchart LR
     Gateway --> Analysis[Go L1 与完整容量估算]
     Gateway --> Scope[Go 按凭据查询模型资格]
     Analysis --> Semantic[Go L2/L3 复核与采纳]
-    Semantic --> Adapter
-    Analysis --> Adapter[Node 配置默认值适配器]
-    Adapter --> Features[版本化特征输入]
+    Config[Node 配置校验与快照导出] --> Features[Go 配置代与原生决策输入]
+    Semantic --> Features
+    Analysis --> Features
     Features --> Kernel[Go 评分与选模]
     Kernel --> Admission[Go 原子并发预占]
     Admission --> Mock[本地模拟模型服务]
     Mock --> Stream[Go 非流式与 SSE 返回]
 ```
 
-使用 `--native-analysis` 时，Go 独立执行 L1 分类、置信度、子任务、复杂度信号和完整请求容量估算，再由 Node 适配器按分析结果解析配置默认值与任务质量数据。评分、资格过滤和最终选择也在 Go。未指定该开关时保留 M1 对照路径；演示及 CI 均使用原生路径。Node 仍有每请求配置转换调用，尚未达到完全移除 Node 请求依赖的最终架构。
+使用新的 `--runtime` 时，Go 独立执行 L1 分类、容量估算、配置默认值解析、按任务/子任务取质量数据、评分和最终选择，请求不再调用 Node 配置适配器。配置在启动/热更新时获取；指定 `--runtime-config` 可直接从本地导出快照运行，无需适配器进程。Node 仍负责管理端配置校验与成本派生，Python 继续提供分类服务。早期 M1/M2 对照路径保留，具体边界与使用方法见 [原生决策输入](NATIVE_FEATURES.md)。
 
 | 功能 | 当前状态 |
 |---|---|

@@ -8,16 +8,18 @@ import (
 	"time"
 
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/analysis"
+	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/features"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/ledger"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/resilience"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/semantic"
 )
 
 type Bundle struct {
-	Revision string          `json:"revision"`
-	Analysis analysis.Config `json:"analysis"`
-	Semantic semantic.Policy `json:"semantic"`
-	Runtime  RuntimePolicy   `json:"runtime"`
+	Revision string           `json:"revision"`
+	Features *features.Config `json:"features,omitempty"`
+	Analysis analysis.Config  `json:"analysis"`
+	Semantic semantic.Policy  `json:"semantic"`
+	Runtime  RuntimePolicy    `json:"runtime"`
 }
 type RuntimePolicy struct {
 	MaxAttempts              int              `json:"maxAttempts"`
@@ -52,6 +54,21 @@ func (b Bundle) validate() error {
 	}
 	if _, e := analysis.New(b.Analysis); e != nil {
 		return e
+	}
+	if b.Features != nil {
+		builder, e := features.New(*b.Features)
+		if e != nil {
+			return e
+		}
+		ids := builder.ModelIDs()
+		if len(ids) != len(p.Prices) {
+			return errors.New("feature and billing model sets differ")
+		}
+		for _, id := range ids {
+			if _, ok := p.Prices[id]; !ok {
+				return errors.New("feature model has no billing policy")
+			}
+		}
 	}
 	return b.Semantic.Validate()
 }
