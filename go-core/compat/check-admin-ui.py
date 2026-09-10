@@ -27,7 +27,7 @@ with sync_playwright() as pw:
     panel.get_by_role('button', name='查询状态').click()
     expect(panel.locator('[data-core-status]')).to_contain_text('尚未同步')
     page.screenshot(path=str(out / 'go-core-unsynchronized.png'), full_page=False)
-    panel.get_by_role('button', name='将已保存配置加载到 Go').click()
+    panel.locator('[data-core-reload]').click()
     expect(panel.locator('[data-core-status]')).to_have_text('Go 已加载当前保存的配置。')
     page.screenshot(path=str(out / 'go-core-synchronized.png'), full_page=False)
     page.set_viewport_size({'width': 390, 'height': 844})
