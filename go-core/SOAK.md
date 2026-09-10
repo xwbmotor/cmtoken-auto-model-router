@@ -20,7 +20,9 @@ Go 配额 2 CPU / 512 MiB；mock 与负载发生器独立容器 2 CPU / 768 MiB�
 
 ```sh
 node go-core/deployment/prepare-soak.mjs
-sudo chown -R 65532:65532 data/go-soak
+sudo chown -R 65532:65532 data/go-soak/config data/go-soak/ledger
+sudo chgrp 65532 data/go-soak/evidence
+chmod 2770 data/go-soak/evidence
 bash go-core/deployment/soak.sh
 ```
 

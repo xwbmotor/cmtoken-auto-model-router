@@ -17,7 +17,9 @@ jobs:
       - name: Prepare isolated fixtures
         run: |
           node go-core/deployment/prepare-soak.mjs
-          sudo chown -R 65532:65532 data/go-soak
+          sudo chown -R 65532:65532 data/go-soak/config data/go-soak/ledger
+          sudo chgrp 65532 data/go-soak/evidence
+          chmod 2770 data/go-soak/evidence
       - name: Exercise soak contract before long run
         env:
           SOAK_SECONDS: '60'
@@ -45,7 +47,9 @@ jobs:
       - name: Prepare isolated fixtures
         run: |
           node go-core/deployment/prepare-soak.mjs
-          sudo chown -R 65532:65532 data/go-soak
+          sudo chown -R 65532:65532 data/go-soak/config data/go-soak/ledger
+          sudo chgrp 65532 data/go-soak/evidence
+          chmod 2770 data/go-soak/evidence
       - name: One hour at fixed 100 RPS
         env:
           SOAK_SECONDS: '3600'
