@@ -12,7 +12,7 @@ on:
       profile:
         description: Local mock workload size (never production)
         type: choice
-        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard, edge-observation-profile, edge-isolation, edge-observation-optimization, native-front-standard, native-front-profile, native-front-io-compare, native-front-node-cost, native-front-relay-compare, native-front-headroom]
+        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard, edge-observation-profile, edge-isolation, edge-observation-optimization, native-front-standard, native-front-profile, native-front-io-compare, native-front-node-cost, native-front-relay-compare, native-front-headroom, native-front-node-cost-profile]
         default: smoke
 
 permissions:
@@ -98,10 +98,11 @@ jobs:
               node go-core/compat/compare-capacity.mjs "${extra[@]}" --feature-mode snapshot --budget-mode observation --binary data/go-migration/amr-core-linux --seconds 5 --rounds 1 --rates 100,300 --stream-seconds 2 --streams 2 --cpus 2 --memory-mib 512 --out "$result.json"
               node go-core/compat/summarize-capacity.mjs "$result.json" "$result.md"
             done
-          elif [ "$PROFILE" = "edge-observation-profile" ] || [ "$PROFILE" = "native-front-profile" ]; then
+          elif [ "$PROFILE" = "edge-observation-profile" ] || [ "$PROFILE" = "native-front-profile" ] || [ "$PROFILE" = "native-front-node-cost-profile" ]; then
             result="data/go-migration/capacity-profile-$PROFILE"
-            mode=--edge; if [ "$PROFILE" = "native-front-profile" ]; then mode=--native-front; fi
-            node go-core/compat/compare-capacity.mjs "$mode" --profile --feature-mode snapshot --budget-mode observation --binary data/go-migration/amr-core-linux --seconds 5 --rounds 1 --rates 100,300 --stream-seconds 2 --streams 2 --cpus 2 --memory-mib 512 --out "$result.json"
+            mode=(--edge); if [[ "$PROFILE" == native-front-* ]]; then mode=(--native-front); fi
+            if [ "$PROFILE" = "native-front-node-cost-profile" ]; then mode+=(--node-cost-observation); fi
+            node go-core/compat/compare-capacity.mjs "${mode[@]}" --profile --feature-mode snapshot --budget-mode observation --binary data/go-migration/amr-core-linux --seconds 5 --rounds 1 --rates 100,300 --stream-seconds 2 --streams 2 --cpus 2 --memory-mib 512 --out "$result.json"
             for kind in cpu block mutex; do
               go tool pprof -top -nodecount=40 data/go-migration/amr-core-linux "$result.json.profiles/$kind.pprof" > "$result-$kind.txt"
             done
