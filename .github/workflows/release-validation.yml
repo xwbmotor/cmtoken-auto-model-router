@@ -1,5 +1,8 @@
 name: Tagged release validation
 on:
+  push:
+    branches: [codex/go-core-migration]
+    paths: ['.github/workflows/release-validation.yml']
   workflow_dispatch:
     inputs:
       tag:
@@ -10,6 +13,8 @@ permissions:
   contents: read
 jobs:
   release:
+    # Register the workflow on branch pushes; packaging remains explicit and tagged.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
