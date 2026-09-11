@@ -295,7 +295,10 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 		region = trace.StartRegion(r.Context(), "gateway.audit")
 		_ = g.runtime.record(attemptEvent{RequestID: id, Revision: g.options.Bundle.Revision, Model: model, Attempt: index, Status: status, Outcome: classification.Scope, DurationMS: duration.Milliseconds(), HeaderMS: headerMS, FirstByteMS: firstByteMS, EstimatedMicros: estimate, ActualMicros: actual, At: time.Now().UTC().Format(time.RFC3339Nano)})
 		region.End()
-		if err := g.reportEdge(edge, edgeEvent{Decision: d, Analysis: native, DecisionAnalysis: in.Analysis, SemanticStatus: w.Header().Get("X-AMR-Semantic-Status"), Attempt: edgeAttempt{Index: index, Model: model, OK: complete, Status: status, FailureScope: classification.Scope, DurationMS: duration.Milliseconds(), HeaderMS: headerMS, FirstByteMS: firstByteMS, EstimatedMicros: estimate, ActualMicros: actual, Usage: usage, TTFTMS: ttftMS, FirstOutputMS: firstOutputMS, Timeout: timedOut}}); err != nil {
+		region = trace.StartRegion(r.Context(), "gateway.edgeReport")
+		edgeErr := g.reportEdge(edge, edgeEvent{Decision: d, Analysis: native, DecisionAnalysis: in.Analysis, SemanticStatus: w.Header().Get("X-AMR-Semantic-Status"), Attempt: edgeAttempt{Index: index, Model: model, OK: complete, Status: status, FailureScope: classification.Scope, DurationMS: duration.Milliseconds(), HeaderMS: headerMS, FirstByteMS: firstByteMS, EstimatedMicros: estimate, ActualMicros: actual, Usage: usage, TTFTMS: ttftMS, FirstOutputMS: firstOutputMS, Timeout: timedOut}})
+		region.End()
+		if edgeErr != nil {
 			g.runtime.edgeErrors.Add(1)
 			if outputStarted {
 				panic(http.ErrAbortHandler)

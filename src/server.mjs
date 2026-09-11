@@ -3355,7 +3355,8 @@ const server = http.createServer(async (req, res) => {
 
     res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
 
-    return res.end(body);
+    const coreMetrics = goCoreEdge ? `# TYPE amr_go_core_available gauge\namr_go_core_available ${goRuntimeSnapshot.available ? 1 : 0}\n# TYPE amr_go_edge_report_errors_total counter\namr_go_edge_report_errors_total ${goRuntimeSnapshot.edgeErrors || 0}\n` : '';
+    return res.end(body + coreMetrics);
 
   }
 
