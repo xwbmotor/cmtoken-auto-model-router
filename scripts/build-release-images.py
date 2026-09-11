@@ -87,7 +87,15 @@ def main():
     else:
         subprocess.run(['docker', 'build', '-f', 'Dockerfile.classifier', '--build-arg', 'GIT_REVISION=' + revision, '--cache-from', base['images']['classifier']['tag'], '-t', classifier, '.'], cwd=ROOT, check=True)
     proof.update(classifierReused=bool(reusable), classifierBuildSeconds=round(time.monotonic() - start, 3))
-    for tag in [router, classifier]:
+    release_tags = [router, classifier]
+    if 'image: cmt-amr-go:' in (ROOT / 'docker-compose.prod.yml').read_text(encoding='utf-8'):
+        go_image = 'cmt-amr-go:' + version
+        start = time.monotonic()
+        subprocess.run(['docker', 'build', '--build-arg', 'GIT_REVISION=' + revision,
+                        '-t', go_image, 'go-core'], cwd=ROOT, check=True)
+        proof['goBuildSeconds'] = round(time.monotonic() - start, 3)
+        release_tags.append(go_image)
+    for tag in release_tags:
         assert inspect(tag)['Config']['Labels']['org.opencontainers.image.revision'] == revision
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(proof, indent=2) + '\n', encoding='utf-8')

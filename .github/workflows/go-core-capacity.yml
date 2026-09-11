@@ -12,7 +12,7 @@ on:
       profile:
         description: Local mock workload size (never production)
         type: choice
-        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard, edge-observation-profile, edge-isolation, edge-observation-optimization, native-front-standard, native-front-profile, native-front-io-compare, native-front-node-cost, native-front-relay-compare]
+        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard, edge-observation-profile, edge-isolation, edge-observation-optimization, native-front-standard, native-front-profile, native-front-io-compare, native-front-node-cost, native-front-relay-compare, native-front-headroom]
         default: smoke
 
 permissions:
@@ -58,6 +58,12 @@ jobs:
               flags=(); if [[ "$phase" == nagle-* ]]; then flags+=(--relay-nagle); fi
               result="data/go-migration/capacity-native-front-relay-$phase"
               node go-core/compat/compare-capacity.mjs --native-front --node-cost-observation "${flags[@]}" --feature-mode snapshot --budget-mode observation --binary data/go-migration/amr-core-linux --seconds 5 --rounds 1 --rates 100,300 --stream-seconds 2 --streams 2 --cpus 2 --memory-mib 512 --out "$result.json"
+              node go-core/compat/summarize-capacity.mjs "$result.json" "$result.md"
+            done
+          elif [ "$PROFILE" = "native-front-headroom" ]; then
+            for phase in 1 2; do
+              result="data/go-migration/capacity-native-front-headroom-$phase"
+              node go-core/compat/compare-capacity.mjs --native-front --node-cost-observation --feature-mode snapshot --budget-mode observation --binary data/go-migration/amr-core-linux --seconds 5 --rounds 1 --rates 100,300,600,900 --stream-seconds 2 --streams 2 --cpus 2 --memory-mib 512 --out "$result.json"
               node go-core/compat/summarize-capacity.mjs "$result.json" "$result.md"
             done
           elif [ "$PROFILE" = "native-front-node-cost" ]; then

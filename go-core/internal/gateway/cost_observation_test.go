@@ -4,6 +4,7 @@ import (
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/auth"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -60,5 +61,18 @@ func TestNodeCostAuthorityRequiresDisabledBudgetAndCannotReuseOldLedger(t *testi
 	if m, err := NewManaged(o); err == nil {
 		m.Close()
 		t.Fatal("dormant ledger silently became cost authority")
+	}
+}
+
+func TestNodeCostObservationRefusesExistingCostsAndUnmanagedGateway(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "existing.wal")
+	if err := os.WriteFile(path, []byte("existing cost history"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checkCostAuthority(path, true); err == nil || !strings.Contains(err.Error(), "fresh Go state") {
+		t.Fatal("existing costs were accepted as an empty Node observation ledger", err)
+	}
+	if _, err := New(Options{NodeCostObservation: true}); err == nil || !strings.Contains(err.Error(), "managed runtime") {
+		t.Fatal("unmanaged runtime accepted Node cost authority", err)
 	}
 }

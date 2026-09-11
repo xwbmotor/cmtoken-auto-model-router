@@ -93,7 +93,12 @@ const classifierTagCommit = collect(() => classifierTag ? execFileSync('git', ['
 images.classifierTagCommit = classifierTagCommit; // 期望源码 commit 入报告（可复核）
 gate.classifierRevisionMatchesTag = Boolean(revRaw && classifierTagCommit && revRaw === classifierTagCommit);
 gate.classifierRevisionIsSha = revIsSha && gate.classifierRevisionMatchesTag;
-const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence && gate.composeVersionMatches && gate.evalGateCasesPresent && gate.classifierTagPresent && gate.classifierImageBuilt && gate.classifierRevisionIsSha;
+const goTag = collect(() => (/image:\s*cmt-amr-go:([^\s#]+)/.exec(composeText) || [])[1]);
+const goInspect = collect(() => goTag ? JSON.parse(execFileSync('docker', ['image', 'inspect', `cmt-amr-go:${goTag}`], { encoding: 'utf8' }))[0] : null);
+images.goImageId = goInspect?.Id || null;
+images.goLabelsRevision = goInspect?.Config?.Labels?.['org.opencontainers.image.revision'] || null;
+gate.goImageEvidence = !goTag || (goTag === pkg.version && Boolean(images.goImageId) && images.goLabelsRevision === git.commit);
+const validForRelease = gate.clean && gate.onTag && gate.tagMatchesVersion && gate.imageEvidence && gate.composeVersionMatches && gate.evalGateCasesPresent && gate.classifierTagPresent && gate.classifierImageBuilt && gate.classifierRevisionIsSha && gate.goImageEvidence;
 if (!validForRelease && !allowDirty) {
   console.error('[test:release] 发布证据链门禁未过：' + JSON.stringify({ ...gate, tag: git.tag, tagExpected, dirtyCount: git.dirty.length }));
   console.error('  正式发布流程：代码+compose 同 commit → docker build --build-arg GIT_REVISION=<HEAD> → git tag v{ver} → 干净 worktree 跑 npm run test:release。');

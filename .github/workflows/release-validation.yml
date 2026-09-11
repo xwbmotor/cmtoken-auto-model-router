@@ -1,0 +1,66 @@
+name: Tagged release validation
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable version tag to validate and package
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - name: Validate source identity
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          node -e 'const p=require("./package.json"); if(process.env.REQUESTED_TAG!==`v${p.version}` || !/^v[0-9]+\.[0-9]+\.[0-9]+$/.test(process.env.REQUESTED_TAG)) process.exit(1)'
+          test "$(git describe --tags --exact-match HEAD)" = "$REQUESTED_TAG"
+          test -z "$(git status --porcelain)"
+      - name: Prepare full regression dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/release-python"
+          "$RUNNER_TEMP/release-python/bin/python" -m pip install -r requirements-classifier.lock playwright==1.61.0
+          "$RUNNER_TEMP/release-python/bin/python" -m playwright install --with-deps chromium
+          echo "$RUNNER_TEMP/release-python/bin" >> "$GITHUB_PATH"
+          echo "CLASSIFIER_PYTHON=$RUNNER_TEMP/release-python/bin/python" >> "$GITHUB_ENV"
+      - name: Build images bound to the release commit
+        run: |
+          revision=$(git rev-parse HEAD)
+          version=$(node -p 'require("./package.json").version')
+          docker build --build-arg "GIT_REVISION=$revision" -t "cmt-auto-model-router:$version" .
+          docker build -f Dockerfile.classifier --build-arg "GIT_REVISION=$revision" -t "cmt-amr-classifier:$version" .
+          if rg -q 'image: cmt-amr-go:' docker-compose.prod.yml; then
+            docker build --build-arg "GIT_REVISION=$revision" -t "cmt-amr-go:$version" go-core
+          fi
+      - name: Run formal release checks
+        run: npm run test:release
+      - name: Package verified images
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          images=("cmt-auto-model-router:$version" "cmt-amr-classifier:$version")
+          if rg -q 'image: cmt-amr-go:' docker-compose.prod.yml; then images+=("cmt-amr-go:$version"); fi
+          mkdir -p data/release-images
+          docker save "${images[@]}" | gzip -1 > "data/release-images/images-$version.tar.gz"
+          sha256sum "data/release-images/images-$version.tar.gz" > "data/release-images/images-$version.sha256"
+          docker image inspect "${images[@]}" > data/release-images/image-inspect.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: release-validation-evidence
+          path: reports/release-*.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-images
+          compression-level: 0
+          path: data/release-images/
