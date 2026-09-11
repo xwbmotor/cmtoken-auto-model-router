@@ -23,6 +23,7 @@ const featureMode = arg('--feature-mode') ?? 'bootstrap';
 assert.ok(['bootstrap','snapshot'].includes(featureMode), 'invalid --feature-mode');
 const nodeCostObservation = process.argv.includes('--node-cost-observation');
 const relayNagle = process.argv.includes('--relay-nagle');
+const isolatedHost = process.argv.includes('--isolated-host');
 const budgetMode = arg('--budget-mode') ?? 'protection', nativeFront = process.argv.includes('--native-front'), edge = nativeFront || process.argv.includes('--edge');
 assert.ok(['protection', 'observation'].includes(budgetMode), 'invalid --budget-mode');
 assert.ok(!nodeCostObservation || (edge && budgetMode === 'observation'), 'Node cost observation requires edge and disabled budget');
@@ -144,6 +145,10 @@ try {
   config('node'); config('go');
   engine = JSON.parse(docker(['info', '--format', '{"os":{{json .OSType}},"version":{{json .ServerVersion}},"cpus":{{.NCPU}},"memoryBytes":{{.MemTotal}}}']));
   assert.equal(engine.os, 'linux', 'Linux Docker engine required');
+  if (isolatedHost) {
+    assert.ok(engine.cpus >= 4 && cpus <= 1 && memoryMiB === 256, 'isolated host requires four CPUs and bounded 1 CPU / 256 MiB service groups');
+    assert.match(readFileSync('/proc/self/status', 'utf8'), /^Cpus_allowed_list:\s*3\s*$/m, 'run the generator under taskset -c 3');
+  }
   try { docker(['image', 'inspect', image, '--format', '{{.Id}}']); } catch { docker(['pull', image]); }
   imageEvidence = JSON.parse(docker(['image', 'inspect', image, '--format', '{"id":{{json .Id}},"digests":{{json .RepoDigests}}}']));
   mkdirSync(stage, { recursive: true }); mkdirSync(resolve(stage, 'app/go-core/compat'), { recursive: true });
@@ -159,6 +164,7 @@ try {
   const mounts = ['--mount', `type=bind,source=${resolve(stage, 'app')},target=/app,readonly`, '--mount', `type=bind,source=${stage},target=/lab`, '--env-file', envFile];
   containers.push(fixture);
   docker(['run', '-d', '--name', fixture, '--label', `amr.capacity=${runKey}`, '--workdir', '/app', ...mounts,
+    ...(isolatedHost ? ['--cpuset-cpus', '3', '--cpus', '1', '--cpu-shares', '64', '--memory', '192m', '--memory-swap', '192m', '--pids-limit', '128'] : []),
     ...[8785, 8792, 8784, 8790, 8799].flatMap(port => ['-p', `127.0.0.1::${port}`]), imageEvidence.id, 'node', 'go-core/compat/capacity-fixture.mjs']);
   const portMap = JSON.parse(docker(['inspect', fixture, '--format', '{{json .NetworkSettings.Ports}}']));
   hostPorts = Object.fromEntries(Object.entries({ node: 8785, go: 8792, admin: 8784, direct: 8790, control: 8799 }).map(([name, port]) => [name, Number(portMap[`${port}/tcp`][0].HostPort)]));
@@ -166,9 +172,10 @@ try {
   for (const role of ['node', 'go']) {
     const name = `${runKey}-${role}`;
     containers.push(name);
-    docker(['run', '-d', '--name', name, '--label', `amr.capacity=${runKey}`, '--workdir', '/app', '--network', `container:${fixture}`, '--cpus', String(cpus), '--memory', `${memoryMiB}m`, '--memory-swap', `${memoryMiB}m`, '--pids-limit', '128', ...mounts, '-e', `M4_ROLE=${role}`, imageEvidence.id, 'node', 'go-core/compat/capacity-group.mjs']);
-    quotas[role] = JSON.parse(docker(['inspect', name, '--format', '{"nanoCpus":{{.HostConfig.NanoCpus}},"memory":{{.HostConfig.Memory}},"memorySwap":{{.HostConfig.MemorySwap}},"pidsLimit":{{.HostConfig.PidsLimit}}}']));
+    docker(['run', '-d', '--name', name, '--label', `amr.capacity=${runKey}`, '--workdir', '/app', '--network', `container:${fixture}`, '--cpus', String(cpus), '--memory', `${memoryMiB}m`, '--memory-swap', `${memoryMiB}m`, '--pids-limit', '128', ...(isolatedHost ? ['--cpuset-cpus', '2', '--cpu-shares', '64'] : []), ...mounts, '-e', `M4_ROLE=${role}`, imageEvidence.id, 'node', 'go-core/compat/capacity-group.mjs']);
+    quotas[role] = JSON.parse(docker(['inspect', name, '--format', '{"nanoCpus":{{.HostConfig.NanoCpus}},"memory":{{.HostConfig.Memory}},"memorySwap":{{.HostConfig.MemorySwap}},"pidsLimit":{{.HostConfig.PidsLimit}},"cpuset":{{json .HostConfig.CpusetCpus}},"cpuShares":{{.HostConfig.CpuShares}}}']));
     assert.equal(quotas[role].nanoCpus, cpus * 1e9); assert.equal(quotas[role].memory, memoryMiB * 1048576); assert.equal(quotas[role].memorySwap, quotas[role].memory);
+    if (isolatedHost) { assert.equal(quotas[role].cpuset, '2'); assert.equal(quotas[role].cpuShares, 64); }
   }
   for (const role of ['node', 'go']) {
     let healthy = false;
@@ -253,7 +260,7 @@ finally {
     return { name, log };
   }) : undefined;
   const report = { schemaVersion: 1, experiment: 'm4-cgroup-open-loop', at: new Date().toISOString(), runKey, productionReady: false, formalAcceptance: 'not evaluated: production workload and SLO not supplied',
-    failure, diagnostics, profiling, goRuntime, decisionEvidence, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB, goProcs, featureMode, budgetMode, edge, nativeFront, nodeCostObservation, relayNagle, decisionLog: true, judge: false, semantic: false, rateLimit: false }, engine, image: imageEvidence, quotas,
+    failure, diagnostics, profiling, goRuntime, decisionEvidence, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB, goProcs, featureMode, budgetMode, edge, nativeFront, nodeCostObservation, relayNagle, isolatedHost, decisionLog: true, judge: false, semantic: false, rateLimit: false }, engine, image: imageEvidence, quotas,
     groups: { node: ['Node gateway + resource endpoint'], go: ['Go runtime', ...(featureMode === 'snapshot' ? [] : ['Node adapter']), nativeFront ? 'Go public front + real Node events, administration + resource endpoint' : edge ? 'real Node HTTP edge, events, administration + resource endpoint' : 'real Node administration + resource endpoint'], outsideQuota: ['common TCP ingress', 'mock upstream', 'load generator'] },
     corpus: { model, shapes, synthetic: true, semanticReview: false, inputMix: 'equal round-robin', mockDelayMs: 10 },
     binarySha256: sha(readFileSync(binary)), nodeSourceSha256: sourceHash, budgetSourceSha256: sha(readFileSync(resolve(root, 'src/budget.mjs'))), preflight, runs, requests,

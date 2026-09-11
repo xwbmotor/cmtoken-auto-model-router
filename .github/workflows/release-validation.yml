@@ -51,8 +51,11 @@ jobs:
           images=("cmt-auto-model-router:$version" "cmt-amr-classifier:$version")
           if rg -q 'image: cmt-amr-go:' docker-compose.prod.yml; then images+=("cmt-amr-go:$version"); fi
           mkdir -p data/release-images
-          docker save "${images[@]}" | gzip -1 > "data/release-images/images-$version.tar.gz"
-          sha256sum "data/release-images/images-$version.tar.gz" > "data/release-images/images-$version.sha256"
+          for image in "${images[@]}"; do
+            archive="data/release-images/${image/:/-}.tar.gz"
+            docker save "$image" | gzip -1 > "$archive"
+            sha256sum "$archive" > "$archive.sha256"
+          done
           docker image inspect "${images[@]}" > data/release-images/image-inspect.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
