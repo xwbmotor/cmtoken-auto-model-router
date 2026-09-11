@@ -9,6 +9,7 @@ import { readFile, mkdtemp, writeFile, readdir, rm, stat } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import net from 'node:net';
 import http from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -125,6 +126,17 @@ async function waitRows(workDir, pred, maxMs = 6000) {
   return readDecisions(workDir);
 }
 
+async function cleanupCase({ child, upstream, workDir }) {
+  // SIGTERM starts asynchronous draining; wait until the log writer has exited.
+  if (child.exitCode === null && child.signalCode === null) {
+    const closed = once(child, 'close');
+    child.kill();
+    await closed;
+  }
+  await new Promise((resolve) => upstream.close(resolve));
+  await rm(workDir, { recursive: true, force: true });
+}
+
 test('e2e 数据留存全开：请求原文全量 + 非流式/流式回答原文入决策日志', async () => {
   const { workDir, upstream, child, port } = await setupCase({ decisionOver: { redactMessages: false, logAnswerText: true } });
   try {
@@ -155,7 +167,7 @@ test('e2e 数据留存全开：请求原文全量 + 非流式/流式回答原文
     // ⑤ 密钥永不落盘
     const raw = JSON.stringify(rows);
     assert.ok(!raw.includes('test-key'), '上游 key 不得出现在决策日志');
-  } finally { child.kill(); upstream.close(); await rm(workDir, { recursive: true, force: true }); }
+  } finally { await cleanupCase({ child, upstream, workDir }); }
 });
 
 test('e2e 留存开关独立：redactMessages=true + logAnswerText=true → 请求仍脱敏，回答照落', async () => {
@@ -169,7 +181,7 @@ test('e2e 留存开关独立：redactMessages=true + logAnswerText=true → 请�
     assert.equal(typeof msg.content, 'undefined', 'redactMessages=true 时无 content 字段（head 截断）');
     assert.ok(msg.head && msg.head.length <= 160, 'head 截断 160');
     assert.equal(row.outcome.answerText, '这是非流式业务回答', 'logAnswerText 独立生效——回答照落');
-  } finally { child.kill(); upstream.close(); await rm(workDir, { recursive: true, force: true }); }
+  } finally { await cleanupCase({ child, upstream, workDir }); }
 });
 
 test('e2e 留存关闭（默认）：无 answerText 字段、请求脱敏', async () => {
@@ -182,5 +194,5 @@ test('e2e 留存关闭（默认）：无 answerText 字段、请求脱敏', asyn
     assert.equal(row.outcome.answerText, undefined, 'logAnswerText=false 时无 answerText');
     const msg = row.request.redactedBody.messages[0];
     assert.equal(typeof msg.content, 'undefined', '默认请求脱敏');
-  } finally { child.kill(); upstream.close(); await rm(workDir, { recursive: true, force: true }); }
+  } finally { await cleanupCase({ child, upstream, workDir }); }
 });
