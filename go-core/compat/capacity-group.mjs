@@ -9,15 +9,27 @@ const role = process.env.M4_ROLE;
 if (!['node', 'go'].includes(role) || !process.env.M4_CONTROL_TOKEN) throw new Error('isolated fixture required');
 const dir = `/lab/${role}`, children = [];
 let profiledCore;
+let nodeProfiler;
+if (process.env.M4_PROFILE === '1') {
+  const { Session } = await import('node:inspector/promises');
+  nodeProfiler = new Session(); nodeProfiler.connect();
+  await nodeProfiler.post('Profiler.enable'); await nodeProfiler.post('Profiler.start');
+}
 const metricsPort = role === 'node' ? 18786 : 18791;
 const counters = path => Object.fromEntries(readFileSync(path, 'utf8').trim().split('\n').map(line => { const [key, value] = line.split(/\s+/); return [key, Number(value)]; }));
 const authorized = req => {
   const got = Buffer.from(req.headers.authorization || ''), expected = Buffer.from(`Bearer ${process.env.M4_CONTROL_TOKEN}`);
   return got.length === expected.length && timingSafeEqual(got, expected);
 };
-createServer((req, res) => {
-    if (req.method !== 'GET' || !['/resources', '/decisions'].includes(req.url) || !authorized(req)) { res.writeHead(403); return res.end(); }
+createServer(async (req, res) => {
+    if (req.method !== 'GET' || !['/resources', '/decisions', '/profile-stop'].includes(req.url) || !authorized(req)) { res.writeHead(403); return res.end(); }
   try {
+    if (req.url === '/profile-stop') {
+      if (!nodeProfiler) { res.writeHead(409); return res.end(); }
+      const { profile } = await nodeProfiler.post('Profiler.stop'); nodeProfiler.disconnect(); nodeProfiler = null;
+      writeFileSync(`${dir}/node.cpuprofile`, JSON.stringify(profile));
+      return res.end('{"stopped":true}');
+    }
     if (req.url === '/decisions') {
       const path = `${dir}/decisions`;
       const requestIds = (existsSync(path) ? readdirSync(path) : []).filter(name => name.startsWith('decisions-') && name.endsWith('.jsonl'))

@@ -220,6 +220,10 @@ try {
     }
   }
   if (profiling) {
+    for (const role of ['node', 'go']) {
+      assert.equal((await control(`/profile-stop/${role}`)).stopped, true);
+      cpSync(resolve(stage, `${role}/node.cpuprofile`), `${out}.${role}-node.cpuprofile`);
+    }
     const pid = Number(readFileSync(resolve(stage, 'go/core.pid'), 'utf8'));
     assert.ok(Number.isInteger(pid) && pid > 1);
     // The Go process creates private files as container root. Transfer ownership

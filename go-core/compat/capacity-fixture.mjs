@@ -20,6 +20,7 @@ createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/state') return res.end(JSON.stringify({ calls, duplicates, fixtureErrors, active }));
     if (req.method === 'GET' && ['/resources/node', '/resources/go'].includes(req.url)) return res.end(JSON.stringify(await resources(req.url.split('/').at(-1))));
     if (req.method === 'GET' && ['/decisions/node', '/decisions/go'].includes(req.url)) return res.end(JSON.stringify(await resources(req.url.split('/').at(-1), '/decisions')));
+    if (req.method === 'GET' && ['/profile-stop/node', '/profile-stop/go'].includes(req.url)) return res.end(JSON.stringify(await resources(req.url.split('/').at(-1), '/profile-stop')));
     res.writeHead(404); res.end();
   } catch { res.writeHead(503); res.end('{"error":"fixture_unavailable"}'); }
 }).listen(8799, '0.0.0.0');
