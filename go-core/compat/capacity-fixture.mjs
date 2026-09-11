@@ -55,7 +55,7 @@ createServer(async (req, res) => {
 }).listen(8790, '0.0.0.0');
 // Go deliberately remains bound to literal loopback. Both measured gateways use
 // identical byte relays in the shared fixture namespace, not privileged networking.
-for (const [front, back] of [[8785, 8786], [8792, process.env.M4_EDGE === '1' ? 8787 : 8791], [8784, 8787]]) {
+for (const [front, back] of [[8785, 8786], [8792, process.env.M4_NATIVE_FRONT === '1' ? 8793 : process.env.M4_EDGE === '1' ? 8787 : 8791], [8784, 8787]]) {
   tcpServer(client => {
     const target = connect(back, '127.0.0.1'); client.pipe(target); target.pipe(client);
     client.on('error', () => target.destroy()); target.on('error', () => client.destroy());

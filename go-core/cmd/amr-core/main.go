@@ -98,10 +98,24 @@ func main() {
 	largeCalls := flags.Int64("semantic-max-large-calls", 500, "process-local maximum large classifier attempts")
 	largeTokens := flags.Float64("semantic-max-large-tokens", 1000000, "process-local large classifier token allowance")
 	listen := flags.String("listen", "127.0.0.1:8791", "loopback listen address")
+	publicListen := flags.String("public-listen", "", "optional native completion front listen address")
+	nodeOrigin := flags.String("node-origin", "", "fixed loopback Node management origin for native front")
 	assessor := flags.String("assessor", "http://127.0.0.1:8789/assess", "private laboratory feature adapter")
 	upstream := flags.String("upstream", "http://127.0.0.1:8790/v1/chat/completions", "local mock upstream")
 	timeout := flags.Duration("timeout", 30*time.Second, "laboratory request total deadline")
 	_ = flags.Parse(os.Args[1:])
+	if *publicListen != "" && (!*runtimeMode || *runtimeConfig == "" || os.Getenv("AMR_GO_EDGE_URL") == "" || len(os.Getenv("AMR_GO_SEMANTIC_BUCKET_SECRET")) < 32) {
+		fmt.Fprintln(os.Stderr, "native front requires managed snapshot, edge and stable semantic secret")
+		os.Exit(2)
+	}
+	if *publicListen != "" {
+		h, _, e := net.SplitHostPort(*publicListen)
+		ip := net.ParseIP(h)
+		if e != nil || ip == nil || (!*candidate && !ip.IsLoopback()) {
+			fmt.Fprintln(os.Stderr, "public listen requires literal IP; non-loopback requires candidate mode")
+			os.Exit(2)
+		}
+	}
 	if *runtimeConfig != "" && !*runtimeMode {
 		fmt.Fprintln(os.Stderr, "--runtime-config requires --runtime")
 		os.Exit(2)
@@ -163,6 +177,26 @@ func main() {
 		os.Exit(1)
 	}
 	server := &http.Server{Handler: g, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16384}
+	var publicServer *http.Server
+	if *publicListen != "" {
+		front, e := gateway.NewNativeFront(g, *nodeOrigin, options.EdgeToken)
+		if e != nil {
+			fmt.Fprintln(os.Stderr, e)
+			os.Exit(2)
+		}
+		defer front.Close()
+		publicListener, e := net.Listen("tcp", *publicListen)
+		if e != nil {
+			fmt.Fprintln(os.Stderr, "unable to bind native front")
+			os.Exit(2)
+		}
+		publicServer = &http.Server{Handler: front, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 300 * time.Second, MaxHeaderBytes: 16384}
+		go func() {
+			if e := publicServer.Serve(publicListener); e != nil && !errors.Is(e, http.ErrServerClosed) {
+				_ = server.Close()
+			}
+		}()
+	}
 	drained := make(chan struct{})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -171,6 +205,11 @@ func main() {
 		defer close(drained)
 		drain, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		if publicServer != nil {
+			if publicServer.Shutdown(drain) != nil {
+				_ = publicServer.Close()
+			}
+		}
 		if server.Shutdown(drain) != nil {
 			_ = server.Close()
 		}

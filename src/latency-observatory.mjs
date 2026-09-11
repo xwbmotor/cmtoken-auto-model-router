@@ -11,7 +11,7 @@ const dimensions = ['model', 'scope', 'inference', 'source', 'stream', 'reasonin
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 24);
 const band = (n, low, high) => Number(n) <= low ? 'short' : Number(n) <= high ? 'medium' : 'long';
 
-export function latencyContext({ model, payload, analysis = {}, baseUrl, authorization, source = 'business' }) {
+export function latencyContext({ model, payload, analysis = {}, baseUrl, authorization, scope, source = 'business' }) {
   const controls = {
     reasoning_effort: payload.reasoning_effort ?? null,
     thinking: payload.thinking ?? null,
@@ -23,7 +23,7 @@ export function latencyContext({ model, payload, analysis = {}, baseUrl, authori
   const enabled = payload.chat_template_kwargs?.enable_thinking === true || payload.thinking?.type === 'enabled' || ['low', 'medium', 'high'].includes(payload.reasoning_effort);
   return {
     model: model.id, source, stream: payload.stream === true,
-    scope: hash([baseUrl, authorization || '', model.id]),
+    scope: scope ?? hash([baseUrl, authorization || '', model.id]),
     inference: hash([controls, model.reasoningControl || null, analysis.task || null, toolRequest, payload.response_format || null, payload.temperature ?? null, payload.top_p ?? null]),
     toolRequest,
     reasoning: disabled ? 'off' : enabled ? 'on' : 'unknown',

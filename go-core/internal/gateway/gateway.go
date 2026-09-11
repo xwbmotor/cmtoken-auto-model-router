@@ -401,6 +401,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		data, _ = json.Marshal(body)
 		ctx = context.WithValue(ctx, edgeContextKey{}, edge)
 		r = r.WithContext(context.WithValue(r.Context(), edgeContextKey{}, edge))
+		if writer, ok := w.(*nativeWriter); ok {
+			w.Header().Set("X-Request-ID", edge.RequestID)
+			defer g.finishNative(writer, r, edge)
+		}
 	}
 	var requested string
 	if raw := body["model"]; len(raw) > 0 && json.Unmarshal(raw, &requested) != nil {

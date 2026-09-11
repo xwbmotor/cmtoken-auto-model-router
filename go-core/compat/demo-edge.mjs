@@ -13,6 +13,7 @@ const arg = name => { const i = process.argv.indexOf(name); return i < 0 ? undef
 assert.ok(arg('--binary'), '--binary required');
 const binary = resolve(arg('--binary'));
 const semantic = arg('--semantic') || 'disabled';
+const nativeFront = process.argv.includes('--native-front');
 assert.ok(['disabled', 'shadow', 'active'].includes(semantic), '--semantic must be shadow or active');
 const dir = await mkdtemp(join(root, 'data/go-migration/edge-'));
 const secret = () => randomBytes(24).toString('hex');
@@ -99,23 +100,23 @@ try {
   await writeFile(configFile, JSON.stringify(config));
   await writeFile(authFile, JSON.stringify({ mode: 'strict', accessToken: access, upstreamToken: provider, adminToken: admin }));
   execFileSync(process.execPath, ['go-core/compat/export-runtime.mjs', '--config', configFile, '--out', snapshot], { cwd: root, windowsHide: true, stdio: 'pipe' });
-  const nodePort = await freePort(), goPort = await freePort();
-  const base = `http://127.0.0.1:${nodePort}`, goBase = `http://127.0.0.1:${goPort}`;
-  const go = start(binary, ['--lab', '--runtime', '--runtime-config', snapshot, '--auth-config', authFile, '--ledger', join(dir, 'go.wal'), '--listen', `127.0.0.1:${goPort}`, '--upstream', upstream + '/chat/completions',
+  const nodePort = await freePort(), goPort = await freePort(), publicPort = await freePort();
+  const nodeBase = `http://127.0.0.1:${nodePort}`, base = nativeFront ? `http://127.0.0.1:${publicPort}` : nodeBase, goBase = `http://127.0.0.1:${goPort}`;
+  const go = start(binary, ['--lab', ...(nativeFront ? ['--public-listen', `127.0.0.1:${publicPort}`, '--node-origin', nodeBase] : []), '--runtime', '--runtime-config', snapshot, '--auth-config', authFile, '--ledger', join(dir, 'go.wal'), '--listen', `127.0.0.1:${goPort}`, '--upstream', upstream + '/chat/completions',
     ...(semantic === 'disabled' ? [] : ['--native-semantics', '--semantic-small', config.semanticRouter.httpJson.url])], {
-    AMR_GO_EDGE_URL: base + '/internal/v1/go-events', AMR_GO_EDGE_TOKEN: edgeToken,
-    ...(semantic === 'disabled' ? {} : { AMR_GO_SEMANTIC_BUCKET_SECRET: semanticSecret })
+    AMR_GO_EDGE_URL: nodeBase + '/internal/v1/go-events', AMR_GO_EDGE_TOKEN: edgeToken,
+    AMR_GO_SEMANTIC_BUCKET_SECRET: semanticSecret
   });
   await healthy(goBase, go);
   const node = start(process.execPath, ['src/server.mjs'], { HOST: '127.0.0.1', PORT: String(nodePort), CONFIG_PATH: configFile,
-    AMR_GO_CHAT_URL: goBase + '/v1/chat/completions', AMR_GO_EDGE_TOKEN: edgeToken, AMR_GO_ADMIN_URL: goBase,
+    AMR_GO_NATIVE_FRONT: nativeFront ? '1' : '0', AMR_GO_CHAT_URL: goBase + '/v1/chat/completions', AMR_GO_EDGE_TOKEN: edgeToken, AMR_GO_ADMIN_URL: goBase,
     AMR_GO_ADMIN_TOKEN: admin, AMR_GO_RUNTIME_CONFIG: snapshot, ROUTER_KEY_MODE: 'strict', ROUTER_ACCESS_KEY: access,
     UPSTREAM_BASE_URL: upstream, MAAS_BASE_URL: upstream, UPSTREAM_API_KEY: provider, MAAS_API_KEY: provider,
     ...(semantic === 'disabled' ? {} : { SEMANTIC_BUCKET_SECRET: semanticSecret }),
     ADMIN_TOKEN: admin, METRICS_TOKEN: admin, AMR_COUNTERS_PATH: join(dir, 'counters.json'), JUDGE_SECRET_PATH: join(dir, 'judge-secret.json') });
   await healthy(base, node);
   const headers = { authorization: `Bearer ${access}`, 'content-type': 'application/json' };
-  const post = (extra = {}, id = secret()) => fetch(base + '/v1/chat/completions?compatible=1', { method: 'POST', headers: { ...headers, 'x-request-id': id },
+  const post = (extra = {}, id = secret()) => fetch(base + (nativeFront ? '/v1/chat/completions' : '/v1/chat/completions?compatible=1'), { method: 'POST', headers: { ...headers, 'x-request-id': id },
     body: JSON.stringify({ messages: [{ role: 'user', content: semantic === 'disabled' ? 'hello' : 'hello there, good morning' }], max_tokens: 128, ...extra }) });
   const requests = [];
   for (const stream of [false, true]) {
@@ -178,7 +179,7 @@ try {
     }
     assert.ok(classifierCalls >= successful.length);
   }
-  const noAuth = await fetch(base + '/internal/v1/go-events', { method: 'POST', body: '{}' }); assert.equal(noAuth.status, 403);
+  const noAuth = await fetch(base + '/internal/v1/go-events', { method: 'POST', body: '{}' }); assert.equal(noAuth.status, nativeFront ? 404 : 403);
   const cors = await fetch(base + '/v1/chat/completions', { method: 'OPTIONS', headers: { origin: 'https://outside.example' } }); assert.equal(cors.status, 204);
   const result = { experiment: 'real-node-go-edge', passed: true, requests: requests.length + 1,
     semantic, classifierCalls, semanticReviewRecords: semanticRows.length,

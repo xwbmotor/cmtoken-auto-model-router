@@ -25,6 +25,7 @@ type edgeContext struct {
 	ConfigRevision  string                        `json:"configRevision"`
 	MarketSignals   map[string]map[string]float64 `json:"marketSignals"`
 	adoptedAnalysis *analysis.Result
+	native          *nativeRequest
 }
 
 type edgeContextKey struct{}
@@ -32,6 +33,9 @@ type edgeContextKey struct{}
 func (g *Gateway) readEdge(r *http.Request, body map[string]json.RawMessage) (*edgeContext, error) {
 	if g.options.EdgeURL == "" {
 		return nil, nil
+	}
+	if front, ok := r.Context().Value(nativeFrontKey{}).(*NativeFront); ok {
+		return g.readNativeEdge(front, r, body)
 	}
 	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-AMR-Edge-Token")), []byte(g.options.EdgeToken)) != 1 {
 		return nil, errors.New("trusted_edge_required")
@@ -102,6 +106,10 @@ func (g *Gateway) reportEdge(edge *edgeContext, event edgeEvent) error {
 	}
 	event.ID = edge.ID
 	event.ConfigRevision = edge.ConfigRevision
+	if edge.native != nil {
+		edge.native.Events = append(edge.native.Events, event)
+		return nil
+	}
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return errors.New("edge_event_invalid")
@@ -113,7 +121,11 @@ func (g *Gateway) reportEdgeReview(edge *edgeContext, review Review) error {
 	if edge == nil {
 		return nil
 	}
-	payload, err := json.Marshal(map[string]any{"kind": "semantic", "id": edge.ID, "configRevision": edge.ConfigRevision, "review": review})
+	value := map[string]any{"kind": "semantic", "id": edge.ID, "configRevision": edge.ConfigRevision, "review": review}
+	if edge.native != nil {
+		value["nativeMetadata"] = edge.native.Metadata
+	}
+	payload, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}

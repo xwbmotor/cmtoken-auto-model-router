@@ -69,7 +69,8 @@ const host = process.env.HOST || '127.0.0.1';
 
 const port = Number(process.env.PORT || 8787);
 const goCoreAdmin = createGoCoreAdmin();
-const goCoreEdge = createGoCoreEdge();
+const nativePolicies = new Map();
+const goCoreEdge = createGoCoreEdge(process.env, { context: nativeGoContext, prepare: prepareNativeGoEvent });
 if (goCoreEdge && (!goCoreAdmin || !process.env.AMR_GO_RUNTIME_CONFIG)) throw new Error('Go chat edge requires automatic snapshot publication');
 const goConfigPublication = goCoreEdge ? createGoConfigPublication(goCoreAdmin, next => { assertSemanticBucketSecretForMode(next.semanticRouter?.mode); assertJudgeGuardStatePathStable(next.judge); }) : null;
 async function saveConfig(next, options) {
@@ -201,7 +202,7 @@ const judgeRuntime = {
 
 // ③taskCheck 只核路由大类（explicit 请求跳过）④空 verdict 不计成功 ⑤redactPatterns 脱敏
 
-function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, sessionIdRaw, semanticAssessment }) {
+function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, sessionIdRaw, sessionFingerprint, semanticAssessment }) {
 
   try {
 
@@ -284,7 +285,7 @@ function maybeJudgeRequest({ requestId, outcome, decision, body, answerText, ses
 
         answeredModel: outcome.model, task: decision?.analysis?.task, subTask: decision?.analysis?.subTask ?? null, tier: decision?.analysis?.tier,
 
-        sessionFingerprint: sessionFingerprintOf(sessionIdRaw),
+        sessionFingerprint: sessionFingerprint ?? sessionFingerprintOf(sessionIdRaw),
 
         quality, usage: q.usage, latencyMs: q.latencyMs,
 
@@ -1449,7 +1450,8 @@ function latencyContextFor(model, body, analysis, reasoningLevel, clientAuthHead
   const payload = upstreamRequestBody(controls, model.id, reasoningLevel);
   const key = (process.env.ROUTER_KEY_MODE === 'passthrough' ? clientAuthHeader : null) || process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY || '';
   return latencyContext({ model, payload, analysis, source,
-    authorization: key.replace(/^Bearer\s+/i, '').trim(),
+    authorization: typeof key === 'string' ? key.replace(/^Bearer\s+/i, '').trim() : '',
+    scope: clientAuthHeader?.latencyScopes?.[model.id],
     baseUrl: (process.env.UPSTREAM_BASE_URL || process.env.MAAS_BASE_URL || config.upstreamBaseUrl || '').replace(/\/$/, '') });
 }
 
@@ -2445,7 +2447,7 @@ function commitRequestOutcome({ req, body, decision, outcome, answerText, policy
     suggested: decision.suggestedModel, task: decision.analysis.task, complexity: decision.analysis.complexity,
     routeMethod: decision.analysis.routeMethod, reasoningLevel: decision.reasoningLevel,
     reasoningApplied: Boolean(policy.models.find(m => m.id === outcome.model)?.reasoningControl?.verified) && decision.reasoningLevel !== 'off',
-    keyFingerprint: keyFingerprint(req.headers.authorization), ...outcome });
+    keyFingerprint: req.goMetadata?.keyFingerprint ?? keyFingerprint(req.headers.authorization), ...outcome });
   scheduleCountersWrite();
   if (outcome.ok && req.routingSessionKey) sessions.set(req.routingSessionKey, {
     model: outcome.model, expiresAt: Date.now() + policy.routing.sessionStickinessTtlMs,
@@ -2453,9 +2455,9 @@ function commitRequestOutcome({ req, body, decision, outcome, answerText, policy
   });
   const retainedOutcome = decisionLog.options?.logAnswerText && answerText
     ? { ...outcome, answerText: String(answerText).slice(0, 262144) } : outcome;
-  decisionLog.write({ sessionFingerprint: sessionFingerprintOf(req.headers['x-session-id']), requestId: req.requestId,
-    keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, retainedOutcome);
-  maybeJudgeRequest({ requestId: req.requestId, outcome, decision, body, answerText, sessionIdRaw: req.headers['x-session-id'] });
+  decisionLog.write({ sessionFingerprint: req.goMetadata?.sessionFingerprint ?? sessionFingerprintOf(req.headers['x-session-id']), requestId: req.requestId,
+    keyFingerprint: req.goMetadata?.keyFingerprint ?? keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, retainedOutcome);
+  maybeJudgeRequest({ requestId: req.requestId, outcome, decision, body, answerText, sessionIdRaw: req.headers['x-session-id'], sessionFingerprint: req.goMetadata?.sessionFingerprint });
 }
 
 async function consumeGoSemantic(event, metadata) {
@@ -2496,14 +2498,62 @@ async function consumeGoSemantic(event, metadata) {
   recordSemanticReview(review); semanticLog.writeRaw(review); scheduleCountersWrite();
 }
 
+function nativeGoContext() {
+  if (goConfigPublication.blocked() || shutdownManager.draining) return null;
+  const revision = getConfigRevision(config);
+  nativePolicies.set(revision, config);
+  if (nativePolicies.size > 64) nativePolicies.delete(nativePolicies.keys().next().value);
+  return { configRevision: revision, marketSignals: Object.fromEntries(['default', 'coding', 'reasoning', 'creative', 'extraction'].map(task =>
+    [task, Object.fromEntries(config.models.map(m => [m.id, marketSignal.adjustFor(task, m.id)]))])) };
+}
+
+function prepareNativeGoEvent(event, validateEvent) {
+  const policy = nativePolicies.get(event.configRevision);
+  const metadata = event.nativeMetadata || event.request?.metadata;
+  if (!policy || !metadata || typeof metadata.requestId !== 'string' || !metadata.requestId || metadata.requestId.length > 256 ||
+      !/^[a-f0-9]{8}$/.test(metadata.keyFingerprint) ||
+      (metadata.sessionFingerprint !== '' && !/^sidfp:[a-f0-9]{16}$/.test(metadata.sessionFingerprint)) ||
+      !metadata.latencyScopes || Object.values(metadata.latencyScopes).some(v => !/^[a-f0-9]{24}$/.test(v))) throw new Error('invalid_native_metadata');
+  if (event.kind === 'semantic') {
+    const r = event.review;
+    if (!r || !['error', 'shadow_complete', 'applied', 'rejected_low_confidence', 'shadow_capacity_exhausted'].includes(r.status) ||
+        !Number.isFinite(r.confidence) || r.confidence < 0 || r.confidence > 1 ||
+        !(r.overheadMicros === null || Number.isSafeInteger(r.overheadMicros) && r.overheadMicros >= 0)) throw new Error('invalid_native_semantic');
+    return () => consumeGoSemantic(event, metadata);
+  }
+  const { body, events } = event.request, result = event.result;
+  if (!body || typeof body !== 'object' || !Array.isArray(body.messages) || !Array.isArray(events) || events.length > 16 ||
+      !result || !Number.isSafeInteger(result.startedAt) || typeof result.ok !== 'boolean' ||
+      typeof result.stream !== 'boolean' || !result.timing || typeof result.answerText !== 'string' || result.answerText.length > 65536 ||
+      !Number.isInteger(result.status) || result.status < 100 || result.status > 599) throw new Error('invalid_native_completion');
+  const models = new Set(policy.models.map(m => m.id));
+  const indexes = new Set();
+  for (const e of events) {
+    validateEvent(e, { revision: event.configRevision, models });
+    if (e.id !== event.id || indexes.has(e.attempt.index) || !metadata.latencyScopes[e.attempt.model]) throw new Error('invalid_native_attempt');
+    indexes.add(e.attempt.index);
+  }
+  events.sort((a, b) => a.attempt.index - b.attempt.index);
+  return async () => {
+    counters.total += 1;
+    const req = { requestId: metadata.requestId, goMetadata: metadata, headers: {} };
+    const options = goCompletionOptions(req, body, isAutoRequest(body, policy), policy);
+    for (const e of events) await options.onAttempt(e);
+    await options.onComplete({ ...result, events, last: events.at(-1) });
+  };
+}
+
 async function proxyGoCompletion(req, res, body, auto) {
   if (goConfigPublication.blocked()) return errorJson(res, 503, '配置发布尚未完成，请稍后重试', 'core_publication_pending');
-  const policy = config;
+  return goCoreEdge.proxy(req, res, body, goCompletionOptions(req, body, auto));
+}
+
+function goCompletionOptions(req, body, auto, policy = config) {
   const observationHealth = structuredClone(health);
   counters[auto ? 'auto' : 'explicit'] += 1;
-  return goCoreEdge.proxy(req, res, body, {
+  return {
     configRevision: getConfigRevision(policy), models: policy.models.map(m => m.id), timeoutMs: policy.routing.requestTimeoutMs,
-    onSemantic: consumeGoSemantic, semanticMetadata: { requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization) },
+    onSemantic: consumeGoSemantic, semanticMetadata: { requestId: req.requestId, keyFingerprint: req.goMetadata?.keyFingerprint ?? keyFingerprint(req.headers.authorization) },
     marketSignals: Object.fromEntries(['default', 'coding', 'reasoning', 'creative', 'extraction'].map(task =>
       [task, Object.fromEntries(policy.models.map(m => [m.id, marketSignal.adjustFor(task, m.id)]))])),
     onAttempt: async event => {
@@ -2532,7 +2582,7 @@ async function proxyGoCompletion(req, res, body, auto) {
       if (result.last) {
         const decision = goDecision(result.last, policy);
         attachGoLatencyObservation(decision, policy, { health: observationHealth,
-          ...latencyRuntime(body, req.headers.authorization), budgetPressure: 0 });
+          ...latencyRuntime(body, (req.goMetadata || req.headers.authorization)), budgetPressure: 0 });
         if (auto) latencyStore.noteShadow(decision.latencyShadow, decision.candidates);
         counters.suggested[decision.suggestedModel] = (counters.suggested[decision.suggestedModel] || 0) + 1;
         counters.task[decision.analysis.task] = (counters.task[decision.analysis.task] || 0) + 1;
@@ -2545,7 +2595,7 @@ async function proxyGoCompletion(req, res, body, auto) {
         }
         for (const event of result.events) {
           const a = goAttempt(event), m = policy.models.find(m => m.id === a.model);
-          const context = latencyContextFor(m, body, decision.analysis, decision.reasoningLevel, req.headers.authorization);
+          const context = latencyContextFor(m, body, decision.analysis, decision.reasoningLevel, (req.goMetadata || req.headers.authorization));
           const row = { ...context, at: Date.now(), ok: a.ok && (!event.attempt.ok || outcome.ok), failureScope: a.failureScope,
             timeout: a.timeout, ttftMs: a.model === outcome.model ? outcome.ttftMs : null,
             firstOutputMs: a.model === outcome.model ? outcome.firstOutputMs : null,
@@ -2557,7 +2607,7 @@ async function proxyGoCompletion(req, res, body, auto) {
       }
       scheduleCountersWrite();
     }
-  });
+  };
 }
 
 async function proxyCompletion(req, res) {
@@ -3308,7 +3358,7 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
-  if (url.pathname === '/internal/v1/go-events') {
+  if (url.pathname === '/internal/v1/go-events' || url.pathname === '/internal/v1/go-context') {
     if (!goCoreEdge) return errorJson(res, 404, '未启用 Go 请求链路', 'not_found');
     return goCoreEdge.accept(req, res);
   }

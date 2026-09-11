@@ -24,7 +24,7 @@ function validateEvent(event, slot) {
 // Public auth/CORS/body validation stay in server.mjs. This opt-in bridge has no
 // fallback to the Node router: once Go has sent upstream bytes, retrying the whole
 // request could duplicate both a model invocation and its charge.
-export function createGoCoreEdge(env = process.env) {
+export function createGoCoreEdge(env = process.env, native = {}) {
   if (!env.AMR_GO_CHAT_URL) return null;
   const endpoint = new URL(env.AMR_GO_CHAT_URL);
   if (endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' || !endpoint.port ||
@@ -36,11 +36,16 @@ export function createGoCoreEdge(env = process.env) {
   const agent = new Agent({ keepAlive: true, maxSockets: 256, maxFreeSockets: 32 });
   const pending = new Map();
   const semanticPending = new Map(), semanticDone = new Map();
+  const nativeDone = new Map();
   let completing = 0;
 
   async function accept(req, res) {
     if (!loopback(req.socket.remoteAddress) || !equal(req.headers.authorization, `Bearer ${token}`)) {
       res.writeHead(403); res.end(); return;
+    }
+    if (env.AMR_GO_NATIVE_FRONT === '1' && req.method === 'GET' && req.url === '/internal/v1/go-context') {
+      const context = native.context();
+      res.writeHead(context ? 200 : 503, { 'content-type': 'application/json' }); res.end(JSON.stringify(context)); return;
     }
     if (req.method !== 'POST' || req.url !== '/internal/v1/go-events') { res.writeHead(404); res.end(); return; }
     let bytes = 0; const chunks = [];
@@ -52,6 +57,20 @@ export function createGoCoreEdge(env = process.env) {
       }
       const raw = Buffer.concat(chunks), event = JSON.parse(raw);
       const digest = createHash('sha256').update(raw).digest('hex');
+      if (env.AMR_GO_NATIVE_FRONT === '1' && (event.kind === 'native_complete' || event.nativeMetadata)) {
+        if (!/^[a-f0-9]{32}$/.test(event.id)) throw new Error('invalid_native_id');
+        const key = `${event.id}:${event.kind}`, prior = nativeDone.get(key);
+        if (prior && prior.digest !== digest) { res.writeHead(409); res.end(); return; }
+        if (!prior) {
+          // Validate the entire envelope before applying any cost or log effect.
+          const action = native.prepare(event, validateEvent);
+          completing++;
+          const task = Promise.resolve().then(action).finally(() => { completing--; });
+          nativeDone.set(key, { digest, task });
+          if (nativeDone.size > 4096) nativeDone.delete(nativeDone.keys().next().value);
+        }
+        await nativeDone.get(key).task; res.writeHead(204); res.end(); return;
+      }
       if (event.kind === 'semantic') {
         const slot = pending.get(event.id) || semanticPending.get(event.id);
         const prior = slot?.semantic || semanticDone.get(event.id);
