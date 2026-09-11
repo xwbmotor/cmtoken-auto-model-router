@@ -18,6 +18,7 @@ import (
 
 type Options struct {
 	Candidate                                  bool
+	RuntimeBudgetOnly                          bool
 	Guard                                      *Guard
 	Billing                                    func(model string, input, output float64) (func(*Usage), error)
 	Policy                                     Policy
@@ -89,7 +90,7 @@ func (c *Client) Snapshot() Snapshot {
 func (c *Client) reserve(estimate float64) (func(*Usage), error) {
 	c.guard.mu.Lock()
 	defer c.guard.mu.Unlock()
-	if c.guard.state.LargeCalls >= c.options.MaxLargeCalls || c.guard.state.ActualTokens+c.guard.state.EstimatedTokens+c.guard.state.PendingTokens+estimate > c.options.MaxLargeTokens {
+	if !c.options.RuntimeBudgetOnly && (c.guard.state.LargeCalls >= c.options.MaxLargeCalls || c.guard.state.ActualTokens+c.guard.state.EstimatedTokens+c.guard.state.PendingTokens+estimate > c.options.MaxLargeTokens) {
 		return nil, errors.New("semantic large-call budget exhausted")
 	}
 	c.guard.state.LargeCalls++

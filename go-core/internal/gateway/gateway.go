@@ -231,6 +231,9 @@ func New(o Options) (*Gateway, error) {
 		}
 		opts := o.SemanticOptions
 		opts.Candidate = o.Candidate
+		// The production edge uses the configured runtime budget. A finite
+		// laboratory lifetime allowance must not silently disable L3 after 500 calls.
+		opts.RuntimeBudgetOnly = o.EdgeURL != ""
 		opts.Policy = p
 		if g.runtime != nil {
 			opts.Billing = g.semanticBilling

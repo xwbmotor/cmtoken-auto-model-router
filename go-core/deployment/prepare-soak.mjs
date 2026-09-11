@@ -11,6 +11,9 @@ await mkdir(resolve(directory,'ledger'),{recursive:true});
 await mkdir(resolve(directory,'evidence'),{recursive:true});
 const config=JSON.parse(await readFile(resolve(root,'config/router.json'),'utf8'));
 config.semanticRouter.enabled=false;
+// This sustained storage workload exceeds the normal tenant API rate limit.
+// Rate-limit behavior has separate gateway tests; keep it out of this fixture.
+config.rateLimit={...config.rateLimit,enabled:false};
 config.routing.mode='active';config.routing.activeTrafficPercent=100;config.routing.taskPreferences={};
 config.routing.maxAttempts=2;config.routing.qualityFloor=0;config.routing.requestTimeoutMs=600000;
 config.routing.circuitBreakerFailures=100;config.routing.circuitBreakerCooldownMs=1000;

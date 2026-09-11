@@ -222,3 +222,22 @@ func TestParseAndEndpointGuards(t *testing.T) {
 		t.Fatal("non-loopback provider accepted")
 	}
 }
+
+func TestProductionEdgeUsesRuntimeBudgetInsteadOfLifetimeLabAllowance(t *testing.T) {
+	c := &Client{options: Options{RuntimeBudgetOnly: true, MaxLargeCalls: 1, MaxLargeTokens: 1}, guard: NewGuard(1)}
+	for i := 0; i < 501; i++ {
+		settle, err := c.reserve(100)
+		if err != nil {
+			t.Fatalf("production review disabled at %d: %v", i, err)
+		}
+		settle(&Usage{Prompt: 10, Completion: 2})
+	}
+	s := c.Snapshot()
+	if s.LargeCalls != 501 || s.ActualTokens != 6012 || s.PendingTokens != 0 {
+		t.Fatalf("accounting lost: %+v", s)
+	}
+	c.options.RuntimeBudgetOnly = false
+	if _, err := c.reserve(1); err == nil {
+		t.Fatal("laboratory allowance bypassed")
+	}
+}
