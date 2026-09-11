@@ -78,7 +78,7 @@ def main():
         config['judge'].update(enabled=False, taskCheckEnabled=False)
         config['rateLimit']['enabled'] = False
         config['calibration']['enabled'] = False
-        config['routing'].update(mode='active', activeTrafficPercent=100, qualityFloor=0, taskPreferences={})
+        config['routing'].update(mode='active', activeTrafficPercent=100, qualityFloor=0, taskPreferences={}, maxAttempts=1)
         config['routing']['latencyObservation'] = {'mode': 'off', 'probes': {'enabled': False}}
         model = config['models'] = [next(m for m in config['models'] if m['enabled'])]
         model[0]['minimumCompletionTokensForReliableAnswer'] = 0
@@ -90,6 +90,9 @@ def main():
         if 'openaiChat' in config['semanticRouter']:
             config['semanticRouter']['openaiChat']['model'] = model[0]['id']
         write(ROOT / 'config/router.json', config)
+        run(['node', '--input-type=module', '-e',
+             "import {readFileSync} from 'node:fs'; import {validateConfig} from './src/config.mjs';"
+             "validateConfig(JSON.parse(readFileSync(process.argv[1],'utf8')));", str(ROOT / 'config/router.json')])
         (ROOT / '.env').write_text('FIXTURE_ONLY=true\n')
         run(['docker', 'build', '--build-arg', 'GIT_REVISION=' + revision, '-t', 'cmt-auto-model-router:0.0.1', '.'])
         run(['docker', 'tag', 'cmt-auto-model-router:0.0.1', 'cmt-auto-model-router:0.0.0'])
