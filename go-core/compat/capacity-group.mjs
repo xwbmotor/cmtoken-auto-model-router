@@ -79,7 +79,7 @@ if (role === 'go') {
     await start(process.execPath, ['go-core/compat/assessor.mjs', '--lab', '--config', process.env.CONFIG_PATH, '--port', '8789']);
     configArgs = ['--assessor', 'http://127.0.0.1:8789/assess'];
   }
-  const coreInfo = await start('/app/amr-core', ['--lab', ...(process.env.M4_NATIVE_FRONT === '1' ? ['--public-listen', '127.0.0.1:8793', '--node-origin', 'http://127.0.0.1:8787'] : []), '--runtime', '--auth-config', `${dir}/auth.json`, '--ledger', `${dir}/go.wal`, '--listen', '127.0.0.1:8791', ...configArgs, '--upstream', 'http://127.0.0.1:8790/v1/chat/completions', ...(process.env.M4_PROFILE === '1' ? ['--lab-profile-dir', `${dir}/profile`] : [])]);
+  const coreInfo = await start('/app/amr-core', ['--lab', ...(process.env.M4_NODE_COST_OBSERVATION === '1' ? ['--node-cost-observation'] : []), ...(process.env.M4_NATIVE_FRONT === '1' ? ['--public-listen', '127.0.0.1:8793', '--node-origin', 'http://127.0.0.1:8787'] : []), '--runtime', '--auth-config', `${dir}/auth.json`, '--ledger', `${dir}/go.wal`, '--listen', '127.0.0.1:8791', ...configArgs, '--upstream', 'http://127.0.0.1:8790/v1/chat/completions', ...(process.env.M4_PROFILE === '1' ? ['--lab-profile-dir', `${dir}/profile`] : [])]);
   writeFileSync(`${dir}/runtime-info.json`, JSON.stringify(coreInfo));
   if (process.env.M4_PROFILE === '1') {
     profiledCore = children.at(-1);

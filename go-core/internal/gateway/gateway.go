@@ -33,6 +33,7 @@ import (
 const MaxBodyBytes = 2 << 20
 
 type Options struct {
+	NodeCostObservation  bool
 	EdgeURL              string
 	EdgeToken            string
 	Candidate            bool
@@ -89,6 +90,9 @@ func LoopbackURL(raw string) (*url.URL, error) {
 }
 
 func New(o Options) (*Gateway, error) {
+	if o.NodeCostObservation && (o.Shared == nil || o.Bundle == nil || o.Bundle.Runtime.BudgetEnabled || o.EdgeURL == "") {
+		return nil, errors.New("Node cost observation requires managed runtime, disabled budget and trusted Node edge")
+	}
 	if err := validateEdge(o); err != nil {
 		return nil, err
 	}
@@ -392,13 +396,16 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_json")
 		return
 	}
+	_, hadPrivateEdge := body["__amr_edge"]
 	edge, edgeErr := g.readEdge(r, body)
 	if edgeErr != nil {
 		writeError(w, 503, edgeErr.Error())
 		return
 	}
 	if edge != nil {
-		data, _ = json.Marshal(body)
+		if edge.native == nil || hadPrivateEdge {
+			data, _ = json.Marshal(body)
+		}
 		ctx = context.WithValue(ctx, edgeContextKey{}, edge)
 		r = r.WithContext(context.WithValue(r.Context(), edgeContextKey{}, edge))
 		if writer, ok := w.(*nativeWriter); ok {

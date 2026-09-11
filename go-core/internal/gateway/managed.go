@@ -153,9 +153,22 @@ func NewManaged(o ManagedOptions) (*Managed, error) {
 	c = snapshot.Value
 	m.zone = c.Bundle.Runtime.TimeZone
 	m.budgetEnabled = c.Bundle.Runtime.BudgetEnabled
+	if o.Gateway.NodeCostObservation && (m.budgetEnabled || o.Gateway.EdgeURL == "") {
+		return nil, errors.New("Node cost observation requires trusted edge and disabled budget protection")
+	}
+	hasMarker, e := checkCostAuthority(o.LedgerPath, o.Gateway.NodeCostObservation)
+	if e != nil {
+		return nil, e
+	}
 	l, e := ledger.Open(o.LedgerPath, ledger.Options{TimeZone: m.zone, Observation: !m.budgetEnabled})
 	if e != nil {
 		return nil, errors.New("cost state unavailable (locked, corrupt, inaccessible, or storage mode mismatch; preserve existing files)")
+	}
+	if o.Gateway.NodeCostObservation && !hasMarker {
+		if e = writeCostAuthority(o.LedgerPath); e != nil {
+			l.Close()
+			return nil, e
+		}
 	}
 	audit, e := openAuditWithOptions(o.LedgerPath+".events.jsonl", o.Audit)
 	if e != nil {
@@ -163,6 +176,7 @@ func NewManaged(o ManagedOptions) (*Managed, error) {
 		return nil, errors.New("audit journal unavailable")
 	}
 	m.state = &runtimeState{ledger: l, audit: audit, health: resilience.New(c.Bundle.Runtime.healthConfig()), admission: NewAdmission(), requests: make(chan struct{}, o.Gateway.MaxRequests), sessionSecret: make([]byte, 32), semanticGuard: semantic.NewGuard(o.Gateway.SemanticOptions.MaxConcurrent)}
+	m.state.nodeCostObservation = o.Gateway.NodeCostObservation
 	if _, e = rand.Read(m.state.sessionSecret); e != nil {
 		audit.Close()
 		l.Close()
@@ -324,7 +338,8 @@ func (m *Managed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		m.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"revision": gen.revision, "configRevision": gen.g.options.Bundle.Revision,
-			"activeRequests": len(m.state.requests), "backgroundReviews": backgroundReviews,
+			"nodeCostObservation": m.state.nodeCostObservation,
+			"activeRequests":      len(m.state.requests), "backgroundReviews": backgroundReviews,
 			"health": m.state.health.States(), "inflight": m.state.admission.Snapshot(), "sessions": m.state.admission.SessionCount(float64(time.Now().UnixMilli())),
 			"persistenceHealthy": !m.state.failed.Load(), "edgeErrors": m.state.edgeErrors.Load(), "edgeEnabled": gen.g.options.EdgeURL != ""})
 		return

@@ -285,6 +285,13 @@ func (g *Gateway) finishNative(w *nativeWriter, r *http.Request, edge *edgeConte
 	if json.Unmarshal(edge.native.Body["messages"], &messages) != nil || messages == nil {
 		return
 	}
+	// Push buffered response bytes before classifying delivery. HTTP EOF still
+	// waits for the outcome acknowledgment; flush errors remain failures.
+	if w.headerMS != nil {
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			w.failed = true
+		}
+	}
 	if !strings.HasPrefix(w.Header().Get("Content-Type"), "text/event-stream") {
 		w.observe(w.pending)
 		w.timing.observeOutputTiming(w.pending)

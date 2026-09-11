@@ -28,7 +28,7 @@ func (g *Gateway) semanticBilling(model string, input, output float64) (func(*se
 	}
 	price := g.options.Bundle.Runtime.Prices[model]
 	estimate := price.estimate(input, output, "off", 0)
-	if e = g.runtime.ledger.Reserve(id+"-classifier", estimate, g.options.Bundle.Runtime.limit(), "classifier"); e != nil {
+	if e = g.runtime.reserveCost(id+"-classifier", estimate, g.options.Bundle.Runtime.limit(), "classifier"); e != nil {
 		if !errors.Is(e, ledger.ErrBudget) {
 			g.runtime.failed.Store(true)
 		}
@@ -42,7 +42,7 @@ func (g *Gateway) semanticBilling(model string, input, output float64) (func(*se
 			if u != nil {
 				actual = price.actual(&tokenUsage{Prompt: u.Prompt, Completion: u.Completion})
 			}
-			if e := g.runtime.ledger.Settle(id+"-classifier", actual, actual != nil); e != nil {
+			if e := g.runtime.settleCost(id+"-classifier", actual, actual != nil); e != nil {
 				g.runtime.failed.Store(true)
 			}
 			_ = g.runtime.record(attemptEvent{RequestID: id, Revision: g.options.Bundle.Revision, Model: model, Outcome: "classifier_settled", EstimatedMicros: estimate, ActualMicros: actual, DurationMS: time.Since(started).Milliseconds(), At: time.Now().UTC().Format(time.RFC3339Nano)})

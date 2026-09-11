@@ -4,7 +4,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { randomBytes, createHash, createHmac } from 'node:crypto';
-import { mkdtemp, readFile, writeFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, readdir, rm, stat } from 'node:fs/promises';
 import { resolve, join, sep } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -13,7 +13,7 @@ const arg = name => { const i = process.argv.indexOf(name); return i < 0 ? undef
 assert.ok(arg('--binary'), '--binary required');
 const binary = resolve(arg('--binary'));
 const semantic = arg('--semantic') || 'disabled';
-const nativeFront = process.argv.includes('--native-front');
+const nativeFront = process.argv.includes('--native-front'), nodeCostObservation = process.argv.includes('--node-cost-observation');
 assert.ok(['disabled', 'shadow', 'active'].includes(semantic), '--semantic must be shadow or active');
 const dir = await mkdtemp(join(root, 'data/go-migration/edge-'));
 const secret = () => randomBytes(24).toString('hex');
@@ -102,7 +102,7 @@ try {
   execFileSync(process.execPath, ['go-core/compat/export-runtime.mjs', '--config', configFile, '--out', snapshot], { cwd: root, windowsHide: true, stdio: 'pipe' });
   const nodePort = await freePort(), goPort = await freePort(), publicPort = await freePort();
   const nodeBase = `http://127.0.0.1:${nodePort}`, base = nativeFront ? `http://127.0.0.1:${publicPort}` : nodeBase, goBase = `http://127.0.0.1:${goPort}`;
-  const go = start(binary, ['--lab', ...(nativeFront ? ['--public-listen', `127.0.0.1:${publicPort}`, '--node-origin', nodeBase] : []), '--runtime', '--runtime-config', snapshot, '--auth-config', authFile, '--ledger', join(dir, 'go.wal'), '--listen', `127.0.0.1:${goPort}`, '--upstream', upstream + '/chat/completions',
+  const go = start(binary, ['--lab', ...(nodeCostObservation ? ['--node-cost-observation'] : []), ...(nativeFront ? ['--public-listen', `127.0.0.1:${publicPort}`, '--node-origin', nodeBase] : []), '--runtime', '--runtime-config', snapshot, '--auth-config', authFile, '--ledger', join(dir, 'go.wal'), '--listen', `127.0.0.1:${goPort}`, '--upstream', upstream + '/chat/completions',
     ...(semantic === 'disabled' ? [] : ['--native-semantics', '--semantic-small', config.semanticRouter.httpJson.url])], {
     AMR_GO_EDGE_URL: nodeBase + '/internal/v1/go-events', AMR_GO_EDGE_TOKEN: edgeToken,
     AMR_GO_SEMANTIC_BUCKET_SECRET: semanticSecret
@@ -202,7 +202,13 @@ try {
     judges = await records('judge-reviews-');
     gracefulNativeDrain = true;
   }
-  const result = { experiment: nativeFront ? 'go-native-front-node-events' : 'real-node-go-edge', nativeFront, gracefulNativeDrain, passed: true, requests: requests.length + 1 + (nativeFront ? 1 : 0),
+  if (nodeCostObservation && nativeFront) {
+    const costs = JSON.parse(await readFile(join(dir, 'node-budget.json'), 'utf8'));
+    assert.ok(costs.settledActualSpendYuan > 0, 'Node cost observation was not persisted');
+    for (const suffix of ['', '.events.jsonl']) assert.equal((await stat(join(dir, 'go.wal' + suffix))).size, 0);
+    assert.equal(await readFile(join(dir, 'go.wal.node-observation'), 'utf8'), 'AMR_NODE_COST_OBSERVATION_V1\n');
+  }
+  const result = { experiment: nativeFront ? 'go-native-front-node-events' : 'real-node-go-edge', nativeFront, nodeCostObservation, gracefulNativeDrain, passed: true, requests: requests.length + 1 + (nativeFront ? 1 : 0),
     semantic, classifierCalls, semanticReviewRecords: semanticRows.length,
     judgeQualityRecords: judges.filter(r => r.event === 'quality').length, cancellation: true, fallback: true, configPublication: true, at: new Date().toISOString() };
   await writeFile(resolve(arg('--out') || join(root, 'data/go-migration/edge-integration.json')), JSON.stringify(result, null, 2) + '\n');

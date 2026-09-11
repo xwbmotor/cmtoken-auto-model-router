@@ -144,7 +144,7 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 		estimate := price.estimate(native.EstimatedInputTokens, native.EstimatedOutputTokens, d.ReasoningLevel, policy.CacheHitRatio)
 		attemptID := id + "-" + strconv.Itoa(index)
 		region = trace.StartRegion(r.Context(), "gateway.reserve")
-		e = g.runtime.ledger.Reserve(attemptID, estimate, policy.limit(), "answer")
+		e = g.runtime.reserveCost(attemptID, estimate, policy.limit(), "answer")
 		region.End()
 		if e != nil {
 			claim.Finish(resilience.Outcome{Scope: "configuration"})
@@ -158,7 +158,7 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 			return
 		}
 		if r.Context().Err() != nil {
-			if g.runtime.ledger.Release(attemptID) != nil {
+			if g.runtime.releaseCost(attemptID) != nil {
 				g.runtime.failed.Store(true)
 			}
 			claim.Finish(resilience.Outcome{ClientGone: true})
@@ -280,7 +280,7 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 		duration := time.Since(started)
 		actual := price.actual(usage)
 		region = trace.StartRegion(r.Context(), "gateway.settle")
-		if g.runtime.ledger.Settle(attemptID, actual, actual != nil) != nil {
+		if g.runtime.settleCost(attemptID, actual, actual != nil) != nil {
 			g.runtime.failed.Store(true)
 		}
 		region.End()

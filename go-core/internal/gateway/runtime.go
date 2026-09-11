@@ -87,16 +87,17 @@ func (p RuntimePolicy) limit() int64 {
 }
 
 type runtimeState struct {
-	rateLimiter   tenantRateLimiter
-	ledger        *ledger.Ledger
-	health        *resilience.Manager
-	admission     *Admission
-	requests      chan struct{}
-	sessionSecret []byte
-	semanticGuard *semantic.Guard
-	audit         *auditJournal
-	failed        atomic.Bool
-	edgeErrors    atomic.Uint64
+	nodeCostObservation bool
+	rateLimiter         tenantRateLimiter
+	ledger              *ledger.Ledger
+	health              *resilience.Manager
+	admission           *Admission
+	requests            chan struct{}
+	sessionSecret       []byte
+	semanticGuard       *semantic.Guard
+	audit               *auditJournal
+	failed              atomic.Bool
+	edgeErrors          atomic.Uint64
 }
 
 // A separate bounded-schema audit journal never serializes request bodies,
@@ -117,6 +118,9 @@ type attemptEvent struct {
 }
 
 func (s *runtimeState) record(e attemptEvent) error {
+	if s.nodeCostObservation {
+		return nil
+	}
 	data, err := json.Marshal(e)
 	if err == nil {
 		err = s.audit.append(append(data, '\n'))
@@ -125,4 +129,23 @@ func (s *runtimeState) record(e attemptEvent) error {
 		s.failed.Store(true)
 	}
 	return err
+}
+
+func (s *runtimeState) reserveCost(id string, estimate *int64, limit int64, source string) error {
+	if s.nodeCostObservation {
+		return nil
+	}
+	return s.ledger.Reserve(id, estimate, limit, source)
+}
+func (s *runtimeState) settleCost(id string, actual *int64, fromUsage bool) error {
+	if s.nodeCostObservation {
+		return nil
+	}
+	return s.ledger.Settle(id, actual, fromUsage)
+}
+func (s *runtimeState) releaseCost(id string) error {
+	if s.nodeCostObservation {
+		return nil
+	}
+	return s.ledger.Release(id)
 }

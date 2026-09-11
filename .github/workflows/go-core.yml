@@ -72,6 +72,9 @@ jobs:
           node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --out data/go-migration/native-front-default.json
           node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --semantic shadow --out data/go-migration/native-front-shadow.json
           node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --semantic active --out data/go-migration/native-front-active.json
+          node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --node-cost-observation --out data/go-migration/native-node-cost-default.json
+          node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --node-cost-observation --semantic shadow --out data/go-migration/native-node-cost-shadow.json
+          node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --node-cost-observation --semantic active --out data/go-migration/native-node-cost-active.json
       - name: Exercise same-host gateway comparison (smoke only, no capacity claim)
         run: node go-core/compat/compare-gateways.mjs --binary data/go-migration/amr-core --seconds 1 --rounds 1 --concurrency 1,8 --chunk-ms 40 --out data/go-migration/gateway-smoke.json
         # Includes real cookie-authenticated Node config save -> snapshot -> Go.

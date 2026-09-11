@@ -98,6 +98,7 @@ func main() {
 	largeCalls := flags.Int64("semantic-max-large-calls", 500, "process-local maximum large classifier attempts")
 	largeTokens := flags.Float64("semantic-max-large-tokens", 1000000, "process-local large classifier token allowance")
 	listen := flags.String("listen", "127.0.0.1:8791", "loopback listen address")
+	nodeCostObservation := flags.Bool("node-cost-observation", false, "use trusted Node cost observations when budget protection is disabled")
 	publicListen := flags.String("public-listen", "", "optional native completion front listen address")
 	nodeOrigin := flags.String("node-origin", "", "fixed loopback Node management origin for native front")
 	assessor := flags.String("assessor", "http://127.0.0.1:8789/assess", "private laboratory feature adapter")
@@ -150,7 +151,7 @@ func main() {
 			os.Exit(2)
 		}
 	}
-	options := gateway.Options{Candidate: *candidate, NativeAnalysis: *nativeAnalysis, NativeSemantics: *nativeSemantics, AssessorURL: *assessor, UpstreamURL: *upstream,
+	options := gateway.Options{NodeCostObservation: *nodeCostObservation, Candidate: *candidate, NativeAnalysis: *nativeAnalysis, NativeSemantics: *nativeSemantics, AssessorURL: *assessor, UpstreamURL: *upstream,
 		EdgeURL: os.Getenv("AMR_GO_EDGE_URL"), EdgeToken: os.Getenv("AMR_GO_EDGE_TOKEN"),
 		Tenants: tenants, ScopeURL: *scopeURL, ScopeTTL: 60 * time.Second, ScopeTimeout: 3 * time.Second,
 		SemanticBucketSecret: []byte(os.Getenv("AMR_GO_SEMANTIC_BUCKET_SECRET")),

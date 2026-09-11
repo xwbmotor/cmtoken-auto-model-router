@@ -191,7 +191,11 @@ func (g *Gateway) runtimeStatus(w http.ResponseWriter, generations ...generation
 		if len(generations) > 0 {
 			generation = &generations[0]
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"milestone": "m3", "productionReady": false, "revision": g.options.Bundle.Revision, "ledger": g.runtime.ledger.Snapshot(), "health": g.runtime.health.States(), "persistenceHealthy": !g.runtime.failed.Load(), "inflight": g.admission.Snapshot(), "semanticGuard": guard, "reviews": reviews, "diagnostics": g.diagnostics(generation)})
+		var costState any
+		if !g.runtime.nodeCostObservation {
+			costState = g.runtime.ledger.Snapshot()
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"milestone": "m3", "productionReady": false, "revision": g.options.Bundle.Revision, "nodeCostObservation": g.runtime.nodeCostObservation, "ledger": costState, "health": g.runtime.health.States(), "persistenceHealthy": !g.runtime.failed.Load(), "inflight": g.admission.Snapshot(), "semanticGuard": guard, "reviews": reviews, "diagnostics": g.diagnostics(generation)})
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"milestone": "m2b", "productionReady": false, "semanticGuard": guard, "reviews": reviews, "inflight": g.admission.Snapshot()})

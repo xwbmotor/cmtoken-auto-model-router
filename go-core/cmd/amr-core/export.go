@@ -32,6 +32,9 @@ func exportLedger(args []string, out io.Writer) error {
 	if !*frozen || *source == "" || *target == "" || len(*expected) != 64 || flags.NArg() != 0 {
 		return errors.New("requires --source-frozen --source --target --source-sha256")
 	}
+	if _, e := os.Stat(*source + ".node-observation"); e == nil || !os.IsNotExist(e) {
+		return errors.New("Node cost observation is authoritative; preserve the Node snapshot")
+	}
 	f, e := os.Open(*source)
 	if e != nil {
 		return errors.New("source unavailable")

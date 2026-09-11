@@ -21,6 +21,7 @@ const profiling = process.argv.includes('--profile');
 const goProcs = arg('--go-procs') ?? 'auto';
 const featureMode = arg('--feature-mode') ?? 'bootstrap';
 assert.ok(['bootstrap','snapshot'].includes(featureMode), 'invalid --feature-mode');
+const nodeCostObservation = process.argv.includes('--node-cost-observation');
 const budgetMode = arg('--budget-mode') ?? 'protection', nativeFront = process.argv.includes('--native-front'), edge = nativeFront || process.argv.includes('--edge');
 assert.ok(['protection', 'observation'].includes(budgetMode), 'invalid --budget-mode');
 assert.ok((!edge && budgetMode !== 'observation') || featureMode === 'snapshot', 'edge/observation requires --feature-mode snapshot');
@@ -151,7 +152,7 @@ try {
   sourceHash = sha(readFileSync(resolve(root, 'src/server.mjs')));
   for (const role of ['node', 'go']) { mkdirSync(resolve(stage, role)); writeFileSync(resolve(stage, role, 'router.json'), JSON.stringify(config(role))); }
   writeFileSync(resolve(stage, 'go/auth.json'), JSON.stringify({ mode: 'strict', accessToken: credentials.M4_ACCESS, adminToken: credentials.M4_CORE_ADMIN, upstreamToken: credentials.M4_UPSTREAM }));
-  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, M4_PROFILE: profiling ? '1' : '0', M4_FEATURE_MODE:featureMode, M4_EDGE: edge ? '1' : '0', M4_NATIVE_FRONT: nativeFront ? '1' : '0', ...(goProcs === 'auto' ? {} : {GOMAXPROCS: goProcs}), NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
+  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, M4_PROFILE: profiling ? '1' : '0', M4_FEATURE_MODE:featureMode, M4_EDGE: edge ? '1' : '0', M4_NODE_COST_OBSERVATION: nodeCostObservation ? '1' : '0', M4_NATIVE_FRONT: nativeFront ? '1' : '0', ...(goProcs === 'auto' ? {} : {GOMAXPROCS: goProcs}), NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
   const fixture = `${runKey}-fixture`;
   const mounts = ['--mount', `type=bind,source=${resolve(stage, 'app')},target=/app,readonly`, '--mount', `type=bind,source=${stage},target=/lab`, '--env-file', envFile];
   containers.push(fixture);
@@ -250,7 +251,7 @@ finally {
     return { name, log };
   }) : undefined;
   const report = { schemaVersion: 1, experiment: 'm4-cgroup-open-loop', at: new Date().toISOString(), runKey, productionReady: false, formalAcceptance: 'not evaluated: production workload and SLO not supplied',
-    failure, diagnostics, profiling, goRuntime, decisionEvidence, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB, goProcs, featureMode, budgetMode, edge, nativeFront, decisionLog: true, judge: false, semantic: false, rateLimit: false }, engine, image: imageEvidence, quotas,
+    failure, diagnostics, profiling, goRuntime, decisionEvidence, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB, goProcs, featureMode, budgetMode, edge, nativeFront, nodeCostObservation, decisionLog: true, judge: false, semantic: false, rateLimit: false }, engine, image: imageEvidence, quotas,
     groups: { node: ['Node gateway + resource endpoint'], go: ['Go runtime', ...(featureMode === 'snapshot' ? [] : ['Node adapter']), nativeFront ? 'Go public front + real Node events, administration + resource endpoint' : edge ? 'real Node HTTP edge, events, administration + resource endpoint' : 'real Node administration + resource endpoint'], outsideQuota: ['common TCP ingress', 'mock upstream', 'load generator'] },
     corpus: { model, shapes, synthetic: true, semanticReview: false, inputMix: 'equal round-robin', mockDelayMs: 10 },
     binarySha256: sha(readFileSync(binary)), nodeSourceSha256: sourceHash, budgetSourceSha256: sha(readFileSync(resolve(root, 'src/budget.mjs'))), preflight, runs, requests,
