@@ -12,7 +12,7 @@ on:
       profile:
         description: Local mock workload size (never production)
         type: choice
-        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard, edge-observation-profile, edge-isolation, edge-observation-optimization, native-front-standard, native-front-profile, native-front-io-compare, native-front-node-cost, native-front-relay-compare, native-front-headroom, native-front-node-cost-profile]
+        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard, edge-observation-profile, edge-isolation, edge-observation-optimization, native-front-standard, native-front-profile, native-front-io-compare, native-front-node-cost, native-front-relay-compare, native-front-headroom, native-front-node-cost-profile, native-front-regex-compare]
         default: smoke
 
 permissions:
@@ -58,6 +58,18 @@ jobs:
               flags=(); if [[ "$phase" == nagle-* ]]; then flags+=(--relay-nagle); fi
               result="data/go-migration/capacity-native-front-relay-$phase"
               node go-core/compat/compare-capacity.mjs --native-front --node-cost-observation "${flags[@]}" --feature-mode snapshot --budget-mode observation --binary data/go-migration/amr-core-linux --seconds 5 --rounds 1 --rates 100,300 --stream-seconds 2 --streams 2 --cpus 2 --memory-mib 512 --out "$result.json"
+              node go-core/compat/summarize-capacity.mjs "$result.json" "$result.md"
+            done
+          elif [ "$PROFILE" = "native-front-regex-compare" ]; then
+            baseline=5ea0dacb532a1c8b26cd00edb31759c169cc6339
+            git fetch --no-tags --depth=1 origin "$baseline"
+            git worktree add --detach "$RUNNER_TEMP/amr-regex-before" "$baseline"
+            (cd "$RUNNER_TEMP/amr-regex-before/go-core" && CGO_ENABLED=0 go build -trimpath -o "$GITHUB_WORKSPACE/data/go-migration/amr-core-before" ./cmd/amr-core)
+            for phase in before-1 after-1 after-2 before-2; do
+              binary=data/go-migration/amr-core-linux
+              if [[ "$phase" == before-* ]]; then binary=data/go-migration/amr-core-before; fi
+              result="data/go-migration/capacity-native-front-regex-$phase"
+              node go-core/compat/compare-capacity.mjs --native-front --node-cost-observation --feature-mode snapshot --budget-mode observation --binary "$binary" --seconds 5 --rounds 1 --rates 100,300 --stream-seconds 2 --streams 2 --cpus 2 --memory-mib 512 --out "$result.json"
               node go-core/compat/summarize-capacity.mjs "$result.json" "$result.md"
             done
           elif [ "$PROFILE" = "native-front-headroom" ]; then

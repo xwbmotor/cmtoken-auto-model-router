@@ -5,7 +5,22 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode"
 )
+
+func TestFoldRuneMatchesUnicodeAcrossAllCodePoints(t *testing.T) {
+	for r := rune(-1); r <= unicode.MaxRune; r++ {
+		want := r
+		for n := unicode.SimpleFold(r); n != r; n = unicode.SimpleFold(n) {
+			if n < want {
+				want = n
+			}
+		}
+		if got := foldRune(r); got != want {
+			t.Fatalf("fold %U: got %U want %U", r, got, want)
+		}
+	}
+}
 
 func TestFastRegexPreservesRE2Matching(t *testing.T) {
 	patterns := []string{

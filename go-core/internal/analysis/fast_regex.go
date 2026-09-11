@@ -17,6 +17,7 @@ type fastRegex struct {
 	fold         bool
 	guards       []string
 	starts       [256]bool
+	startPairs   []uint64
 	filterStarts bool
 }
 type literalNode struct {
@@ -27,6 +28,14 @@ type literalNode struct {
 const literalLimit = 256
 
 func foldRune(r rune) rune {
+	// These ranges are unchanged by Unicode simple folding except ASCII a-z.
+	// The exhaustive Unicode differential test also covers future Go tables.
+	if r >= 'a' && r <= 'z' {
+		return r - ('a' - 'A')
+	}
+	if r < utf8.RuneSelf || (r >= 0x3400 && r <= 0x9fff) {
+		return r
+	}
 	best := r
 	for n := unicode.SimpleFold(r); n != r; n = unicode.SimpleFold(n) {
 		if n < best {
@@ -74,16 +83,25 @@ func compileRegex(source string) (*fastRegex, error) {
 		}
 		p.trie, p.fold = root, mode == 1
 		p.filterStarts = true
+		p.startPairs = make([]uint64, 1024)
+		addStart := func(r rune) {
+			encoded := string(r)
+			p.starts[encoded[0]] = true
+			if len(encoded) > 1 {
+				pair := uint16(encoded[0])<<8 | uint16(encoded[1])
+				p.startPairs[pair>>6] |= uint64(1) << (pair & 63)
+			}
+		}
 		for r := range root.next {
 			// Invalid UTF-8 is one RuneError per byte in RE2. Keep rune
 			// traversal for this case instead of entering a continuation byte.
 			if r == utf8.RuneError {
 				p.filterStarts = false
 			}
-			p.starts[string(r)[0]] = true
+			addStart(r)
 			if p.fold {
 				for c := unicode.SimpleFold(r); c != r; c = unicode.SimpleFold(c) {
-					p.starts[string(c)[0]] = true
+					addStart(c)
 				}
 			}
 		}
@@ -248,7 +266,18 @@ func (p *fastRegex) first(text string, from int) (int, int) {
 			// A valid literal starts at an ASCII or UTF-8 leading byte,
 			// never a continuation byte. No decoding/folding is needed
 			// for bytes that cannot begin any alternative.
-			for start < len(text) && !p.starts[text[start]] {
+			for start < len(text) {
+				if p.starts[text[start]] {
+					if text[start] < utf8.RuneSelf {
+						break
+					}
+					if start+1 < len(text) {
+						pair := uint16(text[start])<<8 | uint16(text[start+1])
+						if p.startPairs[pair>>6]&(uint64(1)<<(pair&63)) != 0 {
+							break
+						}
+					}
+				}
 				start++
 			}
 			if start == len(text) {
