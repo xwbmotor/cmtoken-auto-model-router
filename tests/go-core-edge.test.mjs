@@ -7,6 +7,29 @@ import { goOutcome } from '../src/go-core-results.mjs';
 
 const token = 'test-edge-token-'.repeat(3), revision = '"' + 'a'.repeat(64) + '"';
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
+
+test('native completion retries share one effect and context remains authenticated', async t => {
+  const entered = deferred(), release = deferred(); let effects = 0;
+  const edge = createGoCoreEdge({ AMR_GO_CHAT_URL: 'http://127.0.0.1:1/v1/chat/completions', AMR_GO_EDGE_TOKEN: token, AMR_GO_NATIVE_FRONT: '1' }, {
+    context: () => ({ configRevision: revision, marketSignals: {} }),
+    prepare: event => {
+      assert.equal(event.kind, 'native_complete');
+      return async () => { effects++; entered.resolve(); await release.promise; };
+    }
+  });
+  const server = createServer((req, res) => edge.accept(req, res)); const url = await listen(server);
+  t.after(() => { edge.close(); server.closeAllConnections(); server.close(); });
+  assert.equal((await fetch(url + '/internal/v1/go-context')).status, 403);
+  const context = await fetch(url + '/internal/v1/go-context', { headers: { authorization: `Bearer ${token}` } });
+  assert.deepEqual(await context.json(), { configRevision: revision, marketSignals: {} });
+  const event = { kind: 'native_complete', id: 'a'.repeat(32) };
+  const first = send(url + '/internal/v1/go-events', event); await entered.promise;
+  const retry = send(url + '/internal/v1/go-events', event);
+  assert.equal(await send(url + '/internal/v1/go-events', { ...event, changed: true }), 409);
+  assert.equal(effects, 1); assert.equal(await edge.drain(5), 1);
+  release.resolve(); assert.deepEqual(await Promise.all([first, retry]), [204, 204]);
+  assert.equal(await edge.drain(5), 0);
+});
 async function listen(server) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   return `http://127.0.0.1:${server.address().port}`;

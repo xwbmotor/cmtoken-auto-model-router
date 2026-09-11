@@ -52,7 +52,7 @@ export function createGoCoreEdge(env = process.env, native = {}) {
     try {
       for await (const chunk of req) {
         bytes += chunk.length;
-        if (bytes > MAX_BODY) { res.writeHead(413); res.end(); return; }
+        if (bytes > (env.AMR_GO_NATIVE_FRONT === '1' ? 8 * MAX_BODY : MAX_BODY)) { res.writeHead(413); res.end(); return; }
         chunks.push(chunk);
       }
       const raw = Buffer.concat(chunks), event = JSON.parse(raw);
@@ -217,10 +217,15 @@ export function createGoCoreEdge(env = process.env, native = {}) {
   }
   async function drain(timeoutMs = 8000) {
     const deadline = Date.now() + timeoutMs;
-    while ((pending.size || semanticPending.size || completing) && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 25));
+    const nativeDrain = env.AMR_GO_NATIVE_FRONT === '1' && native.pending;
+    const cacheExpiry = Date.now() + (nativeDrain ? 1100 : 0);
+    let external = 0;
+    while (Date.now() < deadline) {
+      if (nativeDrain) { try { external = await native.pending(); } catch { external = 1; } }
+      if (!(pending.size || semanticPending.size || completing || external) && Date.now() >= cacheExpiry) return 0;
+      await new Promise(resolve => setTimeout(resolve, nativeDrain ? 100 : 25));
     }
-    return pending.size + semanticPending.size + completing;
+    return pending.size + semanticPending.size + completing + external;
   }
   return { accept, proxy, drain, close: () => agent.destroy(), pending: () => pending.size };
 }

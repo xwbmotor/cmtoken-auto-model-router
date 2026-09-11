@@ -6,6 +6,10 @@ COPY internal ./internal
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /amr-core ./cmd/amr-core
 
 FROM scratch
+ARG GIT_REVISION=unknown
+LABEL org.opencontainers.image.revision="${GIT_REVISION}" \
+      org.opencontainers.image.title="cmt-amr-go-core" \
+      org.opencontainers.image.licenses="MIT"
 COPY --from=build /amr-core /amr-core
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /usr/local/go/lib/time/zoneinfo.zip /zoneinfo.zip

@@ -70,7 +70,13 @@ const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 8787);
 const goCoreAdmin = createGoCoreAdmin();
 const nativePolicies = new Map();
-const goCoreEdge = createGoCoreEdge(process.env, { context: nativeGoContext, prepare: prepareNativeGoEvent });
+if (process.env.AMR_GO_NATIVE_FRONT === '1' && String(process.env.SEMANTIC_BUCKET_SECRET || '').length < 32) throw new Error('Native Go front requires a shared stable semantic secret');
+const goCoreEdge = createGoCoreEdge(process.env, { context: nativeGoContext, prepare: prepareNativeGoEvent,
+  pending: async () => {
+    const state = await goCoreAdmin.runtime();
+    if (state.status !== 200 || state.activeRequests === undefined || state.backgroundReviews === undefined) return 1;
+    return state.activeRequests + state.backgroundReviews;
+  } });
 if (goCoreEdge && (!goCoreAdmin || !process.env.AMR_GO_RUNTIME_CONFIG)) throw new Error('Go chat edge requires automatic snapshot publication');
 const goConfigPublication = goCoreEdge ? createGoConfigPublication(goCoreAdmin, next => { assertSemanticBucketSecretForMode(next.semanticRouter?.mode); assertJudgeGuardStatePathStable(next.judge); }) : null;
 async function saveConfig(next, options) {
@@ -87,6 +93,7 @@ const serverKeepAliveMs = Number(process.env.HTTP_KEEPALIVE_MS || 300000); // 5 
 const serverHeadersTimeoutMs = Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 310000); // 比 keepAlive 略高
 
 let config = await loadConfig();
+nativePolicies.set(getConfigRevision(config), config);
 const modelLoad = createModelLoadTracker();
 const latencyStore = new LatencyObservatory({ path: process.env.LATENCY_STATE_PATH || (process.env.CONFIG_PATH
   ? join(dirname(resolve(projectRoot, process.env.CONFIG_PATH)), 'latency-observations.json') : join(projectRoot, 'data/latency-observations.json')) });
@@ -2503,7 +2510,7 @@ function nativeGoContext() {
   const revision = getConfigRevision(config);
   nativePolicies.set(revision, config);
   if (nativePolicies.size > 64) nativePolicies.delete(nativePolicies.keys().next().value);
-  return { configRevision: revision, marketSignals: Object.fromEntries(['default', 'coding', 'reasoning', 'creative', 'extraction'].map(task =>
+  return { configRevision: revision, sessionProof: createHmac('sha256', semanticBucketSecret).update('go-native-front-v1').digest('hex'), marketSignals: Object.fromEntries(['default', 'coding', 'reasoning', 'creative', 'extraction'].map(task =>
     [task, Object.fromEntries(config.models.map(m => [m.id, marketSignal.adjustFor(task, m.id)]))])) };
 }
 
@@ -2536,7 +2543,7 @@ function prepareNativeGoEvent(event, validateEvent) {
   events.sort((a, b) => a.attempt.index - b.attempt.index);
   return async () => {
     counters.total += 1;
-    const req = { requestId: metadata.requestId, goMetadata: metadata, headers: {} };
+    const req = { requestId: metadata.requestId, goMetadata: { ...metadata, sessionFingerprint: metadata.sessionFingerprint || null }, headers: {} };
     const options = goCompletionOptions(req, body, isAutoRequest(body, policy), policy);
     for (const e of events) await options.onAttempt(e);
     await options.onComplete({ ...result, events, last: events.at(-1) });

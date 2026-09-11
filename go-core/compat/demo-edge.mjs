@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash, createHmac } from 'node:crypto';
 import { mkdtemp, readFile, writeFile, readdir, rm } from 'node:fs/promises';
 import { resolve, join, sep } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -112,10 +112,11 @@ try {
     AMR_GO_NATIVE_FRONT: nativeFront ? '1' : '0', AMR_GO_CHAT_URL: goBase + '/v1/chat/completions', AMR_GO_EDGE_TOKEN: edgeToken, AMR_GO_ADMIN_URL: goBase,
     AMR_GO_ADMIN_TOKEN: admin, AMR_GO_RUNTIME_CONFIG: snapshot, ROUTER_KEY_MODE: 'strict', ROUTER_ACCESS_KEY: access,
     UPSTREAM_BASE_URL: upstream, MAAS_BASE_URL: upstream, UPSTREAM_API_KEY: provider, MAAS_API_KEY: provider,
-    ...(semantic === 'disabled' ? {} : { SEMANTIC_BUCKET_SECRET: semanticSecret }),
+    SEMANTIC_BUCKET_SECRET: semanticSecret,
     ADMIN_TOKEN: admin, METRICS_TOKEN: admin, AMR_COUNTERS_PATH: join(dir, 'counters.json'), JUDGE_SECRET_PATH: join(dir, 'judge-secret.json') });
   await healthy(base, node);
-  const headers = { authorization: `Bearer ${access}`, 'content-type': 'application/json' };
+  const callerSession = 'private-session-fixture';
+  const headers = { authorization: `Bearer ${access}`, 'content-type': 'application/json', 'x-session-id': callerSession };
   const post = (extra = {}, id = secret()) => fetch(base + (nativeFront ? '/v1/chat/completions' : '/v1/chat/completions?compatible=1'), { method: 'POST', headers: { ...headers, 'x-request-id': id },
     body: JSON.stringify({ messages: [{ role: 'user', content: semantic === 'disabled' ? 'hello' : 'hello there, good morning' }], max_tokens: 128, ...extra }) });
   const requests = [];
@@ -138,6 +139,12 @@ try {
   let rows = [];
   for (let i = 0; i < 100; i++) { rows = await records('decisions-'); if (requests.every(id => rows.some(r => r.request?.requestId === id))) break; await sleep(50); }
   for (const id of requests) assert.equal(rows.filter(r => r.request?.requestId === id).length, 1, 'missing/duplicate decision ' + id);
+  for (const row of rows) {
+    assert.equal(row.request.keyFingerprint, createHash('sha256').update(access).digest('hex').slice(0, 8));
+    assert.equal(row.request.sessionFingerprint, 'sidfp:' + createHmac('sha256', semanticSecret).update('session-fp:' + callerSession).digest('hex').slice(0, 16));
+  }
+  const serializedLogs = JSON.stringify(rows);
+  for (const privateValue of [access, provider, edgeToken, semanticSecret, callerSession]) assert.ok(!serializedLogs.includes(privateValue), 'private data leaked into decisions');
   assert.equal(rows.find(r => r.request?.requestId === 'edge-cancel').outcome.ok, false);
   assert.equal(rows.find(r => r.request?.requestId === 'edge-fallback').outcome.attempts.length, 2);
   assert.equal(rows.find(r => r.request?.requestId === 'edge-true').outcome.core, 'go');
@@ -181,7 +188,7 @@ try {
   }
   const noAuth = await fetch(base + '/internal/v1/go-events', { method: 'POST', body: '{}' }); assert.equal(noAuth.status, nativeFront ? 404 : 403);
   const cors = await fetch(base + '/v1/chat/completions', { method: 'OPTIONS', headers: { origin: 'https://outside.example' } }); assert.equal(cors.status, 204);
-  const result = { experiment: 'real-node-go-edge', passed: true, requests: requests.length + 1,
+  const result = { experiment: nativeFront ? 'go-native-front-node-events' : 'real-node-go-edge', nativeFront, passed: true, requests: requests.length + 1,
     semantic, classifierCalls, semanticReviewRecords: semanticRows.length,
     judgeQualityRecords: judges.filter(r => r.event === 'quality').length, cancellation: true, fallback: true, configPublication: true, at: new Date().toISOString() };
   await writeFile(resolve(arg('--out') || join(root, 'data/go-migration/edge-integration.json')), JSON.stringify(result, null, 2) + '\n');

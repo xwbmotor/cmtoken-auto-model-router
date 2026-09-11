@@ -48,8 +48,15 @@ export function createGoCoreAdmin(env = process.env) {
               if (!Number.isInteger(count) || count < 0 || count > 10000) throw new Error('invalid_core_load');
               return [id, { inflight: count }];
             }));
+            const pending = {};
+            for (const key of ['activeRequests', 'backgroundReviews']) {
+              if (body[key] !== undefined) {
+                if (!Number.isSafeInteger(body[key]) || body[key] < 0 || body[key] > 100000) throw new Error('invalid_core_pending');
+                pending[key] = body[key];
+              }
+            }
             return resolve({ status: 200, revision: body.revision, configRevision: body.configRevision,
-              health, inflight, sessions: body.sessions, persistenceHealthy: body.persistenceHealthy, edgeEnabled: body.edgeEnabled, edgeErrors: body.edgeErrors });
+              health, inflight, ...pending, sessions: body.sessions, persistenceHealthy: body.persistenceHealthy, edgeEnabled: body.edgeEnabled, edgeErrors: body.edgeErrors });
           }
           resolve({ status: 200, revision: body.revision, ...(method === 'GET' ? { configRevision: body.configRevision } : {}) });
         } catch { reject(new Error('invalid_core_response')); }

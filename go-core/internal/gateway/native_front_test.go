@@ -1,13 +1,119 @@
 package gateway
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
+
+func TestNativeCompletionWaitsForAckAndNeverForwardsCredentials(t *testing.T) {
+	const secret = "native-session-secret-for-test-00000001"
+	var revision string
+	var providerCalls atomic.Int64
+	var reject atomic.Bool
+	received, release := make(chan []byte, 2), make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	m, b := edgeTestManaged(t, func(w http.ResponseWriter, r *http.Request) {
+		providerCalls.Add(1)
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["__amr_edge"] != nil {
+			t.Error("forged edge context leaked")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+edgeTestToken {
+			t.Error("missing edge authentication")
+		}
+		if r.Method == "GET" && r.URL.Path == "/internal/v1/go-context" {
+			h := hmac.New(sha256.New, []byte(secret))
+			h.Write([]byte("go-native-front-v1"))
+			_ = json.NewEncoder(w).Encode(nativeContext{ConfigRevision: revision, SessionProof: hex.EncodeToString(h.Sum(nil)), MarketSignals: map[string]map[string]float64{}})
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		received <- raw
+		if reject.Load() {
+			w.WriteHeader(422)
+			return
+		}
+		<-release
+		w.WriteHeader(204)
+	})
+	revision = b.Revision
+	m.active.g.options.SemanticBucketSecret = []byte(secret)
+	front, err := NewNativeFront(m, strings.TrimSuffix(m.options.Gateway.EdgeURL, "/internal/v1/go-events"), edgeTestToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer front.Close()
+	server := httptest.NewServer(front)
+	defer server.Close()
+	call := func() error {
+		r, _ := http.NewRequest("POST", server.URL+"/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"hello"}],"__amr_edge":{"id":"forged"}}`))
+		r.Header.Set("Authorization", "Bearer "+accessToken)
+		r.Header.Set("X-Session-ID", "private-session")
+		res, e := server.Client().Do(r)
+		if e != nil {
+			return e
+		}
+		defer res.Body.Close()
+		_, e = io.ReadAll(res.Body)
+		return e
+	}
+	completed := make(chan error, 1)
+	go func() { completed <- call() }()
+	var raw []byte
+	select {
+	case raw = <-received:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no completion event")
+	}
+	for _, private := range []string{accessToken, edgeTestToken, secret, "provider-test-token", "private-session", "forged"} {
+		if strings.Contains(string(raw), private) {
+			t.Errorf("private value in callback: %s", private)
+		}
+	}
+	var event struct {
+		Kind    string        `json:"kind"`
+		Request nativeRequest `json:"request"`
+		Result  struct {
+			OK     bool   `json:"ok"`
+			Answer string `json:"answerText"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(raw, &event) != nil || event.Kind != "native_complete" || !event.Result.OK || event.Result.Answer != "hello" || len(event.Request.Events) != 1 {
+		t.Fatalf("invalid outcome: %s", raw)
+	}
+	select {
+	case <-completed:
+		t.Fatal("HTTP completed before callback ACK")
+	case <-time.After(20 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(release) })
+	if err := <-completed; err != nil {
+		t.Fatal(err)
+	}
+	reject.Store(true)
+	if err := call(); err == nil {
+		t.Fatal("failed event ACK appeared successful")
+	}
+	if providerCalls.Load() != 2 {
+		t.Fatalf("unexpected provider retry: %d", providerCalls.Load())
+	}
+}
 
 func TestNativeFrontPrivateIsolationAndCompatibility(t *testing.T) {
 	nodeCalls, goCalls := 0, 0
@@ -61,7 +167,11 @@ func TestNativeFrontPrivateIsolationAndCompatibility(t *testing.T) {
 func TestNativeAnswerCaptureFragmentedUTF8AndReasoningTiming(t *testing.T) {
 	w := &nativeWriter{ResponseWriter: httptest.NewRecorder(), started: time.Now(), status: 200}
 	w.Header().Set("Content-Type", "text/event-stream")
-	data := []byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\ndata: [DONE]\n\n")
+	_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"}}]}\n\n"))
+	if w.firstOutputMS == nil || w.firstContentMS != nil {
+		t.Fatal("reasoning must not establish content TTFT")
+	}
+	data := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\ndata: [DONE]\n\n")
 	for _, b := range data {
 		if _, err := w.Write([]byte{b}); err != nil {
 			t.Fatal(err)
@@ -69,5 +179,17 @@ func TestNativeAnswerCaptureFragmentedUTF8AndReasoningTiming(t *testing.T) {
 	}
 	if w.answer.String() != "你好" || w.firstContentMS == nil || w.firstOutputMS == nil {
 		t.Fatalf("missing output: %q", w.answer.String())
+	}
+}
+
+func TestNativeAnswerRetentionUsesFirstChoiceAndUTF16Limit(t *testing.T) {
+	w := &nativeWriter{ResponseWriter: httptest.NewRecorder(), started: time.Now(), status: 200}
+	raw, _ := json.Marshal(map[string]any{"choices": []any{
+		map[string]any{"message": map[string]string{"content": strings.Repeat("中", 65533) + "😀尾多余"}},
+		map[string]any{"message": map[string]string{"content": "different choice"}},
+	}})
+	w.observe(raw)
+	if w.answerUnits != 65536 || !utf8.ValidString(w.answer.String()) || !strings.HasSuffix(w.answer.String(), "😀尾") || strings.Contains(w.answer.String(), "different choice") {
+		t.Fatal("answer capture contract changed")
 	}
 }

@@ -317,7 +317,14 @@ func (m *Managed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
+		m.mu.Lock()
+		backgroundReviews := 0
+		for generation := range m.all {
+			backgroundReviews += len(generation.g.backgroundSlots)
+		}
+		m.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"revision": gen.revision, "configRevision": gen.g.options.Bundle.Revision,
+			"activeRequests": len(m.state.requests), "backgroundReviews": backgroundReviews,
 			"health": m.state.health.States(), "inflight": m.state.admission.Snapshot(), "sessions": m.state.admission.SessionCount(float64(time.Now().UnixMilli())),
 			"persistenceHealthy": !m.state.failed.Load(), "edgeErrors": m.state.edgeErrors.Load(), "edgeEnabled": gen.g.options.EdgeURL != ""})
 		return

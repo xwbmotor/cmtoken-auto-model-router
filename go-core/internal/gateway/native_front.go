@@ -11,9 +11,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httputil"
+	"path"
+	"runtime/trace"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type nativeFrontKey struct{}
@@ -31,6 +34,7 @@ type NativeFront struct {
 }
 type nativeContext struct {
 	ConfigRevision string                        `json:"configRevision"`
+	SessionProof   string                        `json:"sessionProof"`
 	MarketSignals  map[string]map[string]float64 `json:"marketSignals"`
 }
 
@@ -51,7 +55,7 @@ func NewNativeFront(core http.Handler, nodeURL, token string) (*NativeFront, err
 }
 func (f *NativeFront) Close() { f.client.CloseIdleConnections() }
 func (f *NativeFront) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/internal/") {
+	if strings.HasPrefix(path.Clean(r.URL.Path), "/internal/") {
 		writeError(w, 404, "not_found")
 		return
 	}
@@ -63,6 +67,15 @@ func (f *NativeFront) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writer := &nativeWriter{ResponseWriter: w, started: time.Now(), status: 200}
+	if r.Header.Get("X-Request-ID") == "" || len(r.Header.Get("X-Request-ID")) > 256 {
+		id, err := newRequestID()
+		if err != nil {
+			writeError(w, 503, "request_identity_unavailable")
+			return
+		}
+		r.Header.Set("X-Request-ID", id)
+	}
+	w.Header().Set("X-Request-ID", r.Header.Get("X-Request-ID"))
 	f.core.ServeHTTP(writer, r.WithContext(context.WithValue(r.Context(), nativeFrontKey{}, f)))
 }
 func (f *NativeFront) current(ctx context.Context) (nativeContext, error) {
@@ -99,6 +112,7 @@ type nativeRequest struct {
 }
 
 func (g *Gateway) readNativeEdge(f *NativeFront, r *http.Request, body map[string]json.RawMessage) (*edgeContext, error) {
+	defer trace.StartRegion(r.Context(), "gateway.nativeContext").End()
 	c, err := f.current(r.Context())
 	if err != nil {
 		return nil, err
@@ -111,6 +125,11 @@ func (g *Gateway) readNativeEdge(f *NativeFront, r *http.Request, body map[strin
 		if err != nil || c.ConfigRevision != g.options.Bundle.Revision {
 			return nil, errors.New("edge_config_revision_mismatch")
 		}
+	}
+	proof := hmac.New(sha256.New, g.options.SemanticBucketSecret)
+	proof.Write([]byte("go-native-front-v1"))
+	if !hmac.Equal([]byte(c.SessionProof), []byte(hex.EncodeToString(proof.Sum(nil)))) {
+		return nil, errors.New("edge_session_secret_mismatch")
 	}
 	id, err := newRequestID()
 	if err != nil {
@@ -154,6 +173,8 @@ type nativeWriter struct {
 	failed                        bool
 	pending                       []byte
 	answer                        strings.Builder
+	answerUnits                   int
+	timing                        completionBody
 }
 
 func (w *nativeWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
@@ -169,6 +190,7 @@ func (w *nativeWriter) WriteHeader(status int) {
 	w.ResponseWriter.WriteHeader(status)
 }
 func (w *nativeWriter) Write(data []byte) (int, error) {
+	w.timing.startedAt = w.started
 	if w.headerMS == nil {
 		w.WriteHeader(200)
 	}
@@ -185,6 +207,8 @@ func (w *nativeWriter) Write(data []byte) (int, error) {
 				}
 				w.pending = append(w.pending, line...)
 				if bytes.HasSuffix(line, []byte{'\n'}) {
+					w.timing.observeTimingLine(strings.TrimRight(string(w.pending), "\r\n"))
+					w.firstContentMS, w.firstOutputMS = w.timing.FirstContentMS(), w.timing.FirstOutputMS()
 					if bytes.HasPrefix(w.pending, []byte("data:")) {
 						w.observe(bytes.TrimSpace(w.pending[5:]))
 					}
@@ -211,11 +235,10 @@ func (w *nativeWriter) observe(data []byte) {
 	if json.Unmarshal(data, &value) != nil {
 		return
 	}
-	if hasOutput(data) && w.firstOutputMS == nil {
-		n := time.Since(w.started).Milliseconds()
-		w.firstOutputMS = &n
-	}
-	for _, choice := range value.Choices {
+	for i, choice := range value.Choices {
+		if i > 0 {
+			break
+		}
 		content := choice.Delta.Content
 		if content == nil {
 			content = choice.Message.Content
@@ -226,6 +249,9 @@ func (w *nativeWriter) observe(data []byte) {
 			text = v
 		case []any:
 			for _, part := range v {
+				if s, ok := part.(string); ok {
+					text += s
+				}
 				if p, ok := part.(map[string]any); ok {
 					if s, ok := p["text"].(string); ok {
 						text += s
@@ -233,24 +259,36 @@ func (w *nativeWriter) observe(data []byte) {
 				}
 			}
 		}
-		if text != "" && w.firstContentMS == nil {
-			n := time.Since(w.started).Milliseconds()
-			w.firstContentMS = &n
-		}
-		if left := 65536 - w.answer.Len(); left > 0 {
-			if len(text) > left {
-				text = text[:left]
+		// Match the existing JavaScript 65,536 UTF-16-unit retention limit,
+		// keeping UTF-8 code points intact at the boundary.
+		end := 0
+		for at, r := range text {
+			units := 1
+			if r > 0xffff {
+				units = 2
 			}
-			w.answer.WriteString(text)
+			if w.answerUnits+units > 65536 {
+				break
+			}
+			w.answerUnits += units
+			end = at + utf8.RuneLen(r)
 		}
+		w.answer.WriteString(text[:end])
 	}
 }
 func (g *Gateway) finishNative(w *nativeWriter, r *http.Request, edge *edgeContext) {
+	defer trace.StartRegion(r.Context(), "gateway.nativeComplete").End()
 	if edge == nil || edge.native == nil {
+		return
+	}
+	var messages []json.RawMessage
+	if json.Unmarshal(edge.native.Body["messages"], &messages) != nil || messages == nil {
 		return
 	}
 	if !strings.HasPrefix(w.Header().Get("Content-Type"), "text/event-stream") {
 		w.observe(w.pending)
+		w.timing.observeOutputTiming(w.pending)
+		w.firstContentMS, w.firstOutputMS = w.timing.FirstContentMS(), w.timing.FirstOutputMS()
 	}
 	lastOK := len(edge.native.Events) > 0 && edge.native.Events[len(edge.native.Events)-1].Attempt.OK
 	payload, err := json.Marshal(map[string]any{"kind": "native_complete", "id": edge.ID, "configRevision": edge.ConfigRevision,
