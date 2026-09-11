@@ -430,7 +430,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		input.Runtime.NowMs = float64(time.Now().UnixMilli())
 	}
 	if g.semantic != nil && native != nil && requested == input.Policy.AutoModelID {
-		input, err = g.reviewInput(ctx, r, w, data, *native, input)
+		input, err = g.reviewInput(ctx, r, w, data, *native, input, upstreamToken)
 		if err != nil {
 			decisionError(w, err)
 			return

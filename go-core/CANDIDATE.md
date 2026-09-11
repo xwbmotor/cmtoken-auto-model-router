@@ -16,8 +16,12 @@
 
 新增 `--candidate`，必须同时指定 `--runtime --runtime-config --auth-config`，不能和 `--lab` 混用。监听仍只允许字面量loopback；只有显式候选模式允许配置外部HTTPS上游、模型资格和L3端点，HTTP仅允许loopback；禁止URL凭据、查询参数、fragment和自动重定向，禁用环境代理，正常验证TLS证书。镜像携带根CA。
 
-采用与Python分类器共享网络命名空间的独立Go容器，小模型走 `http://127.0.0.1:8788/classify`，回答/L3走现有配置的HTTPS。凭据留在目标服务器，通过受限文件和容器环境注入，不进入Git、日志或实验报告。现有Node 8787不变，候选8791不映射宿主端口。
+采用与Python分类器共享网络命名空间的独立Go容器，小模型走 `http://127.0.0.1:8788/classify`，回答/L3走现有配置的HTTPS。候选模式的L3沿用本次已鉴权的有效上游凭据：passthrough为调用方key，strict为映射后的上游key；不会回退到固定分类服务key，后台复核也保持本次凭据。凭据留在目标服务器，通过受限文件和容器环境注入，不进入Git、日志或实验报告。现有Node 8787不变，候选8791不映射宿主端口。
 
 第一阶段灰度限定操作者指定的测试请求；不随机复制真实客户请求、不发送双份回答调用。先检查真实Python、非流式、完整SSE、透传鉴权、Node配置发布、重启恢复以及现有服务健康。独立候选通过不等于全部用户流量已切换，也不证明生产容量或用户实际扣豆已对账。
 
 回滚为停止候选容器并保留其状态与配置；现有Node入口始终保留。正式替换8787或增加百分比入口需要完整发布及目标负载验收。
+
+## 目标服务器操作
+
+`deployment/candidate.py --root /opt/amr/go-candidate/<commit前缀> --image <不可变候选镜像> --revision <40位commit> prepare|start|verify|status|stop`。先上传该提交的 `src/`、`go-core/`、`package.json` 到 `source/` 并构建带对应OCI revision和根CA的镜像。脚本读取目标服务器现有配置/凭据，不修改原配置；Node控制进程以65532用户生成和发布快照。verify先做不产生模型费用的发布/Python预检，再用持久marker限制两条回答验证；中断后先检查evidence及审计，不删除marker盲目重跑。分类复核和模型回退可能产生额外上游尝试。候选不自动重启，若Python容器被重建则需重建候选以加入新的网络命名空间。

@@ -63,3 +63,13 @@ the durable result, so an errored mutation can already be durable and must be re
 with its original ID. The WAL lock remains held across checkpoint replacement.
 Windows retains the existing `syncParent` no-op; tests cover process-level restart,
 not a guarantee against arbitrary filesystem/controller power loss.
+
+Checkpoint staging uses only `<wal>.observation-checkpoint.tmp`, so repeated process
+crashes cannot accumulate random staging files. While holding the WAL writer lock,
+the writer checks that an existing staging path is a regular file with the dedicated
+`AMROBS01` header (or its interrupted-write prefix, including an empty new file).
+Unknown contents and non-regular paths are refused without alteration. The next
+checkpoint reuses this one staging file; unrelated files are never enumerated or
+removed. New checkpoints carry the same header; earlier JSON checkpoints remain
+readable. Recovery without new calls may leave the old, bounded WAL prefix intact;
+it is verified and skipped and does not duplicate either totals or index entries.

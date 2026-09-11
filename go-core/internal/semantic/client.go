@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,7 +64,7 @@ func New(o Options) (*Client, error) {
 			if _, e := labnet.Endpoint(o.LargeURL, o.Candidate); e != nil {
 				return nil, e
 			}
-			if len(o.LargeToken) < 16 {
+			if !o.Candidate && len(o.LargeToken) < 16 {
 				return nil, errors.New("laboratory semantic large token must be provided separately")
 			}
 		}
@@ -149,7 +150,7 @@ func (c *Client) smallCall(ctx context.Context, text string) (Assessment, error)
 	a.LatencyMS = time.Since(started).Milliseconds()
 	return a, e
 }
-func (c *Client) largeCall(ctx context.Context, text string, prior *Assessment) (Assessment, error) {
+func (c *Client) largeCall(ctx context.Context, text string, prior *Assessment, token string) (Assessment, error) {
 	if e := ctx.Err(); e != nil {
 		return Assessment{}, e
 	}
@@ -175,7 +176,7 @@ func (c *Client) largeCall(ctx context.Context, text string, prior *Assessment) 
 		body["response_format"] = map[string]string{"type": "json_object"}
 	}
 	started := time.Now()
-	data, e := post(ctx, c.large, c.options.LargeURL, c.options.LargeToken, body)
+	data, e := post(ctx, c.large, c.options.LargeURL, token, body)
 	if e != nil {
 		return Assessment{}, e
 	}
@@ -206,11 +207,26 @@ func (c *Client) largeCall(ctx context.Context, text string, prior *Assessment) 
 	return a, e
 }
 func (c *Client) Classify(ctx context.Context, raw []byte) (Assessment, error) {
+	return c.ClassifyWithCredential(ctx, raw, "")
+}
+
+// ClassifyWithCredential uses the already-authorized upstream credential for
+// candidate L3 calls. It is request-local, including asynchronous reviews;
+// it never mutates shared options or falls back to a server credential. Lab
+// clients retain their separate configured classifier credential contract.
+func (c *Client) ClassifyWithCredential(ctx context.Context, raw []byte, upstreamToken string) (Assessment, error) {
 	if !c.options.Policy.Enabled {
 		return Assessment{}, errors.New("semantic provider disabled")
 	}
 	if e := ctx.Err(); e != nil {
 		return Assessment{}, e
+	}
+	token := c.options.LargeToken
+	if c.options.Candidate && c.options.Policy.Provider != "http-json" && c.options.Policy.Provider != "disabled" {
+		if strings.TrimSpace(upstreamToken) == "" || strings.ContainsAny(upstreamToken, "\r\n") {
+			return Assessment{}, errors.New("semantic upstream credential required")
+		}
+		token = upstreamToken
 	}
 	select {
 	case c.guard.slots <- struct{}{}:
@@ -227,7 +243,7 @@ func (c *Client) Classify(ctx context.Context, raw []byte) (Assessment, error) {
 	case "http-json":
 		return c.smallCall(ctx, text)
 	case "openai-chat":
-		return c.largeCall(ctx, text, nil)
+		return c.largeCall(ctx, text, nil, token)
 	case "cascade":
 	default:
 		return Assessment{}, errors.New("semantic provider disabled")
@@ -247,7 +263,7 @@ func (c *Client) Classify(ctx context.Context, raw []byte) (Assessment, error) {
 		prior = &small
 	}
 	largeStarted := time.Now()
-	large, largeErr := c.largeCall(ctx, text, prior)
+	large, largeErr := c.largeCall(ctx, text, prior, token)
 	largeMS := time.Since(largeStarted).Milliseconds()
 	metadata := &Cascade{Level: "large", AcceptThreshold: c.options.Policy.SmallAcceptThreshold, SmallLatencyMS: smallMS, LargeLatencyMS: &largeMS, TotalLatencyMS: smallMS + largeMS}
 	if largeErr != nil {

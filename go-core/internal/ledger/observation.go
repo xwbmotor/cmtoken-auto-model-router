@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,10 +9,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 )
 
+const observationCheckpointMagic = "AMROBS01\n"
 const observationCheckpointEvents = 4096
 const observationPendingLimit = 20000
 const observationCheckpointMaxBytes = 32 * 1024 * 1024
@@ -56,6 +57,7 @@ func (l *Ledger) loadCheckpoint() error {
 	if err != nil {
 		return err
 	}
+	data = bytes.TrimPrefix(data, []byte(observationCheckpointMagic))
 	var r record
 	if json.Unmarshal(data, &r) != nil {
 		return errors.New("corrupt observation checkpoint")
@@ -133,14 +135,15 @@ func (l *Ledger) writeCheckpoint(cp observationCheckpoint) error {
 	if err != nil {
 		return err
 	}
+	data = append([]byte(observationCheckpointMagic), data...)
 	if len(data) > observationCheckpointMaxBytes {
 		return errors.New("observation checkpoint exceeds size limit")
 	}
-	f, err := os.CreateTemp(filepath.Dir(l.checkpointPath), ".observation-checkpoint-*")
+	name := l.checkpointPath + ".tmp"
+	f, err := openCheckpointTemp(name)
 	if err != nil {
 		return err
 	}
-	name := f.Name()
 	defer os.Remove(name)
 	if err = f.Chmod(0600); err == nil {
 		var n int
@@ -207,4 +210,31 @@ func (l *Ledger) saveCheckpoint() error {
 	}
 	l.checkpointSeq = l.seq
 	return nil
+}
+
+// One dedicated staging pathname bounds crash leftovers across repeated restarts.
+// Only recognized regular files may be reused. Empty files and magic prefixes are
+// possible if the process dies between creating the file and writing its header.
+func openCheckpointTemp(path string) (*os.File, error) {
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return nil, errors.New("checkpoint temp must be a regular file")
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(err error) (*os.File, error) { f.Close(); return nil, err }
+	var header [len(observationCheckpointMagic)]byte
+	n, err := f.ReadAt(header[:], 0)
+	if (err != nil && err != io.EOF) || string(header[:n]) != observationCheckpointMagic[:n] {
+		return fail(errors.New("unrecognized checkpoint temp file"))
+	}
+	if err = f.Truncate(0); err != nil {
+		return fail(err)
+	}
+	return f, nil
 }

@@ -208,7 +208,7 @@ func (g *Gateway) backgroundReview(run func(context.Context)) bool {
 	}()
 	return true
 }
-func (g *Gateway) reviewInput(ctx context.Context, r *http.Request, w http.ResponseWriter, raw []byte, baseAnalysis analysis.Result, base decision.Input) (decision.Input, error) {
+func (g *Gateway) reviewInput(ctx context.Context, r *http.Request, w http.ResponseWriter, raw []byte, baseAnalysis analysis.Result, base decision.Input, upstreamToken string) (decision.Input, error) {
 	base.Runtime.Inflight = g.admission.Snapshot()
 	baseDecision, e := decision.Decide(base)
 	if e != nil {
@@ -231,7 +231,7 @@ func (g *Gateway) reviewInput(ctx context.Context, r *http.Request, w http.Respo
 		review := initial
 		review.Status = "error"
 		defer func() { g.recordReview(review) }()
-		a, err := g.semantic.Classify(reviewCtx, raw)
+		a, err := g.semantic.ClassifyWithCredential(reviewCtx, raw, upstreamToken)
 		if err != nil {
 			return base, review.Status
 		}
