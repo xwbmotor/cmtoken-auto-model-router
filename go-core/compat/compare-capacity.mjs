@@ -59,7 +59,7 @@ function config(role) {
   m.benchmarkScores = null; m.minimumCompletionTokensForReliableAnswer = 0; m.contextWindow = 131072;
   m.pricingYuanPerMillionTokens = { input: 1, output: 2 };
   c.budget = { ...c.budget, enabled: budgetMode === 'protection', dailyBudgetYuan: budgetMode === 'protection' ? 10000 : 0, cacheHitRatio: 0, ledgerPath: `${dir}/node-ledger.json` };
-  if (edge) c.calibration = { ...c.calibration, enabled: false };
+  c.calibration = { ...c.calibration, enabled: false };
   validateConfig(c); return c;
 }
 const controlHeaders = { authorization: `Bearer ${credentials.M4_CONTROL_TOKEN}` };

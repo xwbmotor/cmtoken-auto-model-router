@@ -12,7 +12,7 @@ on:
       profile:
         description: Local mock workload size (never production)
         type: choice
-        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard, edge-observation-profile]
+        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard, edge-observation-profile, edge-isolation]
         default: smoke
 
 permissions:
@@ -40,7 +40,15 @@ jobs:
         env:
           PROFILE: ${{ inputs.profile || 'smoke' }}
         run: |
-          if [ "$PROFILE" = "edge-observation-profile" ]; then
+          if [ "$PROFILE" = "edge-isolation" ]; then
+            for mode in native edge edge native; do
+              index=$(( ${index:-0} + 1 )); extra=()
+              if [ "$mode" = "edge" ]; then extra=(--edge); fi
+              result="data/go-migration/capacity-isolation-$index-$mode"
+              node go-core/compat/compare-capacity.mjs "${extra[@]}" --feature-mode snapshot --budget-mode observation --binary data/go-migration/amr-core-linux --seconds 5 --rounds 1 --rates 100,300 --stream-seconds 2 --streams 2 --cpus 2 --memory-mib 512 --out "$result.json"
+              node go-core/compat/summarize-capacity.mjs "$result.json" "$result.md"
+            done
+          elif [ "$PROFILE" = "edge-observation-profile" ]; then
             result=data/go-migration/capacity-profile-edge
             node go-core/compat/compare-capacity.mjs --edge --profile --feature-mode snapshot --budget-mode observation --binary data/go-migration/amr-core-linux --seconds 5 --rounds 1 --rates 100 --stream-seconds 2 --streams 2 --cpus 2 --memory-mib 512 --out "$result.json"
             for kind in cpu block mutex; do
@@ -136,6 +144,7 @@ jobs:
           path: |
             data/go-migration/capacity-*.json
             data/go-migration/capacity-edge-*.md
+            data/go-migration/capacity-isolation-*.md
             data/go-migration/capacity-edge-sha256.txt
             data/go-migration/analysis*.pprof
             data/go-migration/analysis*.txt
