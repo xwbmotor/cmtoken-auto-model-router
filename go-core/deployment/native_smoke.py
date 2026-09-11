@@ -36,6 +36,16 @@ def request(path, body=None):
 
 
 def probe(phase, expected):
+    names = ['auto-model-router', 'amr-classifier'] + (['amr-go-core'] if phase.startswith('go') else [])
+    containers = json.loads(subprocess.check_output(['docker', 'inspect', *names]))
+    state = {item['Name']: {'network': item['HostConfig']['NetworkMode'], 'ports': item['HostConfig']['PortBindings'],
+             'health': item['State']['Health']['Status']} for item in containers}
+    (REPO / 'data/go-native-deployment' / (phase + '-ports.json')).write_text(json.dumps(state, indent=2) + '\n')
+    if phase.startswith('go'):
+        assert containers[0]['HostConfig']['PortBindings'] in [None, {}]
+        assert containers[2]['HostConfig']['PortBindings'] in [None, {}]
+        assert containers[2]['HostConfig']['NetworkMode'] == 'container:' + containers[1]['Id']
+        assert '8787/tcp' in containers[1]['HostConfig']['PortBindings']
     with request('/health/ready') as response:
         assert response.status == 200
     for stream in [False, True]:
@@ -111,7 +121,7 @@ def main():
                     'NODE_EXTRA_CA_CERTS': '/app/config/tls-cert.pem'},
                 'volumes': ['/opt/amr/config:/app/config', '/opt/amr/data:/app/data'], 'stop_grace_period': '30s'},
             'classifier': {'image': 'cmt-amr-classifier:0.0.0', 'container_name': 'amr-classifier',
-                'volumes': ['/opt/amr/config:/app/config:ro']}}, 'networks': {'default': {'internal': True}}}
+                'volumes': ['/opt/amr/config:/app/config:ro']}}, 'networks': {'default': {}}}
         write(compose_path, source)
         run(compose + ['up', '-d', '--wait', '--wait-timeout', '90'])
         expected = []
