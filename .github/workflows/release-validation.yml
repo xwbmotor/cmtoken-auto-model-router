@@ -54,7 +54,7 @@ jobs:
           version=$(node -p 'require("./package.json").version')
           docker build --build-arg "GIT_REVISION=$revision" -t "cmt-auto-model-router:$version" .
           docker build -f Dockerfile.classifier --build-arg "GIT_REVISION=$revision" -t "cmt-amr-classifier:$version" .
-          if rg -q 'image: cmt-amr-go:' docker-compose.prod.yml; then
+          if grep -q 'image: cmt-amr-go:' docker-compose.prod.yml; then
             docker build --build-arg "GIT_REVISION=$revision" -t "cmt-amr-go:$version" go-core
           fi
       - name: Run formal release checks
@@ -63,7 +63,7 @@ jobs:
         run: |
           version=$(node -p 'require("./package.json").version')
           images=("cmt-auto-model-router:$version" "cmt-amr-classifier:$version")
-          if rg -q 'image: cmt-amr-go:' docker-compose.prod.yml; then images+=("cmt-amr-go:$version"); fi
+          if grep -q 'image: cmt-amr-go:' docker-compose.prod.yml; then images+=("cmt-amr-go:$version"); fi
           mkdir -p data/release-images
           for image in "${images[@]}"; do
             archive="data/release-images/${image/:/-}.tar.gz"
@@ -75,7 +75,7 @@ jobs:
         if: always()
         with:
           name: release-validation-evidence
-          path: reports/release-*.json
+          path: reports/release-${{ inputs.tag }}-*.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: release-images
