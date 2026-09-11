@@ -46,8 +46,9 @@ for (const rate of report.parameters.rates) for (const target of ['node', 'go'])
   lines.push(`| ${target} | ${rate} | ${fmt(cpu)} | ${fmt(Math.max(...values.map(r => r.peakSampledMemoryBytes)) / 1048576)} | ${values.reduce((s, r) => s + r.throttledPeriods, 0)} | ${values.reduce((s, r) => s + r.oomKills, 0)} |`);
 }
 lines.push('', `SSE：每条持续 ${report.parameters.streamSeconds} 秒，每路径同时 ${report.parameters.streams} 条；校验逐段内容、唯一且末尾的 DONE，以及首段在结束前到达。`, '',
-  '| 路径 | 完整/发起 | 上游调用 | 首字节 P95 ms | 总时长 P95 ms | 采样峰值 MiB |', '|---|---:|---:|---:|---:|---:|');
-for (const run of report.runs.filter(r => r.streamSeconds)) lines.push(`| ${run.target} | ${run.complete}/${run.started} | ${run.upstreamCalls} | ${fmt(run.firstByteP95Ms)} | ${fmt(run.p95Ms)} | ${fmt(run.resources ? run.resources.peakSampledMemoryBytes / 1048576 : null)} |`);
+  ...(report.parameters.sseIdleSeconds ? [`非流式阶段结束后额外空闲 ${report.parameters.sseIdleSeconds} 秒，再按 direct / node / go 顺序测试 SSE。新增入口连接来自共同 TCP 转发器计数；未采集的历史数据记为缺项。`, ''] : []),
+  '| 路径 | 完整/发起 | 上游调用 | 首字节 P95 ms | 总时长 P95 ms | 采样峰值 MiB | 新增入口连接 |', '|---|---:|---:|---:|---:|---:|---:|');
+for (const run of report.runs.filter(r => r.streamSeconds)) lines.push(`| ${run.target} | ${run.complete}/${run.started} | ${run.upstreamCalls} | ${fmt(run.firstByteP95Ms)} | ${fmt(run.p95Ms)} | ${fmt(run.resources ? run.resources.peakSampledMemoryBytes / 1048576 : null)} | ${run.newIngressConnections ?? '—'} |`);
 if (report.parameters.edge) {
   assert.ok(report.decisionEvidence, 'edge decision evidence missing');
   lines.push('', '逐请求决策日志完整性：');

@@ -153,6 +153,9 @@ try {
   assert.equal(judges.filter(r => r.event === 'quality').length, 3, JSON.stringify(judges));
   assert.ok(seen.some(r => r.judge && r.content?.includes('这是流式回答')));
   const adminHeaders = { authorization: `Bearer ${admin}`, 'content-type': 'application/json' };
+  const coreState = await fetch(base + '/admin/api/go-core', { headers: adminHeaders });
+  assert.equal(coreState.status, 200);
+  assert.equal((await coreState.json()).servesTraffic, true);
   const currentRes = await fetch(base + '/admin/api/config', { headers: adminHeaders });
   const current = await currentRes.json();
   current.routing.qualityWeight += .01;

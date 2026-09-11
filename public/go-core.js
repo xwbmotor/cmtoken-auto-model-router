@@ -2,8 +2,8 @@
 export function setupGoCorePanel({ api }) {
   const page = document.querySelector('[data-tab="overview"].tab-page');
   const panel = document.createElement('section'); panel.className = 'panel'; panel.hidden = true;
-  panel.setAttribute('aria-label', '实验 Go 核心');
-  panel.innerHTML = '<div class="panel-head"><div><p class="eyebrow">迁移验证</p><h2>实验 Go 核心</h2></div><div class="actions"><button type="button" class="secondary" data-core-refresh>查询状态</button><button type="button" data-core-reload disabled>将已保存配置加载到 Go</button></div></div><p data-core-status role="status"></p><p class="hint">此操作只更新实验 Go 核心，不切换业务流量。当前页面的业务指标仍来自 Node；尚未保存的草稿不会下发。</p><details><summary>查看配置版本</summary><pre data-core-revisions style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>';
+  panel.setAttribute('aria-label', 'Go 核心');
+  panel.innerHTML = '<div class="panel-head"><div><p class="eyebrow" data-core-mode>核心服务</p><h2 data-core-title>Go 核心</h2></div><div class="actions"><button type="button" class="secondary" data-core-refresh>查询状态</button><button type="button" data-core-reload disabled>将已保存配置加载到 Go</button></div></div><p data-core-status role="status"></p><p class="hint" data-core-hint>请先查询核心服务的运行状态。</p><details><summary>查看配置版本</summary><pre data-core-revisions style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>';
   page.prepend(panel);
   const status = panel.querySelector('[data-core-status]'), versions = panel.querySelector('[data-core-revisions]');
   const reload = panel.querySelector('[data-core-reload]'), query = panel.querySelector('[data-core-refresh]');
@@ -14,6 +14,14 @@ export function setupGoCorePanel({ api }) {
     try {
       const state = await api('/admin/api/go-core');
       enabled = true; panel.hidden = false; revision = state.revision;
+      const serving = state.servesTraffic === true;
+      const title = serving ? 'Go 请求核心' : '实验 Go 核心';
+      panel.setAttribute('aria-label', title);
+      panel.querySelector('[data-core-title]').textContent = title;
+      panel.querySelector('[data-core-mode]').textContent = serving ? '业务请求链路' : '迁移验证';
+      panel.querySelector('[data-core-hint]').textContent = serving
+        ? '业务请求由 Go 处理，统计和管理由本服务汇总。发布配置会更新当前业务链路；尚未保存的草稿不会下发。'
+        : '此操作只更新实验 Go 核心，不切换业务流量。当前页面的业务指标仍来自 Node；尚未保存的草稿不会下发。';
       status.textContent = state.synchronized ? 'Go 已加载当前保存的配置。' : '已保存配置与 Go 生效配置不同，尚未同步。';
       if (state.publicationPending) status.textContent += ' 上次发布仍待核对，再次加载会先恢复；完成前请勿重启 Go。';
       reload.textContent = state.snapshotPublication ? '发布已保存配置到 Go' : '将已保存配置加载到 Go';

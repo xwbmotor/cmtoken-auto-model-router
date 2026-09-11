@@ -3490,7 +3490,7 @@ const server = http.createServer(async (req, res) => {
       if (result.status !== 200) return errorJson(res, result.status, 'Go 配置操作未成功，请重新查询生效版本', result.error);
       const { status, ...view } = result;
       res.setHeader('ETag', view.revision);
-      return json(res, 200, { ...view, savedConfigRevision: getConfigRevision(config), ...(view.configRevision ? { synchronized: view.configRevision === getConfigRevision(config) } : {}) });
+      return json(res, 200, { ...view, servesTraffic: Boolean(goCoreEdge), savedConfigRevision: getConfigRevision(config), ...(view.configRevision ? { synchronized: view.configRevision === getConfigRevision(config) } : {}) });
     } catch { return errorJson(res, 502, 'Go 管理接口不可用，请查询状态后再决定是否重试', 'core_control_unavailable'); }
   }
   if (req.method === 'GET' && url.pathname === '/admin/api/config') { res.setHeader('ETag', getConfigRevision(config)); res.setHeader('Cache-Control', 'no-store'); return json(res, 200, config); }
