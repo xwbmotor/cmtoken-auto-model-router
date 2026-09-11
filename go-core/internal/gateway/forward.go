@@ -139,7 +139,7 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 			options["include_usage"] = json.RawMessage("true")
 			outgoing["stream_options"], _ = json.Marshal(options)
 		}
-		payload, _ := json.Marshal(outgoing)
+		payload, _ := marshalValidatedObject(outgoing)
 		price := policy.Prices[model]
 		estimate := price.estimate(native.EstimatedInputTokens, native.EstimatedOutputTokens, d.ReasoningLevel, policy.CacheHitRatio)
 		attemptID := id + "-" + strconv.Itoa(index)

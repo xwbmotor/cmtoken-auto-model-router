@@ -298,11 +298,10 @@ func (g *Gateway) finishNative(w *nativeWriter, r *http.Request, edge *edgeConte
 		w.firstContentMS, w.firstOutputMS = w.timing.FirstContentMS(), w.timing.FirstOutputMS()
 	}
 	lastOK := len(edge.native.Events) > 0 && edge.native.Events[len(edge.native.Events)-1].Attempt.OK
-	payload, err := json.Marshal(map[string]any{"kind": "native_complete", "id": edge.ID, "configRevision": edge.ConfigRevision,
-		"request": edge.native, "result": map[string]any{"startedAt": w.started.UnixMilli(), "headerLatencyMs": w.headerMS,
-			"timing":     map[string]any{"firstContentMs": w.firstContentMS, "firstOutputMs": w.firstOutputMS},
-			"answerText": w.answer.String(), "ok": lastOK && !w.failed && r.Context().Err() == nil && !g.runtime.failed.Load(),
-			"clientGone": w.failed || r.Context().Err() != nil, "stream": bytes.Equal(edge.native.Body["stream"], []byte("true")), "status": w.status}})
+	payload, err := nativeCompletionPayload(edge, map[string]any{"startedAt": w.started.UnixMilli(), "headerLatencyMs": w.headerMS,
+		"timing":     map[string]any{"firstContentMs": w.firstContentMS, "firstOutputMs": w.firstOutputMS},
+		"answerText": w.answer.String(), "ok": lastOK && !w.failed && r.Context().Err() == nil && !g.runtime.failed.Load(),
+		"clientGone": w.failed || r.Context().Err() != nil, "stream": bytes.Equal(edge.native.Body["stream"], []byte("true")), "status": w.status})
 	if err == nil {
 		err = g.postEdge(payload)
 	}
@@ -310,4 +309,31 @@ func (g *Gateway) finishNative(w *nativeWriter, r *http.Request, edge *edgeConte
 		g.runtime.edgeErrors.Add(1)
 		panic(http.ErrAbortHandler)
 	}
+}
+
+func nativeCompletionPayload(edge *edgeContext, result map[string]any) ([]byte, error) {
+	body, err := marshalValidatedObject(edge.native.Body)
+	if err != nil {
+		return nil, err
+	}
+	request, err := json.Marshal(struct {
+		Metadata nativeMetadata `json:"metadata"`
+		Events   []edgeEvent    `json:"events"`
+	}{edge.native.Metadata, edge.native.Events})
+	if err != nil {
+		return nil, err
+	}
+	// Both envelopes are freshly encoded objects without the appended field.
+	// Insert the already validated body without JSON reformatting the history.
+	request = append(request[:len(request)-1], `,"body":`...)
+	request = append(request, body...)
+	request = append(request, '}')
+	payload, err := json.Marshal(map[string]any{"kind": "native_complete", "id": edge.ID,
+		"configRevision": edge.ConfigRevision, "result": result})
+	if err != nil {
+		return nil, err
+	}
+	payload = append(payload[:len(payload)-1], `,"request":`...)
+	payload = append(payload, request...)
+	return append(payload, '}'), nil
 }
