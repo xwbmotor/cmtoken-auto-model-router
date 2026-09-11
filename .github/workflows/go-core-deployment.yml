@@ -25,6 +25,8 @@ jobs:
           sudo chown -R 65532:65532 data/go-deployment/config data/go-deployment/ledger
       - name: Build and test isolated containers
         run: bash go-core/deployment/smoke.sh
+      - name: Exercise native Compose cutover and rollback with synthetic services
+        run: sudo -E python3 go-core/deployment/native_smoke.py
       - name: Capture container state and logs
         if: always()
         run: |
@@ -36,4 +38,6 @@ jobs:
         if: always()
         with:
           name: go-core-deployment-evidence
-          path: data/go-deployment/evidence/
+          path: |
+            data/go-deployment/evidence/
+            data/go-native-deployment/
