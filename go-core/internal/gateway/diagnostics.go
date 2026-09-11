@@ -18,11 +18,12 @@ type processDiagnostics struct {
 }
 
 type runtimeDiagnostics struct {
-	ActiveRequests    int `json:"activeRequests"`
-	RequestCapacity   int `json:"requestCapacity"`
-	RetainedAttempts  int `json:"retainedAttempts"`
-	TotalAttempts     int `json:"totalAttempts"`
-	AttemptCacheLimit int `json:"attemptCacheLimit"`
+	ActiveRequests    int    `json:"activeRequests"`
+	RequestCapacity   int    `json:"requestCapacity"`
+	RetainedAttempts  int    `json:"retainedAttempts"`
+	TotalAttempts     int    `json:"totalAttempts"`
+	AttemptCacheLimit int    `json:"attemptCacheLimit"`
+	CostStateMode     string `json:"costStateMode"`
 }
 
 type generationDiagnostics struct {
@@ -42,9 +43,13 @@ func (g *Gateway) diagnostics(generations *generationDiagnostics) diagnostics {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 	cached, total, limit := g.runtime.ledger.AttemptStorage()
+	mode := "observation"
+	if g.options.Bundle.Runtime.BudgetEnabled {
+		mode = "protected"
+	}
 	return diagnostics{
 		Process:     processDiagnostics{Scope: "process", PID: os.Getpid(), Goroutines: runtime.NumGoroutine(), HeapAllocBytes: mem.HeapAlloc, HeapInuseBytes: mem.HeapInuse, HeapObjects: mem.HeapObjects, NumGC: mem.NumGC},
-		Runtime:     runtimeDiagnostics{ActiveRequests: len(g.requests), RequestCapacity: cap(g.requests), RetainedAttempts: cached, TotalAttempts: total, AttemptCacheLimit: limit},
+		Runtime:     runtimeDiagnostics{ActiveRequests: len(g.requests), RequestCapacity: cap(g.requests), RetainedAttempts: cached, TotalAttempts: total, AttemptCacheLimit: limit, CostStateMode: mode},
 		Generations: generations,
 	}
 }

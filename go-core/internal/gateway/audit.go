@@ -12,6 +12,17 @@ import (
 // The ledger lock must already be held. Audit is supplementary to the WAL;
 // an incomplete last audit line is recoverable, a damaged complete line is not.
 func openAudit(path string) (*auditJournal, error) {
+	return openAuditWithOptions(path, AuditOptions{})
+}
+
+func openAuditWithOptions(path string, options AuditOptions) (*auditJournal, error) {
+	options, e := options.normalized()
+	if e != nil {
+		return nil, e
+	}
+	if e = auditRegular(path); e != nil {
+		return nil, e
+	}
 	f, e := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if e != nil {
 		return nil, e
@@ -43,7 +54,22 @@ func openAudit(path string) (*auditJournal, error) {
 	if e = f.Sync(); e != nil {
 		return fail(e)
 	}
-	j := &auditJournal{file: f, queue: make(chan *auditEntry, 256), stopped: make(chan struct{}), syncFile: f.Sync}
+	j := &auditJournal{file: f, path: path, size: offset, options: options, queue: make(chan *auditEntry, 256), stopped: make(chan struct{})}
+	j.syncFile = func() error { return j.file.Sync() }
+	info, e := f.Stat()
+	if e != nil {
+		return fail(e)
+	}
+	j.activeSince = info.ModTime()
+	if e = j.recoverRotation(); e != nil {
+		return fail(e)
+	}
+	if e = j.prune(options.MaxArchives); e != nil {
+		return fail(e)
+	}
+	if e = auditSyncDir(path); e != nil {
+		return fail(e)
+	}
 	go j.writeLoop()
 	return j, nil
 }

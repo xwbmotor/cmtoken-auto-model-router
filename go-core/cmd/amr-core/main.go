@@ -81,11 +81,15 @@ func main() {
 	}
 	flags := flag.NewFlagSet("amr-core", flag.ExitOnError)
 	lab := flags.Bool("lab", false, "acknowledge experimental loopback-only milestone")
+	candidate := flags.Bool("candidate", false, "explicit loopback-listening candidate with configured HTTPS upstreams")
 	profileDir := flags.String("lab-profile-dir", "", "optional NEW directory for CPU, blocking and execution trace diagnostics")
 	runtimeMode := flags.Bool("runtime", false, "enable M3 durable runtime with production auth contracts (still loopback only)")
 	authFile := flags.String("auth-config", "", "optional protected local auth JSON, re-read on explicit hot reload")
 	runtimeConfig := flags.String("runtime-config", "", "local exported runtime snapshot; no Node adapter required, re-read on explicit reload")
 	ledgerPath := flags.String("ledger", "", "dedicated Go ledger path; never share a live Node ledger")
+	auditMaxBytes := flags.Int64("audit-max-bytes", 16<<20, "maximum active audit segment bytes")
+	auditArchives := flags.Int("audit-max-archives", 8, "maximum retained audit archive segments")
+	auditAge := flags.Duration("audit-max-age", 7*24*time.Hour, "maximum local audit archive age; collect before expiration")
 	nativeAnalysis := flags.Bool("native-analysis", false, "compute L1 and capacity in Go with a startup policy snapshot")
 	nativeSemantics := flags.Bool("native-semantics", false, "enable native semantic review against explicit local endpoints")
 	smallURL := flags.String("semantic-small", "", "local http-json classifier endpoint")
@@ -102,7 +106,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "--runtime-config requires --runtime")
 		os.Exit(2)
 	}
-	if !*lab {
+	if *candidate && (*lab || !*runtimeMode || *runtimeConfig == "" || *authFile == "") {
+		fmt.Fprintln(os.Stderr, "--candidate requires --runtime, --runtime-config and --auth-config; cannot combine with --lab")
+		os.Exit(2)
+	}
+	if !*lab && !*candidate {
 		fmt.Fprintln(os.Stderr, "Requires --lab; this milestone is not production-ready")
 		os.Exit(2)
 	}
@@ -128,7 +136,7 @@ func main() {
 			os.Exit(2)
 		}
 	}
-	options := gateway.Options{NativeAnalysis: *nativeAnalysis, NativeSemantics: *nativeSemantics, AssessorURL: *assessor, UpstreamURL: *upstream,
+	options := gateway.Options{Candidate: *candidate, NativeAnalysis: *nativeAnalysis, NativeSemantics: *nativeSemantics, AssessorURL: *assessor, UpstreamURL: *upstream,
 		Tenants: tenants, ScopeURL: *scopeURL, ScopeTTL: 60 * time.Second, ScopeTimeout: 3 * time.Second,
 		SemanticBucketSecret: []byte(os.Getenv("AMR_GO_SEMANTIC_BUCKET_SECRET")),
 		SemanticOptions:      semantic.Options{SmallURL: *smallURL, LargeURL: *largeURL, SmallToken: os.Getenv("AMR_GO_SEMANTIC_SMALL_TOKEN"), LargeToken: os.Getenv("AMR_GO_SEMANTIC_LARGE_TOKEN"), MaxConcurrent: 8, MaxLargeCalls: *largeCalls, MaxLargeTokens: *largeTokens},
@@ -139,7 +147,7 @@ func main() {
 		Close()
 	}
 	if *runtimeMode {
-		g, err = gateway.NewManaged(gateway.ManagedOptions{Gateway: options, AuthFile: *authFile, RuntimeConfigFile: *runtimeConfig, LedgerPath: *ledgerPath, Auth: auth.Config{Mode: os.Getenv("ROUTER_KEY_MODE"), AccessToken: os.Getenv("ROUTER_ACCESS_KEY"), UpstreamToken: firstNonempty(os.Getenv("UPSTREAM_API_KEY"), os.Getenv("MAAS_API_KEY")), AdminToken: os.Getenv("AMR_GO_ADMIN_TOKEN")}})
+		g, err = gateway.NewManaged(gateway.ManagedOptions{Gateway: options, AuthFile: *authFile, RuntimeConfigFile: *runtimeConfig, LedgerPath: *ledgerPath, Audit: gateway.AuditOptions{MaxBytes: *auditMaxBytes, MaxArchives: *auditArchives, MaxAge: *auditAge}, Auth: auth.Config{Mode: os.Getenv("ROUTER_KEY_MODE"), AccessToken: os.Getenv("ROUTER_ACCESS_KEY"), UpstreamToken: firstNonempty(os.Getenv("UPSTREAM_API_KEY"), os.Getenv("MAAS_API_KEY")), AdminToken: os.Getenv("AMR_GO_ADMIN_TOKEN")}})
 	} else {
 		g, err = gateway.New(options)
 	}
@@ -170,7 +178,7 @@ func main() {
 	if *runtimeMode {
 		milestone = "m3"
 	}
-	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"listen": listener.Addr().String(), "milestone": milestone, "productionReady": false, "gomaxprocs": runtime.GOMAXPROCS(0), "logicalCPUs": runtime.NumCPU(), "goVersion": runtime.Version(), "localRuntimeSnapshot": *runtimeConfig != ""})
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"listen": listener.Addr().String(), "milestone": milestone, "productionReady": false, "candidate": *candidate, "gomaxprocs": runtime.GOMAXPROCS(0), "logicalCPUs": runtime.NumCPU(), "goVersion": runtime.Version(), "localRuntimeSnapshot": *runtimeConfig != ""})
 	if err = server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, "laboratory server failed")
 		os.Exit(1)

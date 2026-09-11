@@ -25,6 +25,7 @@ type ManagedOptions struct {
 	AuthFile          string
 	RuntimeConfigFile string
 	LedgerPath        string
+	Audit             AuditOptions
 }
 type generationConfig struct {
 	Auth   auth.Config `json:"auth"`
@@ -40,16 +41,17 @@ type generation struct {
 // Managed owns the one authoritative runtime and atomically publishes complete
 // gateway generations. Existing requests retain their old credential/policy view.
 type Managed struct {
-	options  ManagedOptions
-	mu       sync.Mutex
-	reloadMu sync.Mutex
-	active   *generation
-	all      map[*generation]bool
-	closing  bool
-	workers  sync.WaitGroup
-	state    *runtimeState
-	store    *liveconfig.Store[generationConfig]
-	zone     string
+	options       ManagedOptions
+	mu            sync.Mutex
+	reloadMu      sync.Mutex
+	active        *generation
+	all           map[*generation]bool
+	closing       bool
+	workers       sync.WaitGroup
+	state         *runtimeState
+	store         *liveconfig.Store[generationConfig]
+	zone          string
+	budgetEnabled bool
 }
 
 func validateGeneration(raw []byte) (generationConfig, error) {
@@ -150,11 +152,12 @@ func NewManaged(o ManagedOptions) (*Managed, error) {
 	}
 	c = snapshot.Value
 	m.zone = c.Bundle.Runtime.TimeZone
-	l, e := ledger.Open(o.LedgerPath, ledger.Options{TimeZone: m.zone})
+	m.budgetEnabled = c.Bundle.Runtime.BudgetEnabled
+	l, e := ledger.Open(o.LedgerPath, ledger.Options{TimeZone: m.zone, Observation: !m.budgetEnabled})
 	if e != nil {
-		return nil, errors.New("durable ledger unavailable (locked, corrupt, or inaccessible)")
+		return nil, errors.New("cost state unavailable (locked, corrupt, inaccessible, or storage mode mismatch; preserve existing files)")
 	}
-	audit, e := openAudit(o.LedgerPath + ".events.jsonl")
+	audit, e := openAuditWithOptions(o.LedgerPath+".events.jsonl", o.Audit)
 	if e != nil {
 		l.Close()
 		return nil, errors.New("audit journal unavailable")
@@ -194,6 +197,9 @@ func (m *Managed) Reload(expected string) (string, error) {
 	}
 	if c.Bundle.Runtime.TimeZone != m.zone {
 		return "", errors.New("billing time zone requires controlled restart")
+	}
+	if c.Bundle.Runtime.BudgetEnabled != m.budgetEnabled {
+		return "", errors.New("budget protection mode requires controlled restart and a separate compatible state path")
 	}
 	raw, e := json.Marshal(c)
 	if e != nil {

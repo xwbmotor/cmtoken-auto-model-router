@@ -96,6 +96,9 @@ func (l *Ledger) flush(group []*mutation) {
 				}
 			}
 		}
+		if err == nil && l.observation && l.seq-l.checkpointSeq >= observationCheckpointEvents {
+			err = l.saveCheckpoint()
+		}
 		if err != nil {
 			// Never expose staged totals or acknowledge a mutation on a failed
 			// write/sync. Recovery decides the durable prefix on the next Open.

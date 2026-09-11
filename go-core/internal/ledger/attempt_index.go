@@ -161,6 +161,9 @@ func (l *Ledger) lookup(id string) (attempt, bool, error) {
 }
 
 func (l *Ledger) trimCache() {
+	if l.observation {
+		return
+	}
 	if len(l.attempts) > attemptCacheLimit {
 		// Replace the map to release its backing storage as well as its entries.
 		// Called only after every staged record has reached the derived index.

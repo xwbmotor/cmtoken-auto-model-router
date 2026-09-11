@@ -16,6 +16,7 @@ import (
 )
 
 type Options struct {
+	Candidate                                  bool
 	Guard                                      *Guard
 	Billing                                    func(model string, input, output float64) (func(*Usage), error)
 	Policy                                     Policy
@@ -54,12 +55,12 @@ func New(o Options) (*Client, error) {
 	}
 	if o.Policy.Enabled && o.Policy.Provider != "disabled" {
 		if o.Policy.Provider != "openai-chat" {
-			if _, e := labnet.URL(o.SmallURL); e != nil {
+			if _, e := labnet.Endpoint(o.SmallURL, o.Candidate); e != nil {
 				return nil, e
 			}
 		}
 		if o.Policy.Provider != "http-json" {
-			if _, e := labnet.URL(o.LargeURL); e != nil {
+			if _, e := labnet.Endpoint(o.LargeURL, o.Candidate); e != nil {
 				return nil, e
 			}
 			if len(o.LargeToken) < 16 {

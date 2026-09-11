@@ -32,6 +32,7 @@ import (
 const MaxBodyBytes = 2 << 20
 
 type Options struct {
+	Candidate            bool
 	Bundle               *Bundle
 	Authenticator        *auth.Authenticator
 	Shared               *runtimeState
@@ -95,7 +96,10 @@ func New(o Options) (*Gateway, error) {
 	} else if !o.NativeAnalysis {
 		return nil, errors.New("native features require native analysis")
 	}
-	upstream, err := LoopbackURL(o.UpstreamURL)
+	if o.Candidate && (!nativeFeatures || o.Authenticator == nil || o.Shared == nil) {
+		return nil, errors.New("candidate requires managed native runtime and authentication")
+	}
+	upstream, err := labnet.Endpoint(o.UpstreamURL, o.Candidate)
 	if err != nil {
 		return nil, err
 	}
@@ -216,6 +220,7 @@ func New(o Options) (*Gateway, error) {
 			g.options.SemanticBucketSecret = append([]byte{}, g.sessionSecret...)
 		}
 		opts := o.SemanticOptions
+		opts.Candidate = o.Candidate
 		opts.Policy = p
 		if g.runtime != nil {
 			opts.Billing = g.semanticBilling
@@ -228,7 +233,7 @@ func New(o Options) (*Gateway, error) {
 		}
 	}
 	if o.ScopeURL != "" {
-		g.tenantScope, err = scope.New(o.ScopeURL, o.ScopeTTL, o.ScopeTimeout)
+		g.tenantScope, err = scope.NewCandidate(o.ScopeURL, o.ScopeTTL, o.ScopeTimeout, o.Candidate)
 		if err != nil {
 			g.Close()
 			return nil, err

@@ -39,7 +39,11 @@ type Cache struct {
 }
 
 func New(endpoint string, ttl, timeout time.Duration) (*Cache, error) {
-	if _, e := labnet.URL(endpoint); e != nil {
+	return NewCandidate(endpoint, ttl, timeout, false)
+}
+
+func NewCandidate(endpoint string, ttl, timeout time.Duration, candidate bool) (*Cache, error) {
+	if _, e := labnet.Endpoint(endpoint, candidate); e != nil {
 		return nil, e
 	}
 	if ttl <= 0 || ttl > 24*time.Hour || timeout <= 0 || timeout > time.Minute {

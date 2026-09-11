@@ -1,9 +1,13 @@
 package gateway
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"sync"
+	"time"
 )
 
 // Audit records keep their existing line format. Only already-queued records
@@ -14,17 +18,24 @@ type auditEntry struct {
 	close  bool
 }
 type auditJournal struct {
-	file     *os.File
-	queue    chan *auditEntry
-	submitMu sync.RWMutex
-	closing  bool
-	stopped  chan struct{}
-	closeErr error
-	failure  error // owned by writeLoop; a failed journal never resumes writes
-	syncFile func() error
+	file        *os.File
+	queue       chan *auditEntry
+	submitMu    sync.RWMutex
+	closing     bool
+	stopped     chan struct{}
+	closeErr    error
+	failure     error // owned by writeLoop; a failed journal never resumes writes
+	syncFile    func() error
+	path        string
+	size        int64
+	options     AuditOptions
+	activeSince time.Time
 }
 
 func (j *auditJournal) append(data []byte) error {
+	if len(data) == 0 || len(data) > 16384 || data[len(data)-1] != '\n' || bytes.Contains(data[:len(data)-1], []byte{'\n'}) || !json.Valid(data[:len(data)-1]) {
+		return errors.New("invalid audit record")
+	}
 	e := &auditEntry{data: data, result: make(chan error, 1)}
 	j.submitMu.RLock()
 	if j.closing {
@@ -48,8 +59,18 @@ func (j *auditJournal) Close() error {
 }
 
 func (j *auditJournal) writeLoop() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
 	for {
-		first := <-j.queue
+		var first *auditEntry
+		select {
+		case first = <-j.queue:
+		case <-ticker.C:
+			if j.failure == nil {
+				j.failure = j.maintain()
+			}
+			continue
+		}
 		closing := first.close
 		group := make([]*auditEntry, 0, 64)
 		if !closing {
@@ -76,7 +97,18 @@ func (j *auditJournal) writeLoop() {
 				for _, e := range group {
 					data = append(data, e.data...)
 				}
-				n, err := j.file.Write(data)
+				var err error
+				if j.size > 0 && j.size+int64(len(data)) > j.options.MaxBytes {
+					err = j.rotate()
+				}
+				var n int
+				if err == nil {
+					if j.size == 0 {
+						j.activeSince = time.Now()
+					}
+					n, err = j.file.Write(data)
+					j.size += int64(n)
+				}
 				if err == nil && n != len(data) {
 					err = io.ErrShortWrite
 				}

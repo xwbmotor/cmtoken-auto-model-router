@@ -24,3 +24,42 @@ The WAL and disk index still grow with history; disk compaction and bounded star
 `ImportOpeningBalance(sourceID, date string, actual, estimated, pending int64) error` accepts the lowercase SHA256 digest of a frozen source ledger and integer microyuan totals. It imports exactly once into an empty WAL. Repeating the identical tuple remains idempotent after restart and after subsequent business records; changing any field is rejected. Date must equal the ledger's current accounting date. Stop the Node writer and verify date/totals before invoking this helper. It does not read source files or perform automatic production migration.
 
 Map Node `settledActualSpendYuan` to actual, `settledEstimatedSpendYuan` to estimated, and `estimatedSpendYuan` to pending. All imported values are attributed to `legacy`; old pending goes into estimated settled spending because Node has no durable attempt identity and cannot safely be released. Reject negative, malformed, stale-day or overflowing inputs. Keep the frozen source file as migration evidence. Do not run a second independent ledger against the same budget after migration.
+
+## Observation mode (budget disabled)
+
+`Options{Observation: true}` uses a dedicated journal plus `.observation-checkpoint`.
+It rejects positive `dailyLimit` values. The default protected mode remains unchanged,
+with permanent historical attempt identity semantics. Observation statistics are
+operational cost estimates, not user balances or compute-bean billing records.
+
+An empty observation journal gets a checksummed mode checkpoint before accepting
+requests. A nonempty protected journal cannot be implicitly converted. A protected
+open refuses an observation checkpoint. Switching modes therefore requires controlled
+restart and separately retained paths; never delete the old protected history to
+force a conversion.
+
+After every 4096 committed events (up to one additional 64-request writer batch),
+the writer atomically replaces a synced checkpoint, syncs its parent directory on
+Unix, then truncates and syncs the original locked WAL. The checkpoint contains the
+sequence, current-day totals/source aggregates, opening import identity, every
+unresolved attempt, and completed attempts touched in the last 4096 events. The
+derived attempt index is rebuilt. WAL and index disk growth is thus bounded for
+ordinary traffic; unresolved attempts are never silently released. At 20000 pending
+attempts, new reservations fail closed with `ErrPendingLimit`; settlement/release
+remain available. Pending amounts survive day rollover; spend aggregates roll over
+according to the configured accounting timezone. This is not permanent raw history:
+ship request logs to the existing collector if historical analysis is required.
+
+Idempotency is guaranteed for all unresolved attempts and the retained recent
+window. Older terminal IDs can be forgotten after checkpointing; callers must
+always use globally fresh IDs and must not retry ancient completed attempts as new
+reservations. Recovered recent duplicate settlements do not add spend twice.
+
+Recovery verifies checkpoint checksums and retained state, rebuilds the index,
+validates any old WAL prefix left by a crash before truncation, skips checkpointed
+sequence numbers, and requires contiguous new records. A checkpoint, truncate,
+sync, or index failure poisons the writer and returns an error; reopening determines
+the durable result, so an errored mutation can already be durable and must be retried
+with its original ID. The WAL lock remains held across checkpoint replacement.
+Windows retains the existing `syncParent` no-op; tests cover process-level restart,
+not a guarantee against arbitrary filesystem/controller power loss.

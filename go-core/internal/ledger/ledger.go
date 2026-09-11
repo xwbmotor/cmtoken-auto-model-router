@@ -29,8 +29,9 @@ var (
 )
 
 type Options struct {
-	TimeZone string
-	Now      func() time.Time
+	Observation bool
+	TimeZone    string
+	Now         func() time.Time
 }
 type Totals struct {
 	ActualMicros    int64 `json:"actualMicros"`
@@ -46,6 +47,7 @@ type Snapshot struct {
 	Sources         map[string]Totals `json:"sources"`
 }
 type attempt struct {
+	LastSeq   uint64
 	Estimate  *int64
 	Source    string
 	State     string
@@ -76,23 +78,26 @@ type record struct {
 	SHA256 string          `json:"sha256"`
 }
 type Ledger struct {
-	mu       sync.Mutex
-	file     *os.File
-	now      func() time.Time
-	zone     *time.Location
-	seq      uint64
-	snap     Snapshot
-	attempts map[string]attempt
-	index    *attemptIndex
-	broken   bool
-	opening  *OpeningBalance
-	queue    chan *mutation
-	submitMu sync.RWMutex
-	closing  bool
-	stopped  chan struct{}
-	closeErr error
-	batch    *commitBatch
-	syncFile func() error
+	observation    bool
+	checkpointSeq  uint64
+	checkpointPath string
+	mu             sync.Mutex
+	file           *os.File
+	now            func() time.Time
+	zone           *time.Location
+	seq            uint64
+	snap           Snapshot
+	attempts       map[string]attempt
+	index          *attemptIndex
+	broken         bool
+	opening        *OpeningBalance
+	queue          chan *mutation
+	submitMu       sync.RWMutex
+	closing        bool
+	stopped        chan struct{}
+	closeErr       error
+	batch          *commitBatch
+	syncFile       func() error
 }
 
 func Open(path string, options Options) (*Ledger, error) {
@@ -118,14 +123,22 @@ func Open(path string, options Options) (*Ledger, error) {
 		f.Close()
 		return nil, err
 	}
-	l := &Ledger{file: f, now: options.Now, zone: zone, attempts: make(map[string]attempt)}
+	l := &Ledger{file: f, now: options.Now, zone: zone, attempts: make(map[string]attempt), observation: options.Observation, checkpointPath: path + ".observation-checkpoint"}
+	if err = l.loadCheckpoint(); err != nil {
+		unlockFile(f)
+		f.Close()
+		return nil, err
+	}
 	l.index, err = openAttemptIndex(path + ".attempt-index")
 	if err != nil {
 		unlockFile(f)
 		f.Close()
 		return nil, err
 	}
-	if err = l.replay(); err != nil {
+	if err = l.seedIndex(); err == nil {
+		err = l.replay()
+	}
+	if err != nil {
 		l.index.file.Close()
 		unlockFile(f)
 		f.Close()
@@ -200,6 +213,9 @@ func (l *Ledger) Reserve(id string, estimate *int64, dailyLimit int64, source st
 		if l.broken || l.file == nil {
 			return ErrClosed
 		}
+		if l.observation && dailyLimit > 0 {
+			return ErrObservationMode
+		}
 		if id == "" || len(id) > 512 || !utf8.ValidString(id) || !validAmount(estimate) {
 			return errors.New("invalid reservation")
 		}
@@ -215,6 +231,9 @@ func (l *Ledger) Reserve(id string, estimate *int64, dailyLimit int64, source st
 				return nil
 			}
 			return ErrConflict
+		}
+		if l.observation && l.snap.PendingReserves >= observationPendingLimit {
+			return ErrPendingLimit
 		}
 		l.rollover(l.today())
 		if dailyLimit > 0 {
@@ -304,7 +323,11 @@ func (l *Ledger) RetainedAttempts() int {
 func (l *Ledger) AttemptStorage() (cached, total, limit int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.attempts), l.index.count, attemptCacheLimit
+	limit = attemptCacheLimit
+	if l.observation {
+		limit = observationPendingLimit + 2*observationCheckpointEvents + 64
+	}
+	return len(l.attempts), l.index.count, limit
 }
 
 func (l *Ledger) Snapshot() Snapshot {
@@ -387,7 +410,7 @@ func (l *Ledger) apply(e event) error {
 		if e.Amount == nil {
 			l.snap.Unpriced++
 		}
-		l.attempts[e.ID] = attempt{Estimate: copyAmount(e.Amount), Source: e.Source, State: "reserve"}
+		l.attempts[e.ID] = attempt{LastSeq: e.Seq, Estimate: copyAmount(e.Amount), Source: e.Source, State: "reserve"}
 		return nil
 	}
 	a, ok, lookupErr := l.lookup(e.ID)
@@ -439,6 +462,7 @@ func (l *Ledger) apply(e event) error {
 	l.snap.ActualMicros = actual
 	l.snap.EstimatedMicros = estimated
 	l.snap.Sources[a.Source] = t
+	a.LastSeq = e.Seq
 	a.State = e.Op
 	a.Actual = copyAmount(e.Amount)
 	a.FromUsage = e.FromUsage
@@ -489,6 +513,7 @@ func (l *Ledger) commit(e event) error {
 func (l *Ledger) replay() error {
 	reader := bufio.NewReaderSize(l.file, 64*1024+1)
 	var offset int64
+	var previous uint64
 	for {
 		line, err := reader.ReadSlice('\n')
 		if err == io.EOF {
@@ -522,11 +547,16 @@ func (l *Ledger) replay() error {
 			return fmt.Errorf("ledger checksum mismatch at byte %d", offset)
 		}
 		var e event
-		if json.Unmarshal(r.Event, &e) != nil || e.Version != 1 || e.Seq != l.seq+1 {
+		if json.Unmarshal(r.Event, &e) != nil || e.Version != 1 || e.Seq == 0 || (previous != 0 && e.Seq != previous+1) || (e.Seq > l.checkpointSeq && e.Seq != l.seq+1) {
 			return fmt.Errorf("invalid ledger sequence at byte %d", offset)
 		}
 		if _, err = time.Parse("2006-01-02", e.Date); err != nil {
 			return errors.New("invalid ledger date")
+		}
+		previous = e.Seq
+		if e.Seq <= l.checkpointSeq {
+			offset += int64(len(line))
+			continue
 		}
 		if err = l.apply(e); err != nil {
 			return fmt.Errorf("ledger replay: %w", err)
@@ -539,6 +569,9 @@ func (l *Ledger) replay() error {
 		}
 		l.seq = e.Seq
 		offset += int64(len(line))
+	}
+	if l.observation && l.snap.PendingReserves > observationPendingLimit {
+		return ErrPendingLimit
 	}
 	_, err := l.file.Seek(0, io.SeekEnd)
 	return err
