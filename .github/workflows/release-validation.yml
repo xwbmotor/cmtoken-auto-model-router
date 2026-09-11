@@ -34,6 +34,15 @@ jobs:
           "$RUNNER_TEMP/release-python/bin/python" -m playwright install --with-deps chromium
           echo "$RUNNER_TEMP/release-python/bin" >> "$GITHUB_PATH"
           echo "CLASSIFIER_PYTHON=$RUNNER_TEMP/release-python/bin/python" >> "$GITHUB_ENV"
+      - name: Validate deployment template with synthetic environment
+        env:
+          ADMIN_TOKEN: synthetic-release-admin-000000000000000000000000
+          METRICS_TOKEN: synthetic-release-metrics-0000000000000000000000
+          SEMANTIC_BUCKET_SECRET: synthetic-release-bucket-0000000000000000000000
+          AMR_GO_ADMIN_TOKEN: synthetic-release-go-admin-00000000000000000000
+          AMR_GO_EDGE_TOKEN: synthetic-release-go-edge-000000000000000000000
+          MAAS_BASE_URL: https://fixture.invalid/v1
+        run: docker compose -f docker-compose.prod.yml config --quiet
       - name: Build images bound to the release commit
         run: |
           revision=$(git rev-parse HEAD)

@@ -1,26 +1,32 @@
-# 生产部署（双服务）：docker compose -f docker-compose.prod.yml up -d
-# 首次部署前：在宿主机准备 /opt/amr/config/router.json（含上游地址与凭证策略）和空 /opt/amr/data/
-# 镜像：docker load -i amr-image-<ver>.tar.gz && docker load -i amr-classifier-<ver>.tar.gz（或私有 registry）
-#
-# 凭证策略（三选一，见 docs/使用说明.md「环境变量」）：
-# - passthrough（默认，本文件）：客户端直接持平台 MaaS key，路由器原样透传，计费落调用方租户。
-#   无需 MAAS_API_KEY；ROUTER_ACCESS_KEY 可省（上游 401 由客户端 key 真伪决定）。
-# - strict：取消注释 ROUTER_ACCESS_KEY + MAAS_API_KEY，客户端持 ROUTER_ACCESS_KEY。
+# 原生 Go 生产拓扑：Go 承接 8787，Node 管理服务仅监听 loopback 8789。
+# 仅支持 passthrough 且 budget.enabled=false；三个服务必须使用同一发布提交的镜像。
+# 首次从 Node 迁入：先运行 go-core/deployment/prepare_native.py，使用其受保护的 compose.json。
+# 该脚本保留生产环境与配置并生成内部凭据、go-auth.json / go-runtime.json；不要直接覆盖生产文件。
+# 此模板供新安装复现拓扑：内部 token 必须匹配 go-auth.json，/state 目录归 UID 1000。
+# 重建 classifier 时须同时重建依附其网络命名空间的 Node/Go。
 services:
   auto-model-router:
-    image: cmt-auto-model-router:0.14.5
+    image: cmt-auto-model-router:0.14.6
     container_name: auto-model-router
     restart: unless-stopped
-    hostname: auto-model-router
+    network_mode: service:classifier
     depends_on:
       classifier:
         condition: service_healthy
-    ports:
-      - "0.0.0.0:8787:8787"          # 仅内网放行；如走反代/网关，可改 127.0.0.1:8787:8787
+      go-core:
+        condition: service_healthy
     environment:
+      HOST: 127.0.0.1
+      PORT: 8789
+      AMR_GO_NATIVE_FRONT: "1"
+      AMR_GO_CHAT_URL: http://127.0.0.1:8791/v1/chat/completions
+      AMR_GO_ADMIN_URL: http://127.0.0.1:8791
+      AMR_GO_ADMIN_TOKEN: ${AMR_GO_ADMIN_TOKEN:?internal admin token required}
+      AMR_GO_EDGE_TOKEN: ${AMR_GO_EDGE_TOKEN:?internal edge token required}
+      AMR_GO_RUNTIME_CONFIG: /app/config/go-runtime.json
       NODE_ENV: production
       # ⚠️ 凭证全部经 env 注入，不进镜像、不进 git
-      ROUTER_KEY_MODE: passthrough    # passthrough=客户端 MaaS key 透传 | strict=ROUTER_ACCESS_KEY
+      ROUTER_KEY_MODE: passthrough    # 客户端 MaaS key 透传
       ADMIN_TOKEN: ${ADMIN_TOKEN}          # 管理页登录 token（非本机绑定时必填）
       MAAS_BASE_URL: ${MAAS_BASE_URL}      # 上游 MaaS 平台地址
       # v0.7.2 八审 P1：语义灰度分桶 HMAC secret——本生产 compose 恒必填（shadow 也配：
@@ -34,8 +40,6 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       METRICS_TOKEN: ${METRICS_TOKEN:?METRICS_TOKEN is required}   # /metrics 抓取 token（v0.5.2 起生产必填，启动校验兜底）
-      # strict 模式才需要（passthrough 下可省）：
-      # ROUTER_ACCESS_KEY: ${ROUTER_ACCESS_KEY}
       MAAS_API_KEY: ${MAAS_API_KEY:-}   # 管理台发现/巡检用服务端 key（passthrough 业务流量仍走客户端 key 透传）
     volumes:
       - /opt/amr/config:/app/config        # router.json + history/（配置发布历史）
@@ -46,19 +50,76 @@ services:
       options: { max-size: "50m", max-file: "3" }
     healthcheck:
       # 就绪探针查 /health/ready：上游可达 + 未在排空才算 ready（/health 只表进程活着）
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8789/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       start_period: 10s
       retries: 3
 
   classifier:
-    image: cmt-amr-classifier:0.14.5  # 与本次发布源码一同构建，OCI revision 绑定发布提交
+    image: cmt-amr-classifier:0.14.6  # 与本次发布源码一同构建，OCI revision 绑定发布提交
     container_name: amr-classifier
     restart: unless-stopped
     hostname: classifier
+    ports:
+      - "0.0.0.0:8787:8787"
     expose:
       - "8788"                             # 仅容器网络内可见，不对外
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "2" }
+
+  go-core:
+    image: cmt-amr-go:0.14.6
+    container_name: amr-go-core
+    restart: unless-stopped
+    network_mode: service:classifier
+    depends_on:
+      classifier:
+        condition: service_healthy
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    cpus: 2
+    mem_limit: 512m
+    stop_grace_period: 30s
+    environment:
+      AMR_GO_EDGE_URL: http://127.0.0.1:8789/internal/v1/go-events
+      AMR_GO_EDGE_TOKEN: ${AMR_GO_EDGE_TOKEN:?internal edge token required}
+      AMR_GO_SEMANTIC_BUCKET_SECRET: ${SEMANTIC_BUCKET_SECRET:?SEMANTIC_BUCKET_SECRET is required}
+      AMR_GO_SEMANTIC_SMALL_TOKEN: ${AMR_GO_SEMANTIC_SMALL_TOKEN:-}
+    volumes:
+      - /opt/amr/config:/app/config:ro
+      - /opt/amr/data/go-native-0.14.6:/state
+    command:
+      - --candidate
+      - --runtime
+      - --native-semantics
+      - --node-cost-observation
+      - --runtime-config
+      - /app/config/go-runtime.json
+      - --auth-config
+      - /app/config/go-auth.json
+      - --ledger
+      - /state/runtime.wal
+      - --listen
+      - 127.0.0.1:8791
+      - --public-listen
+      - 0.0.0.0:8787
+      - --node-origin
+      - http://127.0.0.1:8789
+      - --upstream
+      - ${MAAS_BASE_URL:?upstream base URL without trailing slash required}/chat/completions
+      - --scope-url
+      - ${MAAS_BASE_URL}/models
+      - --semantic-small
+      - http://127.0.0.1:8788/classify
+      - --semantic-large
+      - ${MAAS_BASE_URL}/chat/completions
+      - --timeout
+      - 50s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
