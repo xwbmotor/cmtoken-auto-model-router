@@ -23,6 +23,7 @@ const percentile = (samples, q) => {
   return values.length ? values[Math.ceil(values.length * q) - 1] : null;
 };
 const lines = ['# M4 同配额开放负载实测', '',
+  `成本归属：${report.parameters.nodeCostObservation ? '现有 Node 成本观察文件；Go 不重复同步记账，沿用 Node 异步快照语义' : 'Go 组使用本地 WAL 与审计'}。`, '',
   `原始记录时间：${report.at}。原始 JSON SHA256：\`${createHash('sha256').update(bytes).digest('hex')}\`。`, '',
   `预算模式：${report.parameters.budgetMode === 'observation' ? '保护关闭，保留成本观察' : '保护启用'}；HTTP edge：${report.parameters.nativeFront ? 'Go 原生公网入口，事件回传真实 Node 服务；两者全部纳入 Go 组配额' : report.parameters.edge ? '启用，流量经过真实 Node HTTP 入口再进入 Go，事件回传 Node；两者全部纳入 Go 组配额' : '未启用'}。决策日志开启；Judge、语义复核、限流关闭。本结果仅代表这些条件下的合成负载。`, '',
   `每个服务组均限制为 ${report.parameters.cpus} CPU、${report.parameters.memoryMiB} MiB 内存且不提供额外 swap。Go 组包含 Go runtime${report.parameters.featureMode === 'snapshot' ? ' 和真实 Node 管理服务，不启动 Node 适配器' : '、Node 适配器和真实 Node 管理服务'}。模拟上游、公共 TCP 入口和发压器在配额之外。`, '',

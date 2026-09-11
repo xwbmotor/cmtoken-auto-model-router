@@ -57,7 +57,11 @@ createServer(async (req, res) => {
 // identical byte relays in the shared fixture namespace, not privileged networking.
 for (const [front, back] of [[8785, 8786], [8792, process.env.M4_NATIVE_FRONT === '1' ? 8793 : process.env.M4_EDGE === '1' ? 8787 : 8791], [8784, 8787]]) {
   tcpServer(client => {
-    const target = connect(back, '127.0.0.1'); client.pipe(target); target.pipe(client);
+    const target = connect(back, '127.0.0.1');
+    // A byte relay must not add a Nagle/delayed-ACK wait when a gateway flushes
+    // content before its final HTTP chunk. Apply equally to both directions.
+    if (process.env.M4_RELAY_NAGLE !== '1') { client.setNoDelay(true); target.setNoDelay(true); }
+    client.pipe(target); target.pipe(client);
     client.on('error', () => target.destroy()); target.on('error', () => client.destroy());
     client.on('close', () => target.destroy()); target.on('close', () => client.destroy());
   }).listen(front, '0.0.0.0');
