@@ -312,7 +312,7 @@ export class JudgeGuard {
     this.reserved.delete(handle);
     this._rollover();
     this.calls += 1;
-    // v0.11.5（二十四审 P1-2）：token 记账 fail-closed 收进 Guard 统一执行——
+    // token 记账 fail-closed 收进 Guard 统一执行——
     // 只有「有限、非负的 number」才采信上游报告；null/undefined/字符串/布尔/NaN/负数
     // （含 Number(null)='' false→0 的隐式转换陷阱）一律按本 reservation 的 estTokens 结算。
     // 成功、解析失败、异常路径全覆盖；调用方不再各自硬编码 8000/2000。

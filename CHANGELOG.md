@@ -1,3 +1,7 @@
+# 版本记录
+
+按版本记录主要变化。条目描述当时的行为，后续修复以较新版本为准；当前使用方法见 [README](README.md)。原始评审过程和完整修改可在 Git 历史中查看。
+
 ## [0.14.8] - 2026-09-11
 
 - 修正 Go 重启提前取消影子语义复核：停止 HTTP 接入后，在 20 秒排空预算内等待后台结果送达，再释放运行时。
@@ -80,186 +84,124 @@
 
 ## [0.11.16] - 2026-09-03
 
-二十九审收口（发版流程改序：compose 进发版提交）：rev-parse 去 shell（execFileSync argv）；counters 串行写链+优雅关停最终快照+恢复 await 于监听前+结构校验+损坏告警+firstStartedAt 持久化；release runner 全树注入临时 counters 路径；IPv6 URL 括号。
+- 修复累计请求统计的保存与恢复：按顺序写入快照，启动完成恢复后再接收请求，关闭前保存最终统计；损坏文件会报告错误，首次启动时间可跨重启保留。
+- 修正 Windows 下发布脚本的 Git 参数传递，测试统一使用临时统计路径；发布提交包含对应 Compose 版本。
+- 修复 IPv6 地址拼接缺少方括号的问题。
 
 ## [0.11.15] - 2026-09-03
 
-二十八审收口：发布门禁三处真落盘（execFileSync+argv 实跑验证）；SSRF http IP 直连真闭环；compose 回写；删除后全量重绘（能力矩阵/画像）；×清 key；删除边界前置提示；真实删除流断言。
+- 修复发布检查中的命令执行和 Compose 版本同步问题。
+- 上游探测使用已校验的 IP 建立 HTTP 连接，减少 DNS 重新解析带来的地址变化风险。
+- 删除模型后刷新能力矩阵和画像；关闭发现窗口时清空 key，删除前展示引用限制。
 
 ## [0.11.14] - 2026-09-03
 
-总请求累计口径（用户反馈）：counters JSON 落盘+启动恢复（发版不再清零）；前端卡片累计口径提示；新黑盒测试 itl-counters-persist；e2e 补 AMR_COUNTERS_PATH 隔离。
+- 累计请求统计保存到文件并在启动时恢复，重启不再清零；页面显示统计起点。
+- 增加持久化集成测试，并隔离测试统计文件。
 
 ## [0.11.13] - 2026-09-01
 
-二十七审收口（3×P1+5×P2）：SSRF DNS pinning（解析后 IP 禁用网段全拒+fail-closed+逃生口收窄仅 127.0.0.1:port+拒绝 query+规范化 URL）；发布门禁四处；compose 回写；×关闭清 key；CHANGELOG 补记；SSRF 测试补 query/IPv6 用例。
+- 加强上游发现的地址校验：拒绝禁用网段、查询参数和不合规 URL，缩小本地测试例外范围。
+- 补充发布检查、Compose 版本同步及 IPv6 测试；关闭发现窗口时清空 key。
+- 后续 v0.11.15 继续修复实际连接阶段的地址校验。
 
 ## [0.11.12] - 2026-09-01
 
-用户实测流程断点：
-- 注册成功后三步上线路径引导面板（定归属+定价→交错评测/体检巡检/手工录入→启用+安全发布），替代原一句话 toast
-- 模型删除按钮（danger 态）：引用检查（defaultExplicitModel/shadowModel/taskPreferences/semanticRouter）+confirm+走安全发布事务，后端 validateConfig 兜底
+- 模型注册后展示归属、定价、检查和发布步骤。
+- 增加模型删除入口，删除前检查默认模型、任务偏好和语义配置等引用，并通过配置发布完成操作。
 
 ## [0.11.11] - 2026-09-01
 
-二十六审收口（4×P1+P0）：
-- P0 发现列表模型名不可见：全局 input{width:100%} 把 checkbox 拉到 220px 挤压模型名至 0 宽——.discover-row checkbox width:auto；ui-regression 固化 nameWidths≥10px 断言
-- P1 modal 闭合标签：v0.11.8 挪动致 evalModal 嵌进 discoverModal 内部（交错评测弹层永不可见）——补闭合+HTMLParser 零错误+测试断言兄弟关系
-- P1 禁用模型进交错评测：前端 enabled===true&&ownership!=='unknown'，后端黑盒校验（itl-deny-ssrf）
-- P1 discover-probe SSRF：new URL 严格解析+协议/凭据/IP 拒绝+域名白名单+redirect:'error'
-- P1 发布门禁：UI 测试读 AMR_TEST_STRICT_SKIP、python 三回退、run-release-tests 串行+skipped 终检
-- P2 key 四出口清空/半填阻止/短 key 遮蔽
-
-# Changelog
-
-本项目的显著变更记录。版本号遵循 [SemVer](https://semver.org/)：补丁版本=缺陷修复，次版本=功能新增。
+- 修复模型发现列表中名称被复选框挤掉、评测弹窗嵌套错误而无法打开的问题。
+- 前后端均排除未启用或归属待定的评测模型。
+- 增加上游发现的 URL、协议、主机名和重定向校验，收紧密钥显示与清理。
+- 发布测试按顺序执行，检查 Python 依赖与跳过数量。
 
 ## [0.11.10] - 2026-09-01
 
-UI 审计常态化 + 剩余问题收尾：
-- 新增 tests/ui-regression.test.mjs（发布门禁自动跑）：真实浏览器遍历 7 tab + 发现向导两步全程，断言零 pageerror、向导元素齐备、全选复选框存在、列表行高≤44px（v0.11.9 教训）、归属下拉宽度≥最宽选项、上传按钮有样式——五类历史 UI bug 全部固化为回归断言；
-- 技术要点：mock 上游必须独立进程（execFileSync 冻结本进程事件循环，同进程 http server 无法响应 server 进程的探测 fetch）；
-- 剩余审计项收尾：「清空通道配置」按钮 grid 拉伸 91px→secondary 样式+不拉伸；「计算选择」补 secondary。
+- 将真实浏览器管理页回归纳入发布测试，覆盖页签、模型发现、选择与主要布局。
+- 修复清空通道和计算选择按钮的样式；测试用模拟上游移到独立进程，避免同步调用阻塞响应。
 
 ## [0.11.9] - 2026-09-01
 
-管理台 UI 批量修复（playwright 全页面审计 7 tab + 弹层，用户要求产品级交互标准）：
-- 发现弹层列表重做：全局 label 竖排样式导致每行 96px 三段折行——覆盖为横排 33px；两列自适应 grid；长模型名 ellipsis 截断（title 悬停看全名）；列表区独立滚动（max-height 320px）；
-- 新增「全选新模型」复选框（三态：全选/半选 indeterminate/空）+ 实时「已选 n / N」计数；
-- 归属下拉显示不全修复：.table-wrap select 最小宽 92px（原 47px 装不下 56px 的选项文字）；数值输入最小 72px；
-- 「上传导入」按钮裸样式修复：.btn-like 样式定义（与 button.secondary 同视觉——原 label 无 button 样式规则匹配）；
-- index.html 内联 .discover-row 旧定义删除（覆盖了 styles.css 新样式——CSS 优先级陷阱）。
+- 调整模型发现列表的行高、滚动与长名称显示，增加全选和已选数量。
+- 修复归属下拉内容截断、数值输入过窄以及导入按钮缺少样式的问题。
 
 ## [0.11.8] - 2026-08-31
 
-「从上游发现模型」改标准两步流水线向导（用户实测反馈：端点/key 应管理员自己填，注册应是分步流水线）：
-- 第 1 步：两行输入框填上游端点 URL + API Key（密钥 password 框，只用于本次拉取——不落 config/git/日志）；可折叠「用服务端 .env 已配的上游」；
-- 第 2 步：探测→勾选→「纳入所选（n）」（未勾选禁用+联动计数）；失败态「← 回上一步改端点/密钥」可返回重填；
-- 后端新增 POST /admin/api/discover-probe：接受 {baseUrl, apiKey} 现场探测，key 一次性使用不落盘；错误信息区分 401（key 错）/网络不可达/URL 格式；
-- 结构修复：discoverModal/evalModal 从 .tab-page 内挪到 main 末尾（body 级）——此前弹层挂在 tab 页内，tab 未激活时弹层 rect 全 0 不可见；
-- 实测确认：移动 MaaS 端点确实只有 3 个模型（/models 200 全列、变体路径 403/412），发现功能无遗漏。
+- 模型发现改为“填写端点和 key → 选择并注册模型”两步，支持返回修改。
+- 增加一次性上游探测接口，区分凭证、网络和地址错误；修复弹窗受未激活页签影响而不可见的问题。
 
 ## [0.11.7] - 2026-08-31
 
-「从上游发现模型」弹层交互重做（用户实测反馈：缺端点信息/无确认取消按钮/文案术语化）：
-- 弹层头部显示上游端点 URL + 遮蔽密钥（key 只显前6后4，永不出明文）——一眼确认连的是哪个上游；
-- 三态按钮齐备：加载中可「重试/关闭」；成功态「刷新列表 / 取消 / 注册所选（n）」（未勾选禁用，勾选联动计数）；失败态「重试 / 关闭」+ 配置指引（.env 变量名）；
-- 失败文案带具体缺口：错误信息区分「端点未填 / 密钥未配」（原来只报笼统的 UPSTREAM_BASE_URL / MAAS_API_KEY）；
-- 文案去术语：「新模型默认不启用、校准状态 pilot」→「新纳入的模型不会立即上线：先补归属、定价、质量分，确认后再手动启用」；
-- 「已注册（不可重复注册）」→「已在列表中（无需重复添加）」。
-- 实测：mock 上游全链路（勾选联动/禁用态/注册进列表/端点显示）+ 失败态（无上游时错误信息+重试+关闭）playwright 验证通过，零 pageerror。
+- 模型发现窗口显示上游地址和遮蔽后的 key，补充加载、成功、失败时的重试与关闭操作。
+- 注册按钮随选择数量更新；错误信息明确指出缺少端点或 key，新模型提示先补参数再启用。
 
 ## [0.11.6] - 2026-08-31
 
-P1 管理台事件绑定全面失效（用户实测发现）：
-- 根因：v0.5.0 删除「组件体检」面板时未同步删 app.js 的两个死绑定（#evalClassifier/#replaySwitch，元素已不存在）——模块在绑定处 TypeError 中断执行，其后所有事件绑定失效 8 天（从上游发现模型/交错评测/离线横幅/eval 取消按钮全部无响应）。API 级测试与 node --check 均无法覆盖此类「UI 绑定中断」问题。
-- 修复：删除 38 行死代码（两个 onclick 块，后端 classifier/evaluate 与 /replay API 保留——测试与运维仍使用）。
-- 新增 tests/admin-smoke.test.mjs：真实浏览器（playwright）冒烟——登录后断言零 pageerror + 发现按钮点击后弹层打开（绑定生效证明）。无 python3+playwright 环境自动 skip。
-- 教训沉淀：删 HTML 面板必须 grep 对应 JS 绑定；UI 功能必须有浏览器级冒烟。
+- 删除绑定到已移除元素的事件代码，修复管理页脚本中断及多个按钮无响应。
+- 增加真实浏览器登录和发现窗口测试，覆盖仅语法检查无法发现的交互问题。
 
 ## [0.11.5] - 2026-08-31
 
-二十四审收口（3×P1 + metrics 口径）：
-- P1-2（方案升级）Judge Guard fail-closed 内收 `JudgeGuard.settle()`：tokens 非有限非负 number（含 `Number(null)/''/false→0` 隐式陷阱）一律按本 reservation estTokens 结算——六条调用路径统一覆盖（生产质量评审/task-check/交错评测/解析失败/异常/幂等），删除三处调用方 8000/2000 硬编码；
-- P1-1 JSON 导入值类型化 schema：scores/evalGate=数值 [0,100]、subtasks={avg,n}、双 meta={at,judge,note} 限长；键白名单 + `__proto__/constructor/prototype` 保留名拒绝；非法项跳过并 issues 回显（top 20）；
-- P1-3 交错评测题内模型循环每次 `callUpstreamChat` 前检查 cancelRequested——取消后不再为剩余模型付费；
-- P2 metrics `judgeBump('tokens')` 只记真实报告值（缺失不记 0，防低估误导对账）；
-- 新增 tests/import-schema.test.mjs：导入 e2e（合法入/恶意值拒/保留名拒/issues 回显/落盘校验）+ Guard 七形态单元测试（number/null/undefined/字符串/false/负数/合法0 + ok:false 无 tokens 预占 + estTokens 因路径而异）。
+- 统一 Judge 结算：token 数缺失或非法时按本次预估值结算，避免绕过每日额度。
+- 对导入评分的类型、范围、元数据和键名做校验，跳过非法项并返回原因。
+- 交错评测在每次模型调用前检查取消状态，取消后不再继续调用剩余模型；指标仅记录真实报告的 token。
 
 ## [0.11.4] - 2026-08-31
 
-二十三审收口（2×P1 + P2）：
-- P1 生产 Judge settle fail-closed：异步质量评审（estTokens 8000）与 task-check（2000）两处 usage 缺失时按预占结算——不再只修交错评测路径（修 bug 修类不修点：全仓 `settle.*|| 0` 清零）；
-- P1 回放 modelShifts 键 escHtml（同段 modelDist 已修，此为二十三审 git show v0.10.5 对照发现的同类漏点）；
-- P2 JSON 导入键白名单：benchmarkScores 各层键须匹配 /^[a-zA-Z0-9_.-]{1,64}$/，非法键跳过并记录（bsImportIssues 回显）——任意 HTML 不再能经导入进前端 title/文本；
-- 同类自查：settle `|| 0` 全查无残留；app.js `.map(([k,v]) => ${k})` 模式全查无候选裸拼。
+- 修复质量评审和任务核对缺少 usage 时被记为零消耗的问题。
+- 对回放模型名进行 HTML 转义，限制导入评分的键名并返回非法项。
 
 ## [0.11.3] - 2026-08-31
 
-二十二审收口（2×P1 + P2 全修）：
-- P1 XSS 真收口：基线 modelDistribution（v0.11.2 实际漏改处）、回放 modelDist 缩写链、benchmarkScores 键（title 属性+文本双处）、画像 meta.at/judge、4 处模板串裸 e.message——全部 escHtml；
-- P1 Judge token fail-closed：settle 在 usage 缺失/非法时按预占 estTokens(8000) 结算（兼容端点不回 usage 也不能免费过 dailyMaxTokens 闸）；
-- P2 cancelled 前端完整：轮询增加 cancelled 分支（停轮询+如实显示已完成/计划量）；评测弹层新增「取消任务」按钮；
-- P2 significant 三态：null 显示「显著性不可判定」（区别于 false 不显著）；judgeReadyRate 分母改为全部非预热成功作答（含无 rubric——覆盖率不再虚高）；
-- P2 classifier 门禁强绑定：OCI revision 必须等于 git tag v{classifierTag} 指向的 commit（rev-parse 'v0.9.7^{commit}'），任意历史 commit 不再通过；classifierTagCommit 入 release 报告；
-- P2 测试精化：Judge 恰被调 1 次断言（首次 settle 8000 后超限）、脏分用非法值 'abc'（真过滤路径；实测确认 -5/100 是 clamp 语义会入分，只有非法值丢弃——语义如实入注释）。
+- 补充基线、回放、评分元数据和错误文本的 HTML 转义。
+- Judge 缺少有效 usage 时保留预估消耗；评测取消后停止轮询并显示已完成数量。
+- 区分“差异不显著”和“无法判定”，修正评审覆盖率分母。
+- 分类器镜像提交必须与对应版本标签一致。
 
 ## [0.11.2] - 2026-08-31
 
-二十一审收口（3×P1 + P2 前端契约）：
-- P1 XSS 剩余点收口：模拟 impact（before.model/row.model）、敏感度 nextFlip.from/to、基线 modelDistribution 模型名、Pareto 前沿、三处 e.message/j.error 进 innerHTML 全部 escHtml——发现→注册链在全页面不再可达；
-- P1 Judge token 记账：交错评测 settle 带真实 usage.total_tokens（dailyMaxTokens 不再可被连续评测绕过）；
-- P1 cancel 全类型生效：runEvalJob（checkup/full）执行循环补 cancelRequested 检查；
-- P2 前端 pairwise 契约：读 qualityDiff.mean + p.significant + 显示配对题数（此前恒显示「样本不足」）；judgeReadyRate/judgeSkip{budget,error,noRubric} 渲染——覆盖率过低明示「质量结论不可采信」；
-- P2 测试补强（eval-interleaved-3）：Judge 请求实际含原题正文与未截断全文答案（尾部标记断言）、越界分 100/verifiable:false 脏分过滤（judgeScore 恒 7）、低 dailyMaxTokens 预算真实耗尽进 judgeSkip.budget、checkup 运行中取消最终 cancelled。
+- 修复策略模拟、基线和错误信息的 HTML 转义遗漏。
+- 交错评测将真实 Judge usage 计入额度，体检和巡检也响应取消。
+- 修正两模型配对比较和覆盖率显示，增加低额度、原题完整性和取消场景测试。
 
 ## [0.11.1] - 2026-08-31
 
-二十审收口（P1×5 + P2×6 全量修复）：
-- P1 XSS 全页面收口：能力矩阵/画像/能力表/部署表/基线报告（displayName×5 + m.id×3）、任务榜 picks、市场信号模型名、基线 arm 名与 highlights 全部 escHtml——上游恶意模型 ID 经发现-注册链不再可注入；
-- P1 交错评测 Judge 看得到原题：results 保存完整 prompt 与全文 answer（截断交给 buildJudgeMessages 的 12000 预算），c_prompt 含原题正文+rubric 附注；
-- P1 评分规范化：Judge 维度统一过 normalizeDimension（[0,10] 归一、verifiable:false 置 null），与生产质量评审同规范；summary 新增 judgeReadyRate + judgeSkip{budget,error,noRubric}——缺失原因不再静默；
-- P1 JudgeGuard 预算接入：交错评测 Judge 调用走 reserve/settle（dailyMaxCalls/Tokens/熔断与生产同一 Guard），超额即停并标注；新增任务取消端点 POST /admin/api/eval-jobs?action=cancel（执行与 Judge 循环均检查 cancelRequested）；
-- P1 发布门禁绑真实 commit：classifier revision 除 40 位 SHA 格式外须 git cat-file -t 验证为仓库真实 commit（伪造全零不再通过）；
-- P2 两两比较改配对 bootstrap：同 caseId 求 scoreA−scoreB 后重采样（保留题目难度协方差；恒定领先场景 CI 正确收窄）；pairwise 带 pairedN 与 significant；
-- P2 交错顺序逐题轮换（Latin rotation）：第 k 题从 modelIds[k%N] 起始，消除「A 永远先答」的位置/负载偏差；预热改为每模型前 2 次「调用」（不再吞掉题库前 2 题）；
-- P2 modelIds 去重（[A,A] 拒绝）；bootstrap 单样本 lo/hi=null 契约对齐；
-- 测试：bootstrap 契约更新、interleaved 断言强化（轮换顺序/独立预热/配对显著/judgeReadyRate/全模型 config 不变）、新增 eval-interleaved-2（去重+取消端点）。
+- 对模型名称等外部输入补充 HTML 转义，防止发现注册后的内容进入页面脚本。
+- 交错评测向 Judge 提供原题和完整答案，统一评分校验，显示缺少评审的原因，并接入预算与取消控制。
+- 两模型差异采用同题配对重采样，报告配对数量与显著性；逐题轮换调用顺序，每个模型独立预热。
+- 发布检查要求分类器提交真实存在；补充重复模型、单样本和不修改配置等回归场景。
 
 ## [0.11.0] - 2026-08-31
 
-交错评测（十六~十九审规划的能力正式落地）：
-- 新增 src/bootstrap.mjs：无依赖 bootstrap 置信区间（bootstrap/bootstrapDiff，Mulberry32 固定 seed 可复现；同 seed 同区间，报告可复核）；
-- 新增评测任务类型 interleaved：2-4 模型同窗口轮转执行 56 题（每模型前 2 题预热不计分），Judge 按 rubric 四维评分（复用 callJudgeModel/parseJudgeJson，rubric v2.1）；
-- 汇总：每模型质量分 95% CI + 时延 95% CI + 两两质量差显著性（CI 不含 0 = 显著）；样本 <3 不出 CI（如实标注）；
-- 仅建议值：不自动改质量分/时延参数——采纳需管理员在「模型参数」页确认后发布（与 v0.10.2 以来的口径一致）；
-- Judge 通道支持 JUDGE_BASE_URL/JUDGE_API_KEY 独立配置（评审与业务上游分离）；Judge 未配置时如实降级（仅时延统计，质量列标不可用）；
-- 管理页新增「交错评测」入口：模型汇总表（质量/时延 CI）+ 两两对比 + 显著性标注 + 建议值提示；
-- 新增 tests/bootstrap.test.mjs（4 测试：可复现/边界/显著性/median）与 tests/eval-interleaved.test.mjs（黑盒：mock 上游+mock Judge 全链路，断言交错顺序/预热排除/CI 区分/仅建议值不改 config）。
+- 增加 2–4 个模型的交错评测、固定随机种子的重采样区间和两两比较。
+- 管理页展示质量、时延和显著性结果；Judge 通道可独立配置，缺少 Judge 时只提供可用的时延结果。
+- 评测只生成建议，不自动修改线上质量或时延参数。后续版本修正了配对统计、预热和覆盖率口径。
 
 ## [0.10.5] - 2026-08-31
 
-十九审收口（v0.10.4 收敛后封板版）：
-- P1 XSS：最近请求面板 selected/requested/keyFingerprint（含调用方指纹下拉）与语义模型下拉 option 全部 escHtml——关闭客户端可控字段的存储型 XSS 链路；
-- P1 EWMA 语义回归修复：updateHealthState 恢复与 server 原实现等价——成功与失败都更新 ewmaLatencyMs（失败/超时时延同样形成动态时延惩罚）；
-- P1 classifier 证据链：门禁 classifierRevisionIsSha 要求 OCI revision 为 40 位 Git SHA（unlabeled/伪造串不再通过），release 报告新增 classifierRootfsLayers 层 digest 证据；
-- P2 空响应记账：评测 failed 统一口径=!ok 或断言失败；errorType 统一分类（empty_response/timeout/http_401_403/http_429/http_5xx/http_4xx/invalid_payload/other），不再漏计空正文；
-- P2 判定单一事实源：/admin/api/model-offline-alerts 端点改调 health.mjs 的 offlineAlertDue()（与单测共用，防测试与生产漂移）；新增「已开熔断但失败证据过期不告警」测试分支；
-- P2 依赖锁定：新增 requirements-classifier.lock（sklearn 1.9.0/joblib 1.5.3/numpy 2.4.6/scipy 1.17.1 精确版本），Dockerfile.classifier 改用锁文件安装；
-- P2 题库路径：loadEvalGateCases 支持 AMR_CONFIG_DIR 覆盖（与 router.json 同构，测试/多实例部署）；
-- 新增 tests/eval-full.test.mjs：full 巡检黑盒测试（mock 上游覆盖正常/空正文/500/双 task，断言 readyRate/errorTypes/byTask/failed 全字段）。
+- 修复请求详情、模型下拉等外部字段的 HTML 转义，并恢复失败请求参与健康时延更新的行为。
+- 稳定性巡检明确记录空响应及不同错误类型，统一持续故障提醒的判定。
+- 锁定分类器依赖，发布报告记录镜像文件系统依据；评测题库支持配置目录覆盖。
 
 ## [0.10.4] - 2026-08-30
 
-十八审收口（v0.10.3 错配与遗留问题）：
-- P1 full summary 前端按 type 分支渲染：readyRate/byTask/errorTypes（56 题稳定性巡检不再显示 NaN% 与 —/—）；
-- P2 XSS 全面关闭：模型主表 displayName/id、发现弹窗已注册列表全部 escHtml；
-- P2 手工新增模型默认 ownership=unknown（与发现入口一致）；
-- P2 候选池测试改读真实字段 candidate.model；rejected 断言强化（拒因必须含 ownership_unconfirmed）；
-- P2 health 行为测试：src/health.mjs 抽出可单测模块，6 个测试覆盖 downSince 触发条件/恢复清零/下线判定（含“无流量≠宕机”）；
-- P2 classifier 证据链：Dockerfile.classifier 加 ARG GIT_REVISION + LABEL org.opencontainers.image.revision；发布门禁增加 classifierRevisionLabeled 校验；
-- 重建 .venv：删除损坏虚拟环境，按 requirements-classifier.txt 重建（Python 3.11.5），记录验证组合 sklearn 1.9.0 + numpy 2.4.6 + scipy 1.17.1 + joblib 1.5.3。
+- 修复稳定性巡检汇总显示及模型列表、发现窗口的 HTML 转义。
+- 手工新增模型默认归属待定；补充健康恢复和无流量不误报故障的测试。
+- 分类器镜像记录源码提交，发布检查验证对应标记。
 
 ## [0.10.3] - 2026-08-30
 
-十七审收口（v0.10.2 遗留问题全量落实）：
-- P1 unknown fail-closed：config 校验拒绝 enabled=true && ownership=unknown；路由层 double-check（ownership_unconfirmed 拒因）；管理页归属列改下拉框（自建/生态/归属待定），选回 unknown 时自动取消启用勾选；
-- P1 下线误报修正：downSince 只在熔断首次打开时设置（首失败≠宕机）；告警要求 circuitState≠closed 且 lastFailureAt 10 分钟内有失败证据（无流量不是故障证据）；横幅改读新字段（downMinutes/halfOpenFailStreak）并 escHtml 转义；
-- P1 full 任务补 summary：就绪率/时延分布/分任务成功率(byTask)/错误类型分布(errorTypes)；
-- P1 回归测试：unknown 启用保护（config 校验）+ 路由排除（ownership_unconfirmed 进 rejected）；
-- P2 门禁增强：题库必须合法 JSON 且 56 题；classifier 镜像 tag 必须存在且本地有镜像证据（允许与 router 不同版本）；
-- P2 体检 confirm 文案 8题→6题；自建加分换算 0 权重语义（“权重为 0，不影响对比”）+ 权重滑条变动联动刷新换算提示。
+- 配置和路由均拒绝启用归属待定的模型，页面修改为待定时自动取消启用。
+- 持续故障提醒从熔断打开时计时，并要求近期失败证据，避免把无流量当故障。
+- 补全稳定性巡检汇总、题库及镜像检查，修正体检题数和零权重提示。
 
 ## [0.10.2] - 2026-08-30
 
-十六审收口（外部评审意见全量落实）：
-- P1 发布复现：docker-compose.prod.yml 镜像版本随发版更新（0.9.7→0.10.2）；发布门禁新增 composeVersionMatches + evalGateCasesPresent 两项校验；
-- P1 语义纠偏：「完整评测」改名「稳定性巡检」（就绪率+时延分布，不含质量评分——质量分仍以带裁判的 eval:gate 为准）；删除「自动回填质量分」表述；
-- P1 体检如实：6 题冒烟如实标注（非 8 题）；SQL 断言大小写无关（GROUP BY 不再误判）；结果只出断言通过 x/y + 建议平均时延（人工确认后手工采纳，不自动改 config）；去掉 6 样本伪 P95；
-- P1 下线提醒重做：旧条件（失败≥20 次/熔断≥1h）在熔断机制（3 次失败隔离+30s 冷却）下不可达——改为独立 downSince 状态模型（持续不可用 ≥30min，或半开探针连败 ≥3 次且 ≥10min）；
-- P2 归属安全：发现注册默认 ownership=unknown（不参与自建加分），发布前必须人工改为自建/生态；归属列显示「归属待定」；
-- P2 XSS：发现列表模型 ID 经 escHtml 转义；
-- P2 自建加分换算修正：按真实权重换算（加分 0.2 在成本权重 0.22 下≈可容忍 0.91 成本指数差），不再误导性等值表述。
+- 发布检查核对 Compose 版本和评测题库。
+- 将“完整评测”更名为“稳定性巡检”，明确它不提供质量评分；体检结果只作建议，不自动回填配置，不用六个样本展示 P95。
+- 重做持续故障提醒，新增模型默认归属待定，修正自建加分换算和发现列表的 HTML 转义。
 
 ## [0.10.0] - 2026-08-30
 
@@ -278,7 +220,7 @@ P1 管理台事件绑定全面失效（用户实测发现）：
 ## [0.9.7] - 2026-08-25
 
 ### 校准
-- 模型质量分按十五审校准：全部对齐 eval-gate 2026-08-20 实测（GLM-5.3 judge）；qwen36 default 剔除 Token 歧义题（0.835→0.894）；Qwen3.8 coding 拆条件质量×可用性（0.955→0.930，历史空输出 bug 已修但未重测折让 1%）；新增 qualitySource 字段记录每格数据血缘。判据：三模型总分 95% 区间高度重叠（0.908/0.917/0.920 无显著差异），0.01 级差不作为选型依据
+- 校准模型质量分：全部对齐 eval-gate 2026-08-20 实测（GLM-5.3 judge）；qwen36 default 剔除 Token 歧义题（0.835→0.894）；Qwen3.8 coding 拆条件质量×可用性（0.955→0.930，历史空输出 bug 已修但未重测折让 1%）；新增 qualitySource 字段记录每格数据血缘。判据：三模型总分 95% 区间高度重叠（0.908/0.917/0.920 无显著差异），0.01 级差不作为选型依据
 
 ## [0.9.6] - 2026-08-25
 

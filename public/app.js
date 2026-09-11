@@ -787,7 +787,7 @@ async function refreshOfflineAlerts() {
 // key 只在第二步 POST 请求体内一次性使用，不落 config、不回显、不进日志。
 async function openDiscover() {
   const modal = $id('discoverModal'); const body = $id('discoverBody');
-  // v0.11.11（二十六审 P2-1）：key 生命周期——所有出口（取消/关闭/成功/失败/重新打开）清空输入框，不留 DOM
+  // 取消、关闭、完成和重新打开时清空 key 输入，避免凭证留在页面中。
   const wipeKey = () => { const el = $id('dcApiKey'); if (el) el.value = ''; };
   modal.style.display = 'flex';
   // ── 第一步：填写端点与密钥 ──
@@ -807,7 +807,7 @@ async function openDiscover() {
   $id('dcNext').onclick = async () => {
     const baseUrl = $id('dcBaseUrl').value.trim();
     const apiKey = $id('dcApiKey').value;
-    // v0.11.11（二十六审 P2-2）：只填一项=明确阻止（原逻辑静默回落 .env，产生「这个端点探测成功」的误导）
+    // 端点和 key 必须同时填写，避免静默改用环境配置而验证了错误的连接。
     if ((baseUrl && !apiKey) || (!baseUrl && apiKey)) { toast('端点与密钥需同时填写（或都留空用服务端已配上游）', true); return; }
     // ── 第二步：探测 + 勾选 ──
     body.innerHTML = '<p class="hint">正在连接端点拉取模型列表…</p>';
@@ -891,12 +891,12 @@ function registerDiscovered() {
 }
 $id('discoverModels')?.addEventListener('click', openDiscover);
 $id('interleavedEval')?.addEventListener('click', startInterleaved);
-$id('discoverClose')?.addEventListener('click', () => { $id('discoverModal').style.display = 'none'; const wk = $id('dcApiKey'); if (wk) wk.value = ''; }); // 二十八审 P2-1
+$id('discoverClose')?.addEventListener('click', () => { $id('discoverModal').style.display = 'none'; const wk = $id('dcApiKey'); if (wk) wk.value = ''; });
 
 let evalTimer = null, evalGeneration = 0;
 // v0.11.0 交错评测：多模型同窗口轮转+Judge 评分+置信区间（仅建议值）
 async function startInterleaved() {
-  const enabled = config.models.filter((m) => m.enabled === true && m.ownership !== 'unknown'); // v0.11.11（二十六审 P1-2）：启用且归属已确认——禁用模型/归属待定不得进入交错评测
+  const enabled = config.models.filter((m) => m.enabled === true && m.ownership !== 'unknown'); // 启用且归属已确认——禁用模型/归属待定不得进入交错评测
   const ids = enabled.map((m) => m.id);
   if (ids.length < 2) { toast('交错评测至少需要 2 个可用模型（当前 ' + ids.length + ' 个）', true); return; }
   const pick = ids.slice(0, 4).join('、');
@@ -1027,7 +1027,7 @@ $id('models')?.addEventListener('click', (ev) => {
     const removedId = config.models[idx].id;
     config.models.splice(idx, 1);
     if (config.routing.loadBalancing?.limits) delete config.routing.loadBalancing.limits[removedId];
-    // 二十八审 P1-4：所有以模型下标为依据的视图必须全量重绘——能力矩阵/画像保留旧 data-index 会静默改错模型
+    // 所有以模型下标为依据的视图必须全量重绘——能力矩阵/画像保留旧 data-index 会静默改错模型
     renderModels(); renderProviderColumn(); renderDeployment(); bindPolicy(); renderCapabilityMatrix(); renderProfile(); syncDirty(); scheduleSimulation();
     toast('已删除 ' + m.id + '（记得「安全发布」生效）');
   }

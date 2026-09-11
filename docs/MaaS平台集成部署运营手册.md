@@ -1,269 +1,61 @@
-# MaaS 平台集成：把 auto 做成平台上的一个模型
-
-> 目标形态：业务方在 MaaS 上多了一个 `auto` 模型——**同 URL、同 apikey**，调 auto 背后自动路由到各实际模型，实现成本/效率/效果最优。调用方零改造（仍是标准 OpenAI 协议）。
-> 适用版本：0.4.21 及以上（需 `ROUTER_KEY_MODE=passthrough`）
-
-> **模型入口**：统一入口名 `cmtoken-auto`（`model` 传该值或留空）；旧名 `auto` 已停用（400）。`GET /v1/models` 仅返回该入口，池内模型不对外暴露（`routing.exposeModelList=auto-only`）；需要点名的内部调试场景保持 `routing.allowExplicitModel` 不变。
-
-## 一、架构与前提
-
-```
-业务系统 ──┐
-          ├─→ MaaS 网关（统一入口，不动）
-Agent/工具 ─┘      │
-                   ├─ model=<具体模型名> → 原路直连（不经过路由器）
-                   └─ model=auto         → 分流到 auto-router（本服务）
-                                            │ 规则分类 →（可选）语义复核 → 评分选型
-                                            ↓ 用调用方原 key 回调 MaaS
-                                          实际模型（模型池内各启用模型）
-```
-
-**关键设计**：路由器不接管所有流量，只接 `model=auto` 的分流。MaaS 平台侧只需要一个「按模型名分流」的能力。`ROUTER_KEY_MODE=passthrough` 把客户端 apikey **原样透传回 MaaS**——租户计费、配额、审计都落在调用方头上，与直连完全一致，这才实现「共用同一 apikey」。
-
-**部署前提**（Linux，2C4G 一台即可）：
-
-1. Node.js ≥ 20（零 npm 依赖；用容器则无需本机 Node）
-2. Docker 20+ / docker compose v2（推荐），或裸跑 Node + systemd
-3. 与 MaaS 网关网络互通
-4. MaaS 平台侧具备按 model 名分流的能力（见 §二「平台侧配置」）
-
-## 二、怎么部署（交给平台/运维的标准动作）
-
-### 方式 A：Docker Compose（推荐）
-
-```bash
-# 1. 拿代码（内网 git 或离线包）
-git clone <内部仓库地址> auto-model-router && cd auto-model-router
-
-# 2. 写 .env（关键变量就这几个）
-cat > .env <<'EOF'
-MAAS_BASE_URL=https://<maas-gateway>/v1     # MaaS 平台统一入口
-ROUTER_KEY_MODE=passthrough                  # 同 URL 同 key 模式（核心开关）
-HOST=0.0.0.0
-PORT=8787
-ADMIN_TOKEN=<管理端密码>                     # 管理页面用
-# MAAS_API_KEY=<服务端兜底 key>              # 可选：客户端无 key 时的兜底
-EOF
-
-# 3. 一键起（router + 语义分类器双服务）
-docker compose up -d
-docker compose ps          # 两个容器 healthy
-curl http://127.0.0.1:8787/health
-```
-
-### 方式 B：裸机 systemd（无 Docker 时）
-
-```bash
-git clone <内部仓库地址> /opt/auto-model-router && cd /opt/auto-model-router
-# .env 同方式 A
-cat > /etc/systemd/system/auto-router.service <<'EOF'
-[Unit]
-Description=Auto Model Router
-After=network-online.target
-[Service]
-WorkingDirectory=/opt/auto-model-router
-EnvironmentFile=/opt/auto-model-router/.env
-ExecStart=/usr/bin/node src/server.mjs
-Restart=always
-RestartSec=3
-User=nobody
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload && systemctl enable --now auto-router
-```
-
-> 语义分类器（可选）裸跑：`scripts/serve_classifier.sh`。不跑也不影响主路由——shadow 模式错误自动吞掉，active 模式失败自动回退规则层。
-
-### 平台侧配置（MaaS 网关分流）
-
-实际落法取决于 MaaS 平台形态，二选一：
-
-1. **平台有「模型注册/服务挂载」能力**（推荐）：注册一个名为 `auto` 的模型，后端地址指到 `auto-router:8787`。业务方 `/v1/models` 就能看到 auto，其余模型路由完全不动。
-2. **平台没有该能力**：在网关（Nginx/APISIX/Higress）加一条按请求体 `model` 字段的分流规则——`model=auto` 转 `auto-router:8787`，其余原路直连。
-
-两种方式都不改既有模型链路；分流规则与 TLS 终结参考 `docs/反代集成.md`。
-
-## 三、怎么告诉别人用（业务方接入说明，可直接转发）
-
-> **接入 auto 模型（零改造）**：你的 URL 和 apikey 都不用变，唯一区别是 `model` 填 `auto`。
->
-> ```bash
-> curl https://<maas-gateway>/v1/chat/completions \
->   -H "Authorization: Bearer <你的apikey>" \
->   -H "Content-Type: application/json" \
->   -d '{"model":"cmtoken-auto","messages":[{"role":"user","content":"你好"}]}'
-> ```
->
-> - 路由器读请求内容（文本特征、长度、多轮、工具/JSON 需求），自动选最合适的模型
-> - 简单任务走低成本模型省钱，难任务走强模型保质量
-> - 流式、工具调用、JSON 模式全兼容（OpenAI 协议全量）
-> - 计费照旧：用的还是你的 key，账单落你的租户（路由器原样透传）
-> - 想直连某个模型？照旧填具体模型名，互不影响
-
-## 四、怎么实现成本/效率/效果最优（已具备的机制）
-
-每次 `model=auto` 请求经过四段决策：
-
-1. **规则分类**（<1ms）：正则+文本特征 → 任务类型（代码/推理/创意/抽取/通用）+ 三档难度（轻量/均衡/复杂）
-2. **语义复核**（可选，~20ms）：自训练小模型二次确认；shadow 只观察，active 按置信度门槛采纳。规则层单独判准率约 69%，小模型复核链可达 95%+（heldout 回放口径——注意该口径来自与训练同源的合成分布，对真实流量的判准率需以决策日志+语义复核事件实测为准，见「切换影响预估」面板可实时复测）
-3. **评分选型**：`score = 质量 − 0.22×用户成本指数 − 0.10×算力消耗指数 − 0.14×时延 − 不确定性 + 自建奖励 − 熔断惩罚`（均衡风格默认权重，管理端可调；成本双指标：用户成本指数=用户侧豆价，算力消耗指数=自建算力资源消耗）；质量底线（qualityFloor）拦截不达标模型
-4. **故障转移**：供应商故障仅在当前合格候选内按 fallbackOrder 重试（最多 maxAttempts 次）；401、402/403、429 及其他请求类 4xx（408 除外）保留状态码，不盲目换模型或降低共享健康。质量门无合格候选默认失败，显式允许降级时才带标记放宽质量要求；见[路由约束与指标口径](router-foundations.md)。
-
-**基线对照**（历史 heldout 配置先验模拟快照；管理端「调整影响预估」面板可重算，数值随价格表/权重更新而变，不是当前线上效果或逐题作答实测）：
-
-| 路由策略 | 质量先验均值 | 用户成本指数 | 模拟含义 |
-|---|---|---|---|
-| Zero-Router（全走最便宜） | 0.901 | 0.250 | 历史静态参照 |
-| **当时配置策略（均衡风格）** | **0.902** | **0.222** | 先验分数近似，成本指数低约 11%；不是实测节省 |
-| 静态先验最优参照 | 0.935 | 0.241 | 不是实际作答的事后最优 |
-
-此快照的质量先验均值相差 0.033，不能解释为逐请求真实作答的 regret，也没有证据归因为价格差异。日常调参可用「切换影响预估」检查配置变化；实际收益须在独立业务任务上比较真实作答、成功标准与全部尝试成本，见[业务任务矩阵](routing-matrix.md)。
-
-## 五、怎么运营（日常 SOP）
-
-### 每天 5 分钟（值班）
-
-1. 打开管理端 `http://<router-host>:8787/`，填 ADMIN_TOKEN 连接
-2. 看八个指标卡：错误率、Fallback 次数、语义复核分歧率、路由分类开销（当日 L2/L3 分类费用，净节省 = 固定模型基线 − 回答费用 − 此开销）——异常按 §处置预案
-3. 看运行监控最近请求列表有无红条（失败）
-
-### 每周/每月
-
-1. 「调整影响预估」面板展开基线对照：检查配置先验与成本指数变化；不要把模拟分差作为真实质量或收益的验收门槛
-2. 调参前先跑「切换影响预估」：多少任务会换模型、质量/成本怎么变，确认后再发布
-3. 「质量评估」面板：小模型复核链 task 判准率 95%+ / 规则层单独约 69%（heldout 回放口径=合成同分布切分，真实流量判准率以决策日志+语义复核事件为准），复核链低于 90% 触发重训
-4. 下游模型更新（如 Qwen3.8-27B 替换 3.6、M2.5 退网）：录入基准 → eval gate 实测 → replay 预估 → 灰度
-5. 计费口径以 MaaS 租户账单为准，管理端成本面板做交叉核对
-
-### 运营红线与切换判据
-
-- 语义复核 shadow→active 判据（已固化）：真实流量 ≥500 条、分层人工标注准确率达标（用 `GET /admin/api/annotation-export` 导出标注集）、复杂任务漏判有上限、错误率 ≤1%、观察 ≥7 天；切 active 后**从「语义灰度比例」5% 起步**（默认即 5；独立灰度，按会话 HMAC 服务端秘密分桶，客户端无法操纵分组），逐档 5%→10%→25%→50%→100%，对照组 `rollout_hold` 全程后台观察
-
-- **生产切 active 前的运维要点**：①`SEMANTIC_BUCKET_SECRET` 写入宿主机 .env——`python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 或 `openssl rand -base64 32`。docker-compose.prod.yml 已注入该变量并用 `${VAR:?VAR is required}` 强校验；active 模式启动或热切到 active 也会校验，缺失即拒启动。shadow 模式可缺省（进程级随机不影响观察）。②管理页「语义灰度比例」tooltip 已同步说明 HMAC + 桶键优先级 + secret 跨重启稳定。③灰度分桶元数据三态（applied/rejected/hold）都带 bucketKey+source，审计更完整。④分桶键来源指标 `router_semantic_bucket_key_source_total{source}`——internal 异常升高即在线探测告警。⑤SIGTERM 排空行为级 e2e 已入测试套（tests/shutdown-drain.test.mjs），Windows 经 IPC 钩子触发同条 shutdownManager.shutdown 路径（POSIX 仍真信号）。⑥`classifierLatencyMs` 已统一 `totalLatencyMs` 口径。
-
-- **secret 与隐私口径**：①生产 compose 的 `SEMANTIC_BUCKET_SECRET` 恒必填（shadow 也配——统一口径防「shadow 期没配、切 active 才发现」）；本地开发 shadow 可缺省。②secret 强度下限 32 字节：active 模式配置过短值直接拒启动（报错含重新生成命令）。③`/admin/api/reload` 同样校验——磁盘配置改 active 后 reload 不能绕过 secret 检查。④决策/复核日志的 `bucketKey` 现为 HMAC 短指纹（`sid:9f3ab…`），原始 session ID 不落盘（隐私）。⑤分桶来源指标 internal=匿名请求占比，探测检测不由此指标承担。
-
-- **隐私与发布证据链**：①决策/复核日志的会话标识为 `sessionFingerprint`（`sidfp:<16hex>` HMAC 指纹）——原始 `x-session-id` 不落盘（该字段客户端可控，可能含手机号/账号）；跨日志对账用同 secret 的指纹一致性行。②发布报告 `reports/release-*.json` 带 `validForRelease` 门禁（clean HEAD+exact tag）；报告不提交回被证明的 tag——发版流程：commit → tag → 干净 worktree 跑 `npm run test:release` → 报告归档。③`SEMANTIC_BUCKET_SECRET` 32 字节为**长度下限**，不证明熵——一律用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成。
-- **Judge（异步质量评审）**：①抽样 1~5% 已成功请求异步调用评审模型（默认 glm-5.3）打分——不进在线路由、不增用户时延、失败不影响回答。②四维评分（正确性/指令遵循/完整性/安全性），无参考答案维度标不可验证不计分；分类核对独立事件不混总分。③四重护栏：每日调用/token 双预算（UTC 自然日翻转）、单次超时 60s、连续失败 5 次熔断（冷却后半开试探）——超限落 skipped 事件不报警。④数据面 `data/decisions/judge-reviews-*.jsonl`（judgeModel/rubric hash/answeredModel/sessionFingerprint 指纹/usage/时延），与决策/语义复核流隔离。⑤指标 `router_judge_total{stage}`/`router_judge_tokens`/`router_judge_circuit_state`（0 正常/1 半开/2 熔断）。⑥默认 enabled=false；开启走管理页 Judge 卡片或 config.judge 节，热更新即时生效（熔断与当日用量不清零）。⑦**工程收口**：评分输入改纯正文提取（信封/SSE 字节不再进评分）；预算预占-结算制且状态持久化 `data/judge-guard-state.json`（重启不清零）；judge 流启停独立于决策日志开关（judge 开+决策日志关被 config 校验拒绝——付费调用必须留审计链）；`judge.redactPatterns` 可配脱敏正则。
-- 模型退网：管理端关该模型启用开关 → fallbackOrder 自动重排，无需重启
-- 新模型上线四步：管理端录入（质量先验/成本/时延/部署）→ 显式指定 Judge 的 eval gate（题数以报告为准，核验题库来源及覆盖率）→ replay 预估 → 小流量灰度；见[评测完整性](evaluation-integrity.md)
-
-### 处置预案（异常 → 动作）
-
-| 症状 | 先查 | 动作 |
-|---|---|---|
-| auto 请求全 5xx | /health、/health/ready | upstream 不可达 → 查 MaaS 网关连通性；配置错 → 恢复 config/history/ 自动备份 |
-| 某模型熔断频发 | 管理端模型健康列 | MaaS 侧限流/故障 → fallback 自动扛；必要时临时禁用该模型 |
-| 错误率 >1% | 最近请求失败项 | 上游故障为主 → 报 MaaS；路由器缺陷 → 回滚上个 git tag |
-| 租户计费疑义 | decision log | 按 requestId 查决策日志，给出模型选择依据 |
-| 管理端连不上 | ADMIN_TOKEN | 轮换后旧值立即失效（时序安全比较），填新值 |
-| 分类器挂了 | classifier 容器 | shadow 无影响；active 自动回退规则层（级联方式先升大模型再判，两级都挂才回退），服务不中断 |
-| 429 频出 | 限流计数 | 正常保护；单租户长期顶格 → 调 config.rateLimit |
-| 客户端报 400「请求体不是合法 JSON」 | 客户端是否压缩请求体（Content-Encoding） | gzip/deflate/br（含复合）自动解压；报错则为损坏数据（「解压失败」）或解压后超 50MB（「解压后请求体超过上限」）。zstd 等其余编码报 415，客户端关压缩或改用支持编码。error.type 按真实错误区分（`invalid_request_error`=JSON 损坏，`unsupported_content_encoding` 仅 415）——排查时先看 type 再看 message |
-
-### 扩容与回滚
-
-- 多实例：见 docs/反代集成.md（Nginx upstream 多 server + 共享只读 config 卷）
-- 配置回滚：管理端每次发布自动备份到 config/history/，恢复上一份即回滚
-- 版本回滚：`git checkout <上一版本 tag> && 重启`（相邻版本配置兼容）
-
-## 五点四、模型管理流水线（v0.10.0 页面化，推荐）
+# MaaS 平台集成与运营
 
-2026-08-30 起，模型新增/测评/下线提醒全部页面化，不再依赖手工脚本：
+平台可以将 `cmtoken-auto` 注册为一个模型入口，把该模型的请求转发到路由器。原有具体模型入口可保持原来的调用路径。这里说明平台如何接入和运营；服务器操作统一参考 [部署说明](Ubuntu生产部署.md)。
 
-| 阶段 | 操作 | 说明 |
-|---|---|---|
-| ① 发现 | 管理台「模型管理 → 从上游发现模型」 | 自动调 MaaS `GET /v1/models`，列出全部可用模型并区分「新/已注册」，勾选注册——默认不启用、校准状态 pilot，不进调度池 |
-| ② 注册 | 勾选后「注册所选」→ **先确认归属（自建/生态）** → 录入定价/质量分 → 安全发布 | ID 从上游实拉杜绝大小写错；默认归属 unknown（不参与自建加分），发布前必须人工改为自建或生态 |
-| ③ 体检 | 模型表格该行「体检」按钮 | 6 题冒烟（简单/抽取/分类/SQL/推理/创作），约 1-2 分钟，出就绪率/断言通过数/建议平均时延（**人工确认后手工采纳**，不自动回填——样本量不支持） |
-| ④ 稳定性巡检 | 模型表格该行「巡检」按钮 | 56 题 eval-gate 题库（config/eval-gate.json，已进镜像），进度条实时可查，约 10-60 分钟；**产出就绪率+时延分布，不含质量评分**——质量证据须来自显式 `--judge <JUDGE_ID>` 且通过生成/Judge/每任务覆盖门禁的 `npm run eval:gate` 报告，见[评测完整性](evaluation-integrity.md)；同一时间只跑一个任务防打爆上游 |
-| ⑤ 灰度启用 | enabled 勾选 → 安全发布 → 观察 | 建议配合 routing.activeTrafficPercent 小流量先行 |
+## 请求路径
 
-**下线提醒**：启用中的模型若熔断持续 ≥1 小时或连续失败 ≥20 次，管理台模型管理页顶部出现橙色横幅提示「疑似下线，建议关闭」。系统**只提醒不自动关**——是否退出调度由管理员确认（防止上游抖动误伤）。
+```text
+应用 → MaaS 网关 → cmtoken-auto → 路由器 Go 入口 → MaaS 具体模型
+                              ↘ Node 管理与记录、Python 分类器
+```
 
-**自建加权**：业务策略页「满足质量要求时优先自建」开关旁的「自建模型加分」滑条即加权程度（0~0.5）。提示语实时换算：加分 0.2 ≈ 自建模型质量分低 0.2、或用户成本指数贵 0.2 时仍优先选自建。0=自建与生态完全同权竞争。
+平台需要支持按模型名分流。路由器选择实际模型后会再次请求上游 MaaS，因此必须区分自动入口与具体模型路径，避免把路由器发出的请求重新送回自己。
 
-## 五点五、新增模型上线流程（同 URL 新模型 ID，页面化五步）
-
-> 2026-08-19 已实测演练（Qwen3.8-27B）。核心原则：**先录入未启用 → 实测校准 → 预估影响 → 再启用**。
-
-| 步 | 操作 | 在哪做 | 通过判据 |
-|---|---|---|---|
-| 1 录入 | 管理端「模型管理 → 新增模型」按钮，输 ID（MaaS 实际名，注意大小写）| 页面 | 出现在表格，默认未启用，安全发布 |
-| 2 质量实测 | `npm run eval:gate -- --model <ID> --judge <JUDGE_ID> --cases config/eval-gate.json --min-ready-rate 0.95 --min-judge-coverage 0.95 --min-task-coverage 0.8`（实际生成与评分，题数以报告为准；当前题库不等于真实业务流量）| 脚本 | 条件均分 ≥0.7 且三类覆盖门禁通过；显式导入带来源的能力证据档案，人工决定 quality，不自动回填 |
-| 3 定价校准 | 拿到 MaaS 结算价后填「输入/缓存/输出单价」，用户成本指数自动重算 | 页面 | costIndex 与真实价一致 |
-| 4 影响预估 | 页面直接改参数 → 「调整影响预估」自动重算 12 条典型任务 | 页面 | changedRate 与质量先验变化可接受；实际质量另行验收 |
-| 5 启用观察 | enabled 勾选 → 安全发布（高风险自动二次确认）| 页面 | 一周后检查交付可用性、成本与独立任务验收；ok率≥0.9 仅是可用性观察线，不是质量准入线 |
-
-**演练实录（Qwen3.8-27B）**：
-- 教训 1：模型 ID 大小写敏感。用户说 "Qwen3.8-27b"，MaaS 实际是 `Qwen3.8-27B`——第 2 步 eval gate 403 直接暴露（403「不在订阅套餐内」=ID 错或未订阅），`GET /v1/models` 一查便知。**录入前先查一遍。**
-- 教训 2：`calibrationStatus` 枚举只有 `pilot/unverified/verified`（无 pending）——按钮模板已按此修正。
-
-
-
-**测试方法学四坑（2026-08-19 Qwen3.8 历史案例：旧报告从 0.774 修订为 0.921；未经新完整性协议重评，不能视为本轮已验证分数）**：
-1. **裁判必须同一**：不同裁判宽严尺度不可比。基线谁裁的，对比就谁裁。外部强裁判用 `--judge "url=https://api.z.ai/api/coding/paas/v4|model=glm-5.3|key=GLMCODE_API_KEY"`（GLM Coding Plan key 走 coding 端点，通用 paas/v4 会报无资源包）。
-2. **max_tokens 别太紧**：思考型模型 reasoning 烧额度，1024 会导致 content 为空记 0 分。生成 8192 / 裁判 2048。
-3. **裁判失败≠模型 0 分**：裁判 JSON 解析失败重试后仍失败，分数记 null，并计入 Judge 覆盖缺口；不能记在被测模型头上，也不能剔除后仅凭高均分 PASS。
-4. **超时不等于质量 0 分**：生成超时记失败和 null，计入生成就绪率门禁；慢模型可串行单跑并显式设置 `EVAL_GATE_TIMEOUT_MS=300000`，不同并发与超时设置不能混同比较。**「某能力项明显退化」先查失败条目明细，再下结论**。
-
-## 六、还剩什么要做（按优先级）
-
-| 优先级 | 事项 | 说明 |
-|---|---|---|
-| **P0** | 平台侧分流配置 | 注册 auto 模型或网关规则——唯一硬依赖，需与 MaaS 平台方对齐 |
-| **P0** | .env 三变量 | MAAS_BASE_URL / ROUTER_KEY_MODE=passthrough / ADMIN_TOKEN，1 分钟 |
-| P1 | 语义分类器 | compose up 自带；不跑也可用（自动回退规则层） |
-| P1 | shadow 流量累积后切 active | ≥500 条/分层标注准确率（annotation-export 导出）/错误 ≤1%/观察 ≥7 天；active 后语义灰度 5% 起步逐档放大，守卫超阈回 shadow |
-| P2 | Prometheus 接 /metrics | 设 METRICS_TOKEN；对接内网监控时做 |
-| P2 | 反代 TLS | docs/反代集成.md 有现成 Nginx 配置 |
-| P3 | eval gate 与模型演进同步 | Qwen3.8-27B 上线、M2.5 退网时按 SOP 更新 |
-| P3 | 公开前脱敏 | router.json 内网端点等，公开仓库前必做 |
-
-## 七、持续迭代飞轮
-
-路由效果需要持续核验。交付可用性、人工声明反馈与 Judge 评分分别保留，HTTP ok 不能代替任务成功；当前只关联证据并生成待审候选，不自动学习或调整 quality，见[反馈关联](feedback-learning.md)：
-
-```
-请求流量 ──→ 决策日志 data/decisions/*.jsonl（决策+usage+费用证据；实际/估算/未知及数据来源分开）
-              │
-              ├─ 周度：python scripts/mine-decisions.py
-              │    ├─ 模型×任务×档位可用性画像（交付 ok率/分版本时延/费用证据）→ 排查线索
-              │    ├─ 同会话短间隔重试线索 → 人工核查原因，不直接判为不满意
-              │    └─ NEEDS_HUMAN_REVIEW 候选（trainingEligible=false）→ 独立标注、来源审核与隔离切分
-              │
-              ├─ 业务方可选：POST /admin/api/feedback {requestId, rating: good|bad}
-              │    └─ data/feedback/*.jsonl（人工声明评价，来源未经独立核验；按 requestId 关联，Judge 另存）
-              │
-              └─ 经审核的独立分类标签 → train_classifier.py → 分类评测 → replay 预估 → shadow → active
-```
-
-### 周度运营节奏（30 分钟）
-
-1. `python scripts/mine-decisions.py --days 7` 看画像
-2. 三个判断（结合脚本保留的证据与来源）：
-   - 某交付 ok 率 <0.9 且 n≥20 → 按错误范围排查调用方、权益、限流与供应商故障；不据此下调 quality，也不把租户 4xx 当作全局模型故障
-   - 某 task 的 tier 判定疑似出错 → 候选独立标注与仲裁、核验来源并隔离会话/模板后，才决定是否纳入训练集
-   - 重试集中某模型 → 联查交付错误、/metrics 与反馈；重试本身不能证明模型质量差
-3. 变更走标准链：管理端改 → 切换影响预估 → 发布（自动备份）→ 观察一周
-4. 分类训练集通过审核后：`train_classifier.py` 重训 → 独立分类评测 → replay 灰度预估 → shadow → active；回答质量另走带 Judge 和覆盖门禁的 eval gate，路由收益另用业务任务矩阵验收
-
-### 为什么不用数据库
-
-状态就两类：配置（config/router.json，发布自动备份）与日志（按天 JSONL，可 grep 可 scp）。
-当前可继续使用文件存储；实际容量随日志字段与请求长度变化。决策、反馈、Judge 与训练标签的语义不同，关联日志不等于可直接训练。
-将来日百万条或需在线 SQL 时，SQLite/ClickHouse 起步——schema 是超集，只换介质。
-
-## 八、部署核对清单（交付另一台服务器前逐项打勾）
-
-- [ ] `node --check src/server.mjs` 通过（语法）
-- [ ] `npm test` 全绿（当前 80+ 用例）
-- [ ] `.env` 不在包内（tarball 用 git archive 生成，天然排除）
-- [ ] 内网端点/IP 已确认可保留（私有仓库交付）或已脱敏（公开交付）
-- [ ] `config/router.json` 的 models 定价与 MaaS 实际结算价一致
-- [ ] 首次部署机器：Node ≥20 / Docker 二选一；Python 3.10+（分类器，可选）
-- [ ] `.env.example` 已按目标环境补全（ROUTER_KEY_MODE 按场景选 strict/passthrough）
-- [ ] compose 部署：`docker compose up -d` 后 `curl :8787/health` 返回 ok
-- [ ] 管理端首次登录：ADMIN_TOKEN 设置且非弱值
-- [ ] 上线一周后：跑 mine-decisions.py 建立基线画像
+已验收的生产模式是 `passthrough`：调用方使用自己的 MaaS key，路由器将它用于业务上游调用。管理登录、指标抓取和内部服务各用各自凭证。`MAAS_API_KEY` 可供管理发现或巡检使用，不应被描述为没有客户端 key 时的通用业务兜底。
+
+## 平台配置
+
+| 项目 | 内容 |
+|---|---|
+| 对外模型名 | `cmtoken-auto`，与 `routing.autoModelId` 一致 |
+| 路由后端 | `http://<路由服务器>:8787/v1`；是否需填写完整 `/chat/completions` 路径取决于平台表单 |
+| 业务鉴权 | 调用方 MaaS key，保留 Bearer 请求头 |
+| 流式 | 保留 SSE，关闭中间层响应缓冲，配置适当的连接超时 |
+| 上游地址 | 实际 MaaS 的模型接口，不能指回自动入口形成循环 |
+
+入口名是配置项，`auto` 不会自动成为 `cmtoken-auto` 的别名。点名其他模型是否允许，由路由器配置及调用方权限共同决定。
+
+接入后用至少一条普通请求和一条流式请求检查实际模型、完整输出、租户归属及记录关联。健康接口成功不代替真实业务验收。给业务方的 SDK 示例见 [使用说明](使用说明.md)。
+
+## 模型上线
+
+先从上游发现模型或手工登记，确认归属、能力、上下文和价格。归属待定的模型不能直接启用。连通性检查或体检通过后，再根据业务需要做稳定性巡检和带 Judge 的质量评测。
+
+评测建议与正式配置分开。检查评分样本和来源后，在模型管理中修改参数，查看影响并发布。启用后观察实际成功率、完整交付时延、费用与故障类型；不要把少量体检结果当成质量承诺。
+
+## 日常运营
+
+日常先看服务就绪、业务失败和持续异常，再查看模型状态、真实流量覆盖及磁盘留存。定位单次问题时用请求 ID 串联决策、语义复核和 Judge，区分上游失败、客户端取消和后台评审失败。
+
+调整策略时先保存草稿并检查影响，尤其注意被排除的模型、质量降级和并发额度。配置发布成功后检查 Go 状态；不要只看磁盘文件已经写入。正式采用语义复核前，应有代表性样本、可信分类标准、额外时延与费用的记录。
+
+交错评测适合比较同一时间窗口内的候选，但仍受题库与评审来源限制。自动补测、质量评审和业务生成分别统计费用。离线学习工具已提供，尚不能据此宣称线上成本或质量改善。
+
+## 异常处理
+
+| 问题 | 处理方向 |
+|---|---|
+| 调用方鉴权或配额错误 | 核对调用方 key、模型权限与上游额度，不盲目切模型 |
+| 某模型持续失败 | 查看最近失败证据和熔断状态，必要时通过配置发布停用 |
+| 配置发布冲突或状态不明 | 保留草稿，查明版本与 Go 发布结果后再操作 |
+| 流式中断 | 同时检查客户端、反向代理和上游，不只检查 HTTP 200 |
+| 磁盘增长 | 核对正文留存、轮转与保留设置，按需导出脱敏记录 |
+| 需要重启或回滚 | 先排空 Go，再停止 Node 和分类器；按已保存备份恢复 |
+
+当前部署不能仅靠共享 `router.json` 或复制容器就获得多实例一致性。会话、并发、健康、费用和配置发布都有状态，需要独立设计并验证；当前端口 `8789` 是 Node 内部接口，不是第二个业务实例。
+
+## 数据与交付
+
+生产配置、内部凭证和原始日志不进入代码仓库。对外提供记录前检查内容留存设置与具体字段，只导出必要数据。每次发布保存版本标签、镜像提交、正式测试和真实 JSON / SSE 验收，故障回滚不回退已经产生的费用和日志。
+
+最近一次上线记录见 [v0.14.8 验收](go-core-production-v0.14.8.md)，后续评估方法见 [受控比较](controlled-comparison.md)。

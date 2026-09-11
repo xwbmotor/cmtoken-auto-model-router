@@ -1,87 +1,79 @@
 # Auto Model Router
 
-面向 MaaS 平台的智能模型路由网关。客户端只需将 `model` 填为 `cmtoken-auto`（或留空），路由器根据请求内容自动选择最合适的模型——简单任务走低成本模型，复杂任务走强模型，在质量与成本之间逐请求寻优。
+Auto Model Router 是放在应用与 MaaS 平台之间的模型路由服务。应用调用一个统一模型名，服务根据请求所需能力、任务类型、质量分、成本、时延和模型可用状态选择上游模型，并记录选择过程。
 
-## 特性
+客户端使用 OpenAI Chat Completions 接口，模型名填 `cmtoken-auto`，也可以省略 `model`。入口名称由 `routing.autoModelId` 配置；若部署方修改了名称，以该部署的 `/v1/models` 为准。
 
-- **OpenAI Chat Completions 兼容接口**：`/v1/chat/completions`、`/v1/models`，支持流式、工具调用与 JSON 模式；具体能力受上游模型支持范围约束
-- **三层任务分类**：规则层（<1ms）→ 语义小模型复核（~20ms）→ 大模型升级，任务类型 + 三档难度
-- **评分选型**：`score = 质量 − 成本权重×用户成本指数 − 算力权重×算力消耗指数 − 时延权重×时延 − 不确定性 + 自建奖励 − 熔断惩罚`，权重管理端可调
-- **故障安全**：预算预占-结算-冲正、fallback 链、熔断器、优雅关停排空、决策/复核/评审三路独立事件流
-- **异步质量评审（Judge）**：按比例抽样已完成请求，交由独立评审模型（GLM-5.3）打分与路由核对，结果只进离线报表，不影响在线决策
-- **运营控制面**：Web 管理端（登录会话保护）、参数热更新、影响模拟、Prometheus 指标、发布门禁
+## 当前版本
 
-## 快速开始
+2026 年 9 月 11 日完成了 **v0.14.8 的 Go 生产入口切换**，代码已合并到默认分支 `master`。[验收记录](docs/go-core-production-v0.14.8.md)包含正式测试、真实请求、重启和回滚证据。这里记录的是该次验收状态，日常运行状态请查健康接口和监控。
 
-### 运行
-
-```bash
-# 零依赖 Node ≥ 24，克隆后直接启动
-node src/server.mjs
-# 默认监听 127.0.0.1:8787；生产配置见 docs/Ubuntu生产部署.md
-```
-
-生产环境通过环境变量提供凭证（`.env`，参考 `.env.example`）：
-
-| 变量 | 用途 |
+| 服务 | 负责什么 |
 |---|---|
-| `ADMIN_TOKEN` | 管理端登录与 `/admin/api/*` |
-| `METRICS_TOKEN` | `/metrics` Prometheus 抓取 |
-| `ROUTER_ACCESS_KEY` | 业务调用鉴权（strict 模式） |
-| `ROUTER_KEY_MODE` | `passthrough`（客户端 key 透传，默认）或 `strict` |
-| `SEMANTIC_BUCKET_SECRET` | 语义灰度分桶 HMAC secret（active 模式必填） |
+| Go | 承接业务入口，执行分类、选模、并发控制、重试和 JSON / SSE 转发 |
+| Node | 管理页面、配置校验与发布、决策记录、费用观察、异步质量评审及兼容请求处理 |
+| Python 分类器 | 提供小模型任务分类；是否参与请求决策由语义复核策略决定 |
 
-### 客户端接入
+已验收的 Go 生产方式使用 `passthrough` 鉴权，且 `budget.enabled=false`。客户端的 MaaS key 用于上游调用；费用仍由 Node 记录。Go 独立账本、其他鉴权方式和多实例共享状态的实验，不等于已在这套生产部署中启用。
+
+## 能做什么
+
+- 根据模型能力、上下文容量、租户权限和质量要求筛选候选，再比较成本、时延及健康状态。便宜的模型不能绕过这些条件。
+- 支持普通 JSON 和流式 SSE 请求，以及工具调用、JSON 输出模式等兼容字段；具体支持范围仍取决于上游模型。
+- 遇到可重试的上游故障时按策略重试或选择其他合格模型；鉴权、权限和请求错误不作为盲目换模型的理由。
+- 通过管理端查看模型、调整策略、预览变更影响，再发布配置。保存成功后，Node 与 Go 使用对应的新配置。
+- 记录决策、语义复核和 Judge 评审结果。Judge 是对回答的抽样评审，不保证每个回答正确，也不会自动把评分写回线上策略。
+
+路由质量取决于模型池、评分来源和真实业务数据。仓库提供离线比较与学习工具，但尚未证明学习策略的生产收益。[评测说明](docs/evaluation-integrity.md)解释了不同测试能支持什么结论。
+
+## 本地运行
+
+本地查看管理端和开发 Node 服务可使用 Node.js 24：
 
 ```bash
-curl http://<服务地址>:8787/v1/chat/completions \
-  -H "Authorization: Bearer <你的key>" \
+npm start
+```
+
+该命令会读取存在的 `.env`，启动 `src/server.mjs`；没有指定监听地址时使用 `127.0.0.1:8787`。它不启动 Go 或 Python 分类器，不能代替生产三服务部署。凭证和上游地址参考 `.env.example`，不要将填好的 `.env` 提交到仓库。
+
+生产安装、升级和停止顺序见 [Ubuntu 部署说明](docs/Ubuntu生产部署.md)。Go 的本地构建和检查见 [Go 开发说明](go-core/README.md)。
+
+## 接入示例
+
+以下请求会调用真实上游。`MAAS_KEY` 是调用方的 MaaS 凭证，地址替换为实际服务地址：
+
+```bash
+curl http://127.0.0.1:8787/v1/chat/completions \
+  -H "Authorization: Bearer $MAAS_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"cmtoken-auto","messages":[{"role":"user","content":"你好"}]}'
+  -d '{"model":"cmtoken-auto","messages":[{"role":"user","content":"用一句话解释快速排序"}]}'
 ```
 
-`/v1/models` 只暴露 `cmtoken-auto` 入口；点名单个模型仍可用原模型名（需 `allowExplicitModel`）。
+需要流式输出时增加 `"stream":true`。Python 示例、会话和常见错误见 [使用说明](docs/使用说明.md)。
 
-## 目录结构
-
-```
-src/                  服务端（零依赖 Node ESM）
-  server.mjs          HTTP 入口、协议层、管理 API、Judge 调度
-  router.mjs          路由决策核心（分类、评分、fallback、基线）
-  judge.mjs           异步评审器（抽样、预算、熔断、rubric）
-  semantic-router.mjs L2/L3 语义复核
-  config.mjs          配置加载与校验
-  ...
-public/               管理端 Web UI（登录页 + 控制台）
-config/router.json    运行时配置（模型池、权重、预算）
-docs/                 使用说明、MaaS 集成手册、部署指南
-tests/                node:test 全量测试（实际数量以测试报告为准，发布门禁 0-skip）
-scripts/              分类器训练/评测、发布测试脚本
-```
-
-## 测试与发布
+## 开发与测试
 
 ```bash
-npm test              # 全量测试
-npm run test:release  # 发布门禁：clean HEAD + tag 校验 + 0-skip，报告落 reports/
+npm test
 npm run eval:matrix -- --input data/business-matrix.json --out data/business-matrix-report.json
 ```
 
-版本号唯一口径为 `package.json` semver + git tag；发布流程与镜像部署见 `docs/智能体交接说明.md`。
+`npm test` 是 Node 测试入口；涉及分类器或浏览器的测试还需要相应依赖。Go 检查可在 Windows 执行 `./go-core/verify.ps1`。正式发版另需在干净且精确匹配版本标签的工作区运行 `npm run test:release`，验证镜像提交和零跳过测试；普通本地测试通过不代表正式发布完成。
 
-## 文档
+| 目录 | 内容 |
+|---|---|
+| `go-core/` | Go 请求服务、兼容性测试、容量实验和部署工具 |
+| `src/` | Node 管理服务、配置、记录、评审和保留的 Node 请求实现 |
+| `public/` | 管理端页面与脚本 |
+| `config/` | 路由配置、规则及评测输入；生产配置另行保管 |
+| `scripts/`、`tests/` | 训练与评测工具、发布检查、Node 回归测试 |
+| `docs/` | 使用、运维、开发说明和历史验证记录 |
 
-- [路由约束与评测基础](docs/router-foundations.md) —— 执行约束、指标变更及真实数据阶段边界
-- [评测完整性](docs/evaluation-integrity.md) —— Judge 输入、覆盖门禁和显式评分导入
-- [真实任务矩阵](docs/routing-matrix.md) —— 公平比较固定模型、当前路由、新策略与理想上界
-- [离线路由学习流程](docs/routing-learning-workflow.md) —— 数据隔离、请求级概率/费用拟合、盲化预测与独立结果比较
-- [反馈关联与待审样本](docs/feedback-learning.md) —— 传输结果、人工评价和 Judge 分开使用
-- [使用说明](docs/使用说明.md) —— 功能导览与参数口径
-- [MaaS平台集成部署运营手册](docs/MaaS平台集成部署运营手册.md) —— 平台侧集成与运营
-- [路由设计说明](docs/路由设计说明.md) —— 路由算法设计细节
-- [Ubuntu生产部署](docs/Ubuntu生产部署.md) · [反代集成](docs/反代集成.md)
-- [CHANGELOG](CHANGELOG.md) —— 版本历史
+## 文档入口
 
-## License
-
-MIT
+- [文档目录](docs/README.md)：按使用、运维、开发和历史记录查找。
+- [使用说明](docs/使用说明.md)：接入和日常使用。
+- [MaaS 平台集成](docs/MaaS平台集成部署运营手册.md)：平台分流、凭证和运营。
+- [部署说明](docs/Ubuntu生产部署.md) · [反向代理](docs/反代集成.md)：生产运行。
+- [路由设计](docs/路由设计说明.md) · [开发交接](docs/智能体交接说明.md)：实现与维护。
+- [版本记录](CHANGELOG.md)：各版本的变化及影响。

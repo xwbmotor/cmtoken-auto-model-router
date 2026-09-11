@@ -22,7 +22,7 @@ import { spawn } from 'node:child_process';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 
 import { loadConfig, projectRoot, saveConfig as saveSourceConfig, validateConfig, getConfigRevision, refreshCostIndexes } from './config.mjs';
-import { promises as dnsPromises } from 'node:dns'; // v0.11.13（二十七审 P1-1）SSRF DNS pinning
+import { promises as dnsPromises } from 'node:dns'; // SSRF DNS pinning
 
 import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice, recommendReasoningLevel, isAutoRequest, autoModelId, capabilityEligible } from './router.mjs';
 
@@ -516,12 +516,12 @@ const counters = { startedAt: new Date().toISOString(), total: 0, auto: 0, expli
 const countersStatePath = resolve(projectRoot, process.env.AMR_COUNTERS_PATH || './data/counters.json');
 function countersToPersist() {
   const { startedAt, ...cumulative } = counters;
-  // 二十九审 P2-2：首启时间持久化——重启后 UI「累计起算日」不再错误显示本次启动日期
+  // 保存首次启动时间，让重启后的累计统计起点保持一致。
   if (!cumulative.firstStartedAt) cumulative.firstStartedAt = startedAt;
   return { version: 1, savedAt: new Date().toISOString(), cumulative };
 }
 let countersWriteTimer = null;
-let countersWriteChain = Promise.resolve(); // 二十九审 P2-1：单一串行写链——写永远排队，杜绝旧快照后完成覆盖新快照
+let countersWriteChain = Promise.resolve(); // 串行保存统计快照，避免旧快照后完成而覆盖新数据。
 function countersFlushNow() {
   if (countersWriteTimer) { clearTimeout(countersWriteTimer); countersWriteTimer = null; }
   const snapshot = JSON.stringify(countersToPersist(), null, 2) + String.fromCharCode(10);
@@ -538,7 +538,7 @@ function scheduleCountersWrite() {
   countersWriteTimer = setTimeout(() => { countersWriteTimer = null; countersFlushNow(); }, 500);
   countersWriteTimer.unref?.();
 }
-// 恢复：结构校验 + 损坏可见（二十九审 P2-2：原静默吞错+嵌套损坏仍载入）
+// 恢复前校验快照结构，损坏时报告错误。
 let countersRestored = (async () => {
   try {
     const raw = await fsp.readFile(countersStatePath, 'utf8');
@@ -554,7 +554,7 @@ let countersRestored = (async () => {
     if (e?.code !== 'ENOENT') logger.warn('counters_state_corrupt', { error: String(e?.message || e) });
   }
 })();
-await countersRestored; // 二十九审 P2-2：恢复完成于 server 监听前（此处已过 TDZ；监听在文件后段）
+await countersRestored; // 完成统计恢复后才开始监听请求。
 
 // 真实业务规模输入构造器：模拟样本不再是「一句话玩具提问」，而是带系统提示词+多轮上下文的真实调用形态。
 
@@ -1749,7 +1749,7 @@ async function fetchUpstreamModels() {
   const registered = new Set((config.models || []).map((m) => m.id));
   const models = list.map((m) => ({ id: m.id, registered: registered.has(m.id), ownedBy: m.owned_by || null }));
   const result = { total: models.length, newCount: models.filter((m) => !m.registered).length, models,
-    upstream: { baseUrl: base || null, keyMasked: key ? (key.length <= 8 ? '…' + key.slice(-2) : key.slice(0, 6) + '…' + key.slice(-4)) : null } }; // v0.11.11：短 key 只露末2位（二十六审 P2-3）
+    upstream: { baseUrl: base || null, keyMasked: key ? (key.length <= 8 ? '…' + key.slice(-2) : key.slice(0, 6) + '…' + key.slice(-4)) : null } }; // 短 key 只显示末两位。
   discoverCache = { at: now, result };
   return result;
 }
@@ -1822,7 +1822,7 @@ function startEvalJob(body) {
     if (ids.length > 4) throw new Error('interleaved 最多 4 个模型（预算保护）');
     const unknown = ids.filter((id) => !(config.models || []).some((m) => m.id === id));
     if (unknown.length) throw new Error(`模型不在注册表：${unknown.join('、')}`);
-    // v0.11.11（二十六审 P1-2）：后端强校验 enabled+ownership——禁用/归属待定模型拒绝（与前端同口径，防直连 API 绕过）
+    // 后端强校验 enabled+ownership——禁用/归属待定模型拒绝（与前端同口径，防直连 API 绕过）
     const ineligible = ids.filter((id) => { const m = (config.models || []).find((x) => x.id === id); return m && (m.enabled !== true || m.ownership === 'unknown'); });
     if (ineligible.length) throw new Error(`模型未启用或归属待定（不参与评测）：${ineligible.join('、')}`);
     for (const j of evalJobs.values()) if (!j.finishedAt) throw new Error(`已有任务在跑（${j.id} ${j.type}），请等它完成`);
@@ -1847,7 +1847,7 @@ function startEvalJob(body) {
 }
 
 // ══ v0.11.0 交错评测：多模型同窗口轮转 + Judge 评分 + bootstrap CI。仅出建议值，不改任何模型参数。 ══
-// 设计（对齐十九审口径）：
+// 交错评测的统计约定：
 //  · 同一题集对 N 个模型交错执行（A,B,A,B…），预热题（每模型前 warmup=2 题）不计分——消除冷启动偏差；
 //  · 每题 Judge 按 rubric 四维打分（复用 buildJudgeMessages/callJudgeModel/parseJudgeJson）；
 //  · 汇总：每模型质量分 CI（mean correctness+instruction+completeness+safety）/4）、时延 CI、两两显著性；
@@ -1880,7 +1880,7 @@ async function runInterleavedEval(job) {
     const N = job.modelIds.length;
     const order = job.modelIds.map((_, k) => job.modelIds[(ci + k) % N]); // 第 ci 题轮转起点
     for (const mid of order) {
-      if (job.cancelRequested) break; // v0.11.5（二十四审 P1-3）：题内每个模型调用前检查取消——不为已取消任务多付调用费
+      if (job.cancelRequested) break; // 题内每个模型调用前检查取消——不为已取消任务多付调用费
       callIndexByModel[mid] += 1;
       const modelWarmup = callIndexByModel[mid] <= WARMUP; // 每模型独立前 N 次调用=预热（不吞题）
       try {
@@ -1947,7 +1947,7 @@ async function runInterleavedEval(job) {
     };
   }
   // v0.11.1：两两比较改配对 bootstrap——同一题的 (scoreA, scoreB) 求 diff 后重采样（保留题目难度协方差；
-  // 二十审反例：恒定领先 1 分时独立采样会丢协方差判不显著，配对后 CI 严格为 1）
+  // 同题恒定领先 1 分时应保留配对关系，独立采样会丢失题目间协方差。
   const pairwise = [];
   for (let i = 0; i < job.modelIds.length; i++) for (let j = i + 1; j < job.modelIds.length; j++) {
     const A = job.modelIds[i], B = job.modelIds[j];
@@ -1979,7 +1979,7 @@ async function runInterleavedEval(job) {
 // v0.11.1：题面构造——必须含原题正文（Judge 要能核验「答的是不是这道题」），rubric 作评分标准附后
 function c_prompt(r) { return `${r.prompt || ''}\n\n（评分标准供参考：${r.rubric || '无'}）`; }
 
-// v0.10.5：评测错误统一分类（与十九审建议对齐：empty_response/timeout/http_401/http_429/http_5xx/invalid_payload/other）
+// 评测错误统一分类（empty_response/timeout/http_401/http_429/http_5xx/invalid_payload/other）
 function classifyEvalError(msg) {
   const s = String(msg);
   if (/HTTP 401|HTTP 403/.test(s)) return 'http_401_403';
@@ -1995,7 +1995,7 @@ async function runEvalJob(job) {
   const cases = job.type === 'checkup' ? CHECKUP_CASES : await loadEvalGateCases();
   job.total = cases.length;
   for (const c of cases) {
-    // v0.11.2：checkup/full 同样支持取消（二十一审 P1-3）
+    // 体检与巡检同样响应取消。
     if (job.cancelRequested) { job.status = 'cancelled'; job.finishedAt = new Date().toISOString(); return; }
     try {
       const r = await callUpstreamChat(job.modelId, c.prompt, c.maxTokens || 300);
@@ -3502,16 +3502,16 @@ const server = http.createServer(async (req, res) => {
       const base = String(body?.baseUrl || '').trim().replace(/\/$/, '');
       const key = String(body?.apiKey || '').trim();
       if (!key) return errorJson(res, 400, '请填写该端点的 API Key', 'invalid_request_error');
-      // v0.11.11（二十六审 P1-3）SSRF 防护：new URL 严格解析 + 主机名白名单（禁止 IP 直连与内网默认放行）
+      // SSRF 防护：new URL 严格解析 + 主机名白名单（禁止 IP 直连与内网默认放行）
       let u;
       try { u = new URL(base); } catch { return errorJson(res, 400, '端点必须是合法 http(s) URL（如 https://host:port/v1）', 'invalid_request_error'); }
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return errorJson(res, 400, '端点协议只允许 http/https', 'invalid_request_error');
       if (u.username || u.password || u.hash) return errorJson(res, 400, '端点不允许携带用户名/密码/fragment', 'invalid_request_error');
       const host = u.hostname.toLowerCase();
-      // v0.11.13（二十七审 P1-1/P2-2）：拒绝 query；fetch 用规范化 URL（防 base 带 ?x=1 拼出 /v1?x=1/models）
+      // 拒绝 query；fetch 用规范化 URL（防 base 带 ?x=1 拼出 /v1?x=1/models）
       if (u.search) return errorJson(res, 400, '端点不允许携带 query 参数', 'invalid_request_error');
       // 测试逃生口：e2e 用 127.0.0.1 mock 上游（默认关——生产绝不设）。v0.11.13 收窄：仅放行 127.0.0.1 字面量，
-      // 不再豁免域名白名单与其他 IP（二十七审指出原实现允许任意 IP+任意域名=生产误设即全开）
+      // 不再豁免域名白名单与其他 IP（原实现允许任意 IP+任意域名=生产误设即全开）
       const allowLoopbackOnly = process.env.AMR_PROBE_ALLOW_LOCALHOST === '1' && host === '127.0.0.1' && (u.port !== '');
       if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host === 'localhost' || host.endsWith('.localhost') || host.includes(':')) {
         if (!allowLoopbackOnly) return errorJson(res, 400, '不允许直接用 IP/localhost 作为端点——请使用域名（防内网探测）', 'invalid_request_error');
@@ -3523,7 +3523,7 @@ const server = http.createServer(async (req, res) => {
       if (!allowLoopbackOnly && (ALLOW.length ? !ALLOW.includes(host) : !/^(maas\.gd\.chinamobile\.com|api\.z\.ai)$/.test(host))) {
         return errorJson(res, 400, `端点 ${host} 不在允许清单（DISCOVER_PROBE_ALLOW_HOSTS 可扩展）`, 'invalid_request_error');
       }
-      // v0.11.13（二十七审 P1-1）DNS pinning：域名必须先解析，解析结果全部落在禁用网段则拒绝（RFC1918/loopback/
+      // DNS pinning：域名必须先解析，解析结果全部落在禁用网段则拒绝（RFC1918/loopback/
       // link-local(含云元数据 169.254.169.254)/IPv6 ULA/IPv4-mapped）。白名单域名解析异常也拒绝（fail-closed）。
       const ipIsBlocked = (ip) => {
         if (ip.includes('.')) {
@@ -3547,7 +3547,7 @@ const server = http.createServer(async (req, res) => {
         catch { return errorJson(res, 400, `端点域名 ${host} 解析失败（DNS）`, 'invalid_request_error'); }
         const bad = addrs.filter((a) => ipIsBlocked(a.address));
         if (bad.length) return errorJson(res, 400, `端点域名解析到禁用网段（${bad.map((b) => b.address).join('、')}）——禁止内网/元数据探测`, 'invalid_request_error');
-        // 二十八审 P1-1 剩余窗口的如实说明：fetch 时 Node/undici 会再次解析（rebinding TOCTOU）。
+        // 剩余窗口的如实说明：fetch 时 Node/undici 会再次解析（rebinding TOCTOU）。
         // 现实风险评估：白名单默认仅企业自有域名（maas.gd.chinamobile.com / api.z.ai），攻击者需控制其 DNS
         // 才能利用；DISCOVER_PROBE_ALLOW_HOSTS 扩展时运营自负其责。http 端点可加 IP 直连+Host 头彻底闭环
         // （https 因 SNI/证书绑定不可行）。此处选择：http 端点用解析出的第一个非禁 IP 直连（真闭环），
@@ -3556,7 +3556,7 @@ const server = http.createServer(async (req, res) => {
           const safeIp = addrs.find((a) => !ipIsBlocked(a.address));
           if (safeIp) {
             // IP 直连（真闭环：无二次解析窗口）+ Host 头保上游路由
-            const hostForUrl = safeIp.address.includes(':') ? `[${safeIp.address}]` : safeIp.address; // 二十九审 P2-4：IPv6 须括号否则 Invalid URL
+            const hostForUrl = safeIp.address.includes(':') ? `[${safeIp.address}]` : safeIp.address; // IPv6 须括号否则 Invalid URL
             const ipUrl = new URL(`${u.protocol}//${hostForUrl}${u.port ? ':' + u.port : ''}${u.pathname.replace(/\/$/, '')}/models`);
             const res3 = await fetch(ipUrl, { headers: { authorization: `Bearer ${key}`, host: u.host }, signal: AbortSignal.timeout(15000), redirect: 'error' });
             if (!res3.ok) return errorJson(res, 502, `端点返回 HTTP ${res3.status}——请核对 URL 与 Key（key 是否有 /models 权限）`, 'discover_probe_error');
@@ -3830,7 +3830,7 @@ const server = http.createServer(async (req, res) => {
 
       const applied = []; const skipped = [];
       const bsImportIssues = []; // v0.11.4：导入键白名单拒绝记录（响应回显给运营）
-            // v0.11.5（二十四审 P1-1）：值类型化 schema——键合法值恶意同样拒绝；原型链保留名显式拒
+            // 值类型化 schema——键合法值恶意同样拒绝；原型链保留名显式拒
             const KEY_RE = /^[a-zA-Z0-9_.-]{1,64}$/;
             const BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
             const SAFE_STR = (x, max = 200) => (typeof x === 'string' && x.length <= max ? x : null);
@@ -3871,7 +3871,7 @@ const server = http.createServer(async (req, res) => {
 
             // v0.11.4：键白名单 + v0.11.5 保留名拒绝（__proto__/constructor/prototype）
             if (!KEY_RE.test(k) || BAD_KEYS.has(k)) { bsImportIssues.push(String(k).slice(0, 30) + ' 含非法字符或保留名，已跳过'); continue; }
-            // v0.11.5（二十四审 P1-1）：值 schema 校验——键合法值恶意同样拒绝；null=删除语义保留
+            // 值 schema 校验——键合法值恶意同样拒绝；null=删除语义保留
             if (v !== null) {
               const validated = VALUE_SCHEMA[layer] ? VALUE_SCHEMA[layer](v) : v;
               if (validated == null) { bsImportIssues.push(layer + '.' + k + ' 值类型/范围非法，已跳过'); continue; }
@@ -4592,7 +4592,7 @@ const shutdownManager = createShutdownManager({
     await latencyStore.flush(true);
     await operations.flush();
 
-    // ①counters 最终快照（二十九审 P2-1：优雅关停丢最后 500ms）
+    // 关闭前保存最终统计，避免丢失尚未定时写入的增量。
     await countersFlushNow();
 
     // ②决策日志写链 ③语义事件写链 ④预算账本。HTTP 响应结束≠复核结束，滚动重启前必须等完。
@@ -4612,7 +4612,7 @@ const shutdownManager = createShutdownManager({
     }
 
     await Promise.allSettled([decisionLog.writeChain, semanticLog.writeChain, judgeLog.writeChain, budgetTracker.pendingWrite]);
-    await guardPersist.drain(); // 
+    await guardPersist.drain();
 
   },
 
@@ -4638,9 +4638,7 @@ if (process.env.AMR_TEST_SHUTDOWN_IPC === '1' && typeof process.send === 'functi
 
 // 测试钩子（AMR_TEST_STUCK_SEMANTIC_TASK=1）：注册一个永不 resolve 的语义后台任务，
 
-// 供关停排空的 8s 上限行为级测试使用
-
-// 提前终止，无法证明 Promise.race 的 8s 上限真实生效）。
+// 用于验证后台任务一直未完成时，关停等待仍有 8 秒上限。
 
 if (process.env.AMR_TEST_STUCK_SEMANTIC_TASK === '1') {
 
