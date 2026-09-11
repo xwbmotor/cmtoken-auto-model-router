@@ -53,13 +53,13 @@ const mock = createServer(async (req, res) => {
     res.write('data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n');
     await sleep(30);
     res.write('data: {"choices":[{"delta":{"content":"这是流式回答"}}]}\n\n');
-    await sleep(body.messages?.[0]?.content === 'cancel-fixture' ? 1500 : 30);
+    await sleep(['cancel-fixture', 'drain-fixture'].includes(body.messages?.[0]?.content) ? 1500 : 30);
     res.end(`data: ${JSON.stringify({ choices: [], usage })}\n\ndata: [DONE]\n\n`);
   } else res.end(JSON.stringify({ model: body.model, choices: [{ message: { role: 'assistant', content: '这是业务回答' } }], usage }));
 });
 async function freePort() { const s = createServer(); await new Promise(r => s.listen(0, '127.0.0.1', r)); const p = s.address().port; await new Promise(r => s.close(r)); return p; }
 function start(command, args, env) {
-  const child = spawn(command, args, { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
+  const child = spawn(command, args, { cwd: root, windowsHide: true, stdio: env.AMR_TEST_SHUTDOWN_IPC === '1' ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
   let output = ''; child.stdout.on('data', b => { output = (output + b).slice(-8000); }); child.stderr.on('data', b => { output = (output + b).slice(-8000); });
   child.on('error', e => { output += String(e); }); children.push(child); return { child, output: () => output };
 }
@@ -109,7 +109,7 @@ try {
   });
   await healthy(goBase, go);
   const node = start(process.execPath, ['src/server.mjs'], { HOST: '127.0.0.1', PORT: String(nodePort), CONFIG_PATH: configFile,
-    AMR_GO_NATIVE_FRONT: nativeFront ? '1' : '0', AMR_GO_CHAT_URL: goBase + '/v1/chat/completions', AMR_GO_EDGE_TOKEN: edgeToken, AMR_GO_ADMIN_URL: goBase,
+    AMR_TEST_SHUTDOWN_IPC: nativeFront ? '1' : '0', AMR_GO_NATIVE_FRONT: nativeFront ? '1' : '0', AMR_GO_CHAT_URL: goBase + '/v1/chat/completions', AMR_GO_EDGE_TOKEN: edgeToken, AMR_GO_ADMIN_URL: goBase,
     AMR_GO_ADMIN_TOKEN: admin, AMR_GO_RUNTIME_CONFIG: snapshot, ROUTER_KEY_MODE: 'strict', ROUTER_ACCESS_KEY: access,
     UPSTREAM_BASE_URL: upstream, MAAS_BASE_URL: upstream, UPSTREAM_API_KEY: provider, MAAS_API_KEY: provider,
     SEMANTIC_BUCKET_SECRET: semanticSecret,
@@ -188,7 +188,21 @@ try {
   }
   const noAuth = await fetch(base + '/internal/v1/go-events', { method: 'POST', body: '{}' }); assert.equal(noAuth.status, nativeFront ? 404 : 403);
   const cors = await fetch(base + '/v1/chat/completions', { method: 'OPTIONS', headers: { origin: 'https://outside.example' } }); assert.equal(cors.status, 204);
-  const result = { experiment: nativeFront ? 'go-native-front-node-events' : 'real-node-go-edge', nativeFront, passed: true, requests: requests.length + 1,
+  let gracefulNativeDrain = false;
+  if (nativeFront) {
+    const draining = await post({ stream: true, messages: [{ role: 'user', content: 'drain-fixture' }] }, 'edge-drain');
+    const ended = once(node.child, 'close');
+    node.child.send({ type: 'amr-shutdown', reason: 'native-front-drain-test' });
+    assert.equal(draining.status, 200); assert.match(await draining.text(), /\[DONE\]/);
+    assert.equal((await ended)[0], 0, node.output());
+    const persisted = await records('decisions-');
+    assert.equal(persisted.filter(r => r.request?.requestId === 'edge-drain').length, 1);
+    assert.equal(persisted.find(r => r.request?.requestId === 'edge-drain').outcome.ok, true);
+    if (semantic !== 'disabled') semanticRows = await records('semantic-reviews-');
+    judges = await records('judge-reviews-');
+    gracefulNativeDrain = true;
+  }
+  const result = { experiment: nativeFront ? 'go-native-front-node-events' : 'real-node-go-edge', nativeFront, gracefulNativeDrain, passed: true, requests: requests.length + 1 + (nativeFront ? 1 : 0),
     semantic, classifierCalls, semanticReviewRecords: semanticRows.length,
     judgeQualityRecords: judges.filter(r => r.event === 'quality').length, cancellation: true, fallback: true, configPublication: true, at: new Date().toISOString() };
   await writeFile(resolve(arg('--out') || join(root, 'data/go-migration/edge-integration.json')), JSON.stringify(result, null, 2) + '\n');

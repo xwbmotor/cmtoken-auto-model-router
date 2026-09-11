@@ -12,7 +12,7 @@ on:
       profile:
         description: Local mock workload size (never production)
         type: choice
-        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard, edge-observation-profile, edge-isolation, edge-observation-optimization, native-front-standard, native-front-profile]
+        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard, edge-observation-profile, edge-isolation, edge-observation-optimization, native-front-standard, native-front-profile, native-front-io-compare]
         default: smoke
 
 permissions:
@@ -40,7 +40,20 @@ jobs:
         env:
           PROFILE: ${{ inputs.profile || 'smoke' }}
         run: |
-          if [ "$PROFILE" = "native-front-standard" ]; then
+          if [ "$PROFILE" = "native-front-io-compare" ]; then
+            baseline=31a200faeac48dbe7c2cace7b1577159bd3b865d
+            git fetch --no-tags --depth=1 origin "$baseline"
+            cp src/budget.mjs "$RUNNER_TEMP/budget-after.mjs"
+            git show "$baseline:src/budget.mjs" > "$RUNNER_TEMP/budget-before.mjs"
+            for phase in before-1 after-1 after-2 before-2; do
+              variant=after; if [[ "$phase" == before-* ]]; then variant=before; fi
+              cp "$RUNNER_TEMP/budget-$variant.mjs" src/budget.mjs
+              result="data/go-migration/capacity-native-front-io-$phase"
+              node go-core/compat/compare-capacity.mjs --native-front --feature-mode snapshot --budget-mode observation --binary data/go-migration/amr-core-linux --seconds 5 --rounds 1 --rates 100,300 --stream-seconds 2 --streams 2 --cpus 2 --memory-mib 512 --out "$result.json"
+              node go-core/compat/summarize-capacity.mjs "$result.json" "$result.md"
+            done
+            cp "$RUNNER_TEMP/budget-after.mjs" src/budget.mjs
+          elif [ "$PROFILE" = "native-front-standard" ]; then
             for phase in 1 2; do
               result="data/go-migration/capacity-native-front-$phase"
               node go-core/compat/compare-capacity.mjs --native-front --feature-mode snapshot --budget-mode observation --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 100,300 --stream-seconds 60 --streams 32 --cpus 2 --memory-mib 512 --out "$result.json"

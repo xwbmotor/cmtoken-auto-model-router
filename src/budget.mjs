@@ -35,6 +35,8 @@ export class BudgetTracker {
     this.config = config;
     this.state = state;
     this.pendingWrite = Promise.resolve();
+    this.nextSnapshot = null;
+    this.writing = false;
     // 预占-结算：请求开始预占估算额（防低预估逃逸预算窗口），结束按实际 usage 冲正。
     // reserves 仅内存态（进程崩溃丢预占 = 少记不重记，预算偏保守方向安全）
     this.reserves = new Map(); // id -> yuan
@@ -133,14 +135,29 @@ export class BudgetTracker {
   // 磁盘落盘保持异步批量：settle/reserve 不再 await 磁盘写——预算是记账不是闸门，
   // 热路径不因 JSON 台账序列化阻塞。
   scheduleWrite() {
-    const snapshot = JSON.stringify(this.state, null, 2) + '\n';
-    this.pendingWrite = this.pendingWrite.then(async () => {
-      await mkdir(dirname(this.path), { recursive: true });
-      const temp = `${this.path}.${process.pid}.${Date.now()}.tmp`;
-      await writeFile(temp, snapshot, { encoding: 'utf-8', mode: 0o600 });
-      await rename(temp, this.path);
-    }).catch(() => {});
+    // This file is a current totals snapshot, not an event journal. While one
+    // atomic replacement is in progress, keep only the latest complete state.
+    // A slow disk must not build an unbounded queue of obsolete JSON snapshots.
+    this.nextSnapshot = JSON.stringify(this.state, null, 2) + '\n';
+    if (this.writing) return this.pendingWrite;
+    this.writing = true;
+    this.pendingWrite = (async () => {
+      try {
+        while (this.nextSnapshot !== null) {
+          const snapshot = this.nextSnapshot;
+          this.nextSnapshot = null;
+          await this.writeSnapshot(snapshot);
+        }
+      } finally { this.writing = false; }
+    })().catch(() => {});
     return this.pendingWrite;
+  }
+
+  async writeSnapshot(snapshot) {
+    await mkdir(dirname(this.path), { recursive: true });
+    const temp = `${this.path}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(temp, snapshot, { encoding: 'utf-8', mode: 0o600 });
+    await rename(temp, this.path);
   }
 
   static async create(projectRoot, config) {

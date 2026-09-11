@@ -14,6 +14,25 @@ async function fresh(config) {
   return { t, dir, ledger: () => readFile(join(dir, 'ledger.json'), 'utf8').then(JSON.parse) };
 }
 
+test('slow snapshot persistence coalesces backlog without losing settlements or the final state', async () => {
+  const { t, dir, ledger } = await fresh(cfg({ enabled: false }));
+  let release;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const persist = t.writeSnapshot.bind(t); let writes = 0;
+  t.writeSnapshot = async snapshot => { writes++; if (writes === 1) await blocked; await persist(snapshot); };
+  try {
+    const reserved = await t.reserve(3);
+    for (let i = 0; i < 1000; i++) await t.observeCompletedAttempt(1, 1, true);
+    assert.equal(writes, 1);
+    release(); await t.pendingWrite;
+    assert.equal(writes, 2, 'obsolete intermediate totals must not accumulate behind a slow write');
+    let saved = await ledger();
+    assert.equal(saved.settledActualSpendYuan, 1000); assert.equal(saved.estimatedSpendYuan, 3); assert.equal(saved.settles, 1000);
+    await t.settle(reserved, 2, true); await t.pendingWrite;
+    saved = await ledger(); assert.equal(saved.settledActualSpendYuan, 1002); assert.equal(saved.estimatedSpendYuan, 0);
+  } finally { release(); await t.pendingWrite; await rm(dir, { recursive: true, force: true }); }
+});
+
 test('release cancels unstarted work without creating estimated or actual spend, and is idempotent', async () => {
   const { t, dir } = await fresh(cfg());
   try {
