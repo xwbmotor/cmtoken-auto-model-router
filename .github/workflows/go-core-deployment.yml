@@ -20,6 +20,7 @@ jobs:
       - name: Prepare disposable local fixtures
         run: |
           AMR_VERIFY_COMPOSE=1 python3 go-core/deployment/test_native_compose.py
+          python3 go-core/deployment/test_prepare_native.py
           node go-core/deployment/prepare.mjs
           sudo chown -R 65532:65532 data/go-deployment/config data/go-deployment/ledger
       - name: Build and test isolated containers
