@@ -402,6 +402,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, edgeErr.Error())
 		return
 	}
+	var messages []json.RawMessage
+	messagesErr := json.Unmarshal(body["messages"], &messages)
 	if edge != nil {
 		if edge.native == nil || hadPrivateEdge {
 			data, _ = json.Marshal(body)
@@ -409,6 +411,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx = context.WithValue(ctx, edgeContextKey{}, edge)
 		r = r.WithContext(context.WithValue(r.Context(), edgeContextKey{}, edge))
 		if writer, ok := w.(*nativeWriter); ok {
+			if edge.native != nil {
+				edge.native.messagesValid = messagesErr == nil && messages != nil
+			}
 			w.Header().Set("X-Request-ID", edge.RequestID)
 			defer g.finishNative(writer, r, edge)
 		}
@@ -418,8 +423,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_model")
 		return
 	}
-	var messages []json.RawMessage
-	if json.Unmarshal(body["messages"], &messages) != nil || len(messages) == 0 {
+	if messagesErr != nil || len(messages) == 0 {
 		writeError(w, 400, "invalid_messages")
 		return
 	}
@@ -442,7 +446,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		native = &result
 	}
 	assessmentRegion := trace.StartRegion(ctx, "gateway.assess")
-	input, err := g.assess(ctx, data, native)
+	input, err := g.assess(ctx, data, native, body)
 	assessmentRegion.End()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {

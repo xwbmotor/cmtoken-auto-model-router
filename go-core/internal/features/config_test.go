@@ -2,6 +2,7 @@ package features
 
 import (
 	"encoding/json"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -19,6 +20,30 @@ func fixture(t *testing.T) Config {
 func sampleAnalysis() analysis.Result {
 	sub := "fixture"
 	return analysis.Result{Task: "coding", SubTask: &sub, Tier: "balanced", Complexity: .5, Requirements: map[string]bool{"tools": true}, Capacity: analysis.Capacity{EstimatedContextTokens: 128}}
+}
+
+func TestValidatedFieldsPreserveRequestHeaderDecoding(t *testing.T) {
+	b, err := New(fixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{
+		`{}`, `{"model":"a","max_tokens":128,"messages":[{"role":"user","content":"hello"}]}`,
+		`{"max_completion_tokens":"64","max_tokens":128,"chat_template_kwargs":{"enable_thinking":false}}`,
+		`{"model":null,"max_tokens":0}`, `{"model":123}`, `{"max_tokens":{}}`,
+		`{"MODEL":"a","model":"auto"}`, `{"model":"auto","MODEL":"a"}`,
+		`{"MAX_TOKENſ":128}`, `{"max_tokens":64,"max_tokens":128}`,
+	} {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+			t.Fatal(err)
+		}
+		want, wantErr := b.Input([]byte(raw), sampleAnalysis(), 1, 0)
+		got, gotErr := b.InputFields([]byte(raw), fields, sampleAnalysis(), 1, 0)
+		if (wantErr == nil) != (gotErr == nil) || !reflect.DeepEqual(want, got) {
+			t.Fatalf("header decoding changed for %s: %v / %v", raw, wantErr, gotErr)
+		}
+	}
 }
 func TestGenerationOwnsConfigurationAndRequestMaps(t *testing.T) {
 	c := fixture(t)

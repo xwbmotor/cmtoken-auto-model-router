@@ -60,7 +60,7 @@ func (g *Gateway) loadPolicy(path string, out any) error {
 	}
 	return nil
 }
-func (g *Gateway) assess(ctx context.Context, data []byte, native *analysis.Result) (decision.Input, error) {
+func (g *Gateway) assess(ctx context.Context, data []byte, native *analysis.Result, fields map[string]json.RawMessage) (decision.Input, error) {
 	var input decision.Input
 	if g.features != nil {
 		if e := ctx.Err(); e != nil {
@@ -73,7 +73,13 @@ func (g *Gateway) assess(ctx context.Context, data []byte, native *analysis.Resu
 		if e != nil {
 			return input, errors.New("traffic_bucket_unavailable")
 		}
-		in, e := g.features.Input(data, *native, float64(time.Now().UnixMilli()), float64(bucket.Int64())/10000)
+		var in decision.Input
+		now, traffic := float64(time.Now().UnixMilli()), float64(bucket.Int64())/10000
+		if fields != nil {
+			in, e = g.features.InputFields(data, fields, *native, now, traffic)
+		} else {
+			in, e = g.features.Input(data, *native, now, traffic)
+		}
 		if e != nil {
 			return input, errors.New("invalid_assessment_contract")
 		}
@@ -270,7 +276,7 @@ func (g *Gateway) reviewInput(ctx context.Context, r *http.Request, w http.Respo
 			reason = a.Tier
 		}
 		merged := analysis.Reclassify(baseAnalysis, raw, a.Task, a.Tier, a.Complexity, a.Confidence, reason)
-		proposed, err := g.assess(reviewCtx, raw, &merged)
+		proposed, err := g.assess(reviewCtx, raw, &merged, nil)
 		if err != nil {
 			return base, review.Status
 		}

@@ -106,9 +106,10 @@ type nativeMetadata struct {
 	LatencyScopes      map[string]string `json:"latencyScopes"`
 }
 type nativeRequest struct {
-	Metadata nativeMetadata             `json:"metadata"`
-	Body     map[string]json.RawMessage `json:"body"`
-	Events   []edgeEvent                `json:"events"`
+	messagesValid bool
+	Metadata      nativeMetadata             `json:"metadata"`
+	Body          map[string]json.RawMessage `json:"body"`
+	Events        []edgeEvent                `json:"events"`
 }
 
 func (g *Gateway) readNativeEdge(f *NativeFront, r *http.Request, body map[string]json.RawMessage) (*edgeContext, error) {
@@ -281,8 +282,7 @@ func (g *Gateway) finishNative(w *nativeWriter, r *http.Request, edge *edgeConte
 	if edge == nil || edge.native == nil {
 		return
 	}
-	var messages []json.RawMessage
-	if json.Unmarshal(edge.native.Body["messages"], &messages) != nil || messages == nil {
+	if !edge.native.messagesValid {
 		return
 	}
 	// Push buffered response bytes before classifying delivery. HTTP EOF still
