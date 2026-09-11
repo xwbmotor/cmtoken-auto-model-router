@@ -161,3 +161,23 @@ test('跨日直接结算也先换日，重复结算不会多计', async (context
     assert.equal(s.pendingReserves, 0);
   } finally { await t.pendingWrite; await rm(dir, { recursive: true, force: true }); }
 });
+
+test('completed Go cost projection preserves other reservations, actual/estimated/unpriced totals and restart state', async () => {
+  const { t, dir, ledger } = await fresh(cfg({ enabled: false }));
+  try {
+    const running = await t.reserve(9);
+    await t.observeCompletedAttempt(2, 3, true);
+    await t.observeCompletedAttempt(4, null, false);
+    await t.observeCompletedAttempt(null, null, false);
+    await t.observeCompletedAttempt(1, 0, true);
+    const state = t.snapshot();
+    assert.equal(state.pendingReserves, 1); assert.equal(state.estimatedSpendYuan, 9);
+    assert.equal(state.answerActualCostYuan, 3); assert.equal(state.answerEstimatedCostYuan, 4);
+    assert.equal(state.settledSpendYuan, 7); assert.equal(state.pricedRequests, 4); assert.equal(state.unpricedRequests, 1);
+    await t.pendingWrite;
+    const restarted = new BudgetTracker(join(dir, 'restart.json'), cfg({ enabled: false }), await ledger());
+    assert.equal(restarted.snapshot().settledSpendYuan, 7);
+    await t.settle(running, 8, true);
+    assert.equal(t.snapshot().settledSpendYuan, 15); assert.equal(t.snapshot().pendingReserves, 0);
+  } finally { await t.pendingWrite; await rm(dir, { recursive: true, force: true }); }
+});

@@ -2510,8 +2510,7 @@ async function proxyGoCompletion(req, res, body, auto) {
       const attempt = goAttempt(event);
       // Mirror observations into the existing management ledger. Go exclusively
       // owns admission and its durable ledger; Node does not enforce this mirror.
-      const reserve = await budgetTracker.reserve(attempt.estimatedCostYuan);
-      await budgetTracker.settle(reserve, attempt.actualCostYuan, attempt.costFromUsage);
+      await budgetTracker.observeCompletedAttempt(attempt.estimatedCostYuan, attempt.actualCostYuan, attempt.costFromUsage);
       if (attempt.usage && attempt.costFromUsage) {
         counters.tokens ??= {};
         counters.tokens.prompt = (counters.tokens.prompt || 0) + attempt.usage.prompt;

@@ -90,6 +90,23 @@ export class BudgetTracker {
     if (reserved === null) { this.scheduleWrite(); return; }
     // 回滚预占：所有结算路径共用 修复——原无 usage 分支不回滚，费用同时在途+已结清双记）
     this.state.estimatedSpendYuan = Number(Math.max(0, this.state.estimatedSpendYuan - reserved).toFixed(6));
+    this.recordSettlement(reserved, actualYuan, fromUsage, source);
+  }
+
+  // Go has already durably reserved and settled this attempt. Its management
+  // projection is one completed observation, not a second live reservation.
+  async observeCompletedAttempt(estimateYuan, actualYuan, fromUsage) {
+    this.rollover();
+    if (estimateYuan == null || !Number.isFinite(Number(estimateYuan))) {
+      this.state.unpricedRequests += 1;
+      this.scheduleWrite();
+      return;
+    }
+    this.state.pricedRequests += 1;
+    this.recordSettlement(Number(estimateYuan), actualYuan, fromUsage, 'answer');
+  }
+
+  recordSettlement(reserved, actualYuan, fromUsage, source) {
     if (!fromUsage || actualYuan == null || !Number.isFinite(Number(actualYuan))) {
       this.state.estimatedSettles = (this.state.estimatedSettles || 0) + 1;
       this.state.settledEstimatedSpendYuan = Number(((this.state.settledEstimatedSpendYuan || 0) + reserved).toFixed(6));
