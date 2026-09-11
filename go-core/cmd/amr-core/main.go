@@ -137,6 +137,7 @@ func main() {
 		}
 	}
 	options := gateway.Options{Candidate: *candidate, NativeAnalysis: *nativeAnalysis, NativeSemantics: *nativeSemantics, AssessorURL: *assessor, UpstreamURL: *upstream,
+		EdgeURL: os.Getenv("AMR_GO_EDGE_URL"), EdgeToken: os.Getenv("AMR_GO_EDGE_TOKEN"),
 		Tenants: tenants, ScopeURL: *scopeURL, ScopeTTL: 60 * time.Second, ScopeTimeout: 3 * time.Second,
 		SemanticBucketSecret: []byte(os.Getenv("AMR_GO_SEMANTIC_BUCKET_SECRET")),
 		SemanticOptions:      semantic.Options{SmallURL: *smallURL, LargeURL: *largeURL, SmallToken: os.Getenv("AMR_GO_SEMANTIC_SMALL_TOKEN"), LargeToken: os.Getenv("AMR_GO_SEMANTIC_LARGE_TOKEN"), MaxConcurrent: 8, MaxLargeCalls: *largeCalls, MaxLargeTokens: *largeTokens},

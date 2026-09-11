@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { timingSafeEqual } from 'node:crypto';
 
 const role = process.env.M4_ROLE;
@@ -16,8 +16,14 @@ const authorized = req => {
   return got.length === expected.length && timingSafeEqual(got, expected);
 };
 createServer((req, res) => {
-  if (req.method !== 'GET' || req.url !== '/resources' || !authorized(req)) { res.writeHead(403); return res.end(); }
+    if (req.method !== 'GET' || !['/resources', '/decisions'].includes(req.url) || !authorized(req)) { res.writeHead(403); return res.end(); }
   try {
+    if (req.url === '/decisions') {
+      const path = `${dir}/decisions`;
+      const requestIds = (existsSync(path) ? readdirSync(path) : []).filter(name => name.startsWith('decisions-') && name.endsWith('.jsonl'))
+        .flatMap(name => readFileSync(`${path}/${name}`, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).request?.requestId));
+      res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify({ requestIds }));
+    }
     const value = { at: Date.now(), cpu: counters('/sys/fs/cgroup/cpu.stat'), memoryBytes: Number(readFileSync('/sys/fs/cgroup/memory.current', 'utf8')),
       memoryLimit: readFileSync('/sys/fs/cgroup/memory.max', 'utf8').trim(), cpuLimit: readFileSync('/sys/fs/cgroup/cpu.max', 'utf8').trim(), memoryEvents: counters('/sys/fs/cgroup/memory.events') };
     res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(value));
@@ -39,6 +45,11 @@ async function start(command, args) {
   });
 }
 if (role === 'go') {
+  if (process.env.M4_EDGE === '1') {
+    if (process.env.M4_FEATURE_MODE !== 'snapshot') throw new Error('edge requires snapshot');
+    process.env.AMR_GO_EDGE_URL = 'http://127.0.0.1:8787/internal/v1/go-events';
+    process.env.AMR_GO_EDGE_TOKEN = process.env.M4_EDGE_TOKEN;
+  }
   process.env.AMR_GO_ASSESSOR_TOKEN = process.env.M4_ASSESSOR;
   let configArgs;
   if (process.env.M4_FEATURE_MODE === 'snapshot') {
@@ -58,6 +69,10 @@ if (role === 'go') {
     writeFileSync(`${dir}/core.pid`, String(profiledCore.pid));
   }
   process.env.AMR_GO_ADMIN_URL = 'http://127.0.0.1:8791'; process.env.AMR_GO_ADMIN_TOKEN = process.env.M4_CORE_ADMIN;
+  if (process.env.M4_EDGE === '1') {
+    process.env.AMR_GO_CHAT_URL = 'http://127.0.0.1:8791/v1/chat/completions';
+    process.env.AMR_GO_RUNTIME_CONFIG = `${dir}/runtime.json`;
+  }
 }
 // Node group: this process serves requests. Go group: this process is the real
 // Node administration service; Go and any bootstrap adapter share its cgroup.

@@ -1,5 +1,9 @@
 import { completionBudgetEligible } from './completion-budget.mjs';
 import { createGoCoreAdmin } from './go-core-admin.mjs';
+import { createGoCoreEdge } from './go-core-edge.mjs';
+import { goDecision, goAttempt, goOutcome } from './go-core-results.mjs';
+import { createGoConfigPublication } from './go-config-publication.mjs';
+import { attachGoLatencyObservation } from './go-core-observation.mjs';
 import { createModelLoadTracker, loadAssessment } from './model-load.mjs';
 import { LatencyObservatory, latencyContext } from './latency-observatory.mjs';
 import { createLatencyProbeRunner } from './latency-probes.mjs';
@@ -17,7 +21,7 @@ import { spawn } from 'node:child_process';
 
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 
-import { loadConfig, projectRoot, saveConfig, validateConfig, getConfigRevision, refreshCostIndexes } from './config.mjs';
+import { loadConfig, projectRoot, saveConfig as saveSourceConfig, validateConfig, getConfigRevision, refreshCostIndexes } from './config.mjs';
 import { promises as dnsPromises } from 'node:dns'; // v0.11.13（二十七审 P1-1）SSRF DNS pinning
 
 import { analyzeRequest, mergeSemanticAssessment, routeRequest, paretoFrontier, oracleChoice, zeroRouterChoice, recommendReasoningLevel, isAutoRequest, autoModelId, capabilityEligible } from './router.mjs';
@@ -65,6 +69,15 @@ const host = process.env.HOST || '127.0.0.1';
 
 const port = Number(process.env.PORT || 8787);
 const goCoreAdmin = createGoCoreAdmin();
+const goCoreEdge = createGoCoreEdge();
+if (goCoreEdge && (!goCoreAdmin || !process.env.AMR_GO_RUNTIME_CONFIG)) throw new Error('Go chat edge requires automatic snapshot publication');
+const goConfigPublication = goCoreEdge ? createGoConfigPublication(goCoreAdmin, next => { assertSemanticBucketSecretForMode(next.semanticRouter?.mode); assertJudgeGuardStatePathStable(next.judge); }) : null;
+async function saveConfig(next, options) {
+  const saved = await (goConfigPublication ? goConfigPublication.save(next, options) : saveSourceConfig(next, options));
+  rateLimiter.update({ rpm: Number(saved.rateLimit?.rpm ?? 120), burst: Number(saved.rateLimit?.burst ?? saved.rateLimit?.rpm ?? 120) });
+  marketSignal.updateConfig(saved);
+  return saved;
+}
 
 // 长流式 chat 的客户端可能挂 60~120 分钟，必须显式放宽默认 5 秒 keepAlive/headers 超时
 
@@ -83,7 +96,7 @@ const qualityManifest = JSON.parse(await readFile(new URL('./quality-evidence.js
 function checkOperations() {
   operations.evaluate({ windows: latencyStore.incidentWindows(), revision: getConfigRevision(config),
     enabledModels: config.models.filter(m => m.enabled !== false).map(m => m.id),
-    capacities: config.models.map(m => ({ model: m.id, ...loadAssessment(m, config.routing, modelLoad.snapshot()) })) });
+    capacities: config.models.map(m => ({ model: m.id, ...loadAssessment(m, config.routing, runtimeModelLoad()) })) });
 }
 const latencySettings = () => ({ mode: 'off', minSamples: 20, staleMs: 300000, scaleMs: 10000, maxAdjust: 0.05, switchMargin: 0.02, ...(config.routing.latencyObservation || {}) });
 const latencyProbeSettings = () => ({ enabled: false, intervalMs: 900000, maxCallsPerDay: 144, timeoutMs: 20000, maxOutputTokens: 128, ...(config.routing.latencyObservation?.probes || {}) });
@@ -390,6 +403,25 @@ function authorizedAdmin(req) { if (!process.env.ADMIN_TOKEN) return true; if (s
 setInterval(() => { const now = Date.now(); for (const [sid, sess] of adminSessions) { if (now - sess.lastSeen > ADMIN_SESSION_IDLE_MS || now > sess.absExpires) adminSessions.delete(sid); } }, 10 * 60 * 1000).unref();
 
 const health = {};
+let goRuntimeSnapshot = { available: false, checkedAt: 0, inflight: {}, sessions: 0 };
+let goRuntimeRead = null;
+function runtimeModelLoad() { return goCoreEdge ? goRuntimeSnapshot.inflight : modelLoad.snapshot(); }
+async function refreshGoRuntime() {
+  if (!goCoreEdge) return null;
+  if (goRuntimeRead) return goRuntimeRead;
+  if (Date.now() - goRuntimeSnapshot.checkedAt < 1000) return goRuntimeSnapshot;
+  goRuntimeRead = (async () => {
+    try {
+      const state = await goCoreAdmin.runtime();
+      if (state.status !== 200) throw new Error('core_unavailable');
+      const available = state.persistenceHealthy && state.edgeEnabled && state.configRevision === getConfigRevision(config) && !goConfigPublication.blocked();
+      goRuntimeSnapshot = { ...state, available, checkedAt: Date.now() };
+      for (const model of config.models) health[model.id] = state.health[model.id] || newHealthState();
+    } catch { goRuntimeSnapshot = { ...goRuntimeSnapshot, available: false, checkedAt: Date.now(), error: 'core_unavailable' }; }
+    return goRuntimeSnapshot;
+  })();
+  try { return await goRuntimeRead; } finally { goRuntimeRead = null; }
+}
 
 const sessions = new Map();
 
@@ -1426,9 +1458,17 @@ async function runLatencyProbe(model, settings) {
   if (!(process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY)) return { skipped: true, errorCode: 'missing_server_credential' };
   const body = { model: model.id, messages: [{ role: 'user', content: '只回答一个数字：1+1等于几？' }], stream: true, max_tokens: settings.maxOutputTokens, stream_options: { include_usage: true } };
   if (!completionBudgetEligible(body, model, config, 'off')) return { skipped: true, errorCode: 'thinking_budget_incompatible' };
-  const load = loadAssessment(model, config.routing, modelLoad.snapshot());
+  if (goCoreEdge && !(await refreshGoRuntime())?.available) return { skipped: true, errorCode: 'core_unavailable' };
+  const load = loadAssessment(model, config.routing, runtimeModelLoad());
   if (load.capacity != null && load.inflight / load.capacity >= 0.8) return { skipped: true, errorCode: 'busy_model' };
-  const release = modelLoad.acquire(model, config.routing);
+  let release;
+  if (goCoreEdge) {
+    try {
+      const lease = await goCoreAdmin.acquireProbe(model.id, Math.min(120000, settings.timeoutMs + 5000), getConfigRevision(config));
+      if (lease.status !== 200) return { skipped: true, errorCode: 'capacity' };
+      release = () => goCoreAdmin.releaseProbe(lease.lease).catch(() => {});
+    } catch { return { skipped: true, errorCode: 'core_unavailable' }; }
+  } else release = modelLoad.acquire(model, config.routing);
   if (!release) return { skipped: true, errorCode: 'capacity' };
   const analysis = analyzeRequest(body, config), at = Date.now(), timing = createStreamTimingObserver(at);
   const context = latencyContextFor(model, body, analysis, 'off', null, 'probe');
@@ -1460,7 +1500,7 @@ async function runLatencyProbe(model, settings) {
     }
   } catch (error) { if (error.failureScope === 'configuration') called = false; timeout = controller.signal.aborted && !errorCode && !shutdownManager.draining; errorCode ||= shutdownManager.draining ? 'draining' : timeout ? 'timeout' : error.failureScope === 'configuration' ? 'configuration' : 'request_failed'; }
   finally {
-    clearTimeout(timeoutHandle); release(); latencyProbeController = null;
+    clearTimeout(timeoutHandle); await release(); latencyProbeController = null;
     if (reservation != null) { if (called) await budgetTracker.settle(reservation, cost, cost != null, 'probe').catch(() => {}); else await budgetTracker.release(reservation).catch(() => {}); }
     if (called) {
       const snap = timing.snapshot(), elapsed = Date.now() - at;
@@ -2101,7 +2141,7 @@ function classifyAndCompare(body, baseAnalysis, baseDecision, { track = true, cl
 
     // 对比同样要用同口径候选池，否则分歧率统计失真。
 
-    const proposed = routeRequest(body, config, { health, ...latencyRuntime(body, clientAuthHeader), modelLoad: modelLoad.snapshot(), analysisOverride: semanticAnalysis, budgetPressure: budgetTracker.pressure(), trafficBucket: baseDecision.rollout.trafficBucket, ...(allowedModelIds ? { allowedModelIds } : {}) });
+    const proposed = routeRequest(body, config, { health, ...latencyRuntime(body, clientAuthHeader), modelLoad: runtimeModelLoad(), analysisOverride: semanticAnalysis, budgetPressure: budgetTracker.pressure(), trafficBucket: baseDecision.rollout.trafficBucket, ...(allowedModelIds ? { allowedModelIds } : {}) });
 
     const disagreed = assessment.tier !== baseAnalysis.tier || assessment.task !== baseAnalysis.task || proposed.suggestedModel !== baseDecision.suggestedModel;
 
@@ -2282,7 +2322,7 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
 
   const baseAnalysis = { ...analyzeRequest(body, config), routeMethod: 'rules' };
 
-  const runtime = { health, ...latencyRuntime(body, clientAuthHeader), modelLoad: modelLoad.snapshot(), analysisOverride: baseAnalysis, budgetPressure: budgetTracker.pressure(), ...(preview ? { trafficBucket: 0 } : {}) };
+  const runtime = { health, ...latencyRuntime(body, clientAuthHeader), modelLoad: runtimeModelLoad(), analysisOverride: baseAnalysis, budgetPressure: budgetTracker.pressure(), ...(preview ? { trafficBucket: 0 } : {}) };
 
   // 套餐动态候选池：按客户端 key 解析 v1/models 可用集，交集非空才启用过滤（防命名不匹配全灭），失败回退全量
 
@@ -2394,6 +2434,127 @@ async function resolveAutoDecision(body, { preview = false, clientAuthHeader = n
 
 }
 
+function commitRequestOutcome({ req, body, decision, outcome, answerText, policy = config }) {
+  record({ at: new Date().toISOString(), requested: decision.requestedModel, selected: outcome.model,
+    suggested: decision.suggestedModel, task: decision.analysis.task, complexity: decision.analysis.complexity,
+    routeMethod: decision.analysis.routeMethod, reasoningLevel: decision.reasoningLevel,
+    reasoningApplied: Boolean(policy.models.find(m => m.id === outcome.model)?.reasoningControl?.verified) && decision.reasoningLevel !== 'off',
+    keyFingerprint: keyFingerprint(req.headers.authorization), ...outcome });
+  scheduleCountersWrite();
+  if (outcome.ok && req.routingSessionKey) sessions.set(req.routingSessionKey, {
+    model: outcome.model, expiresAt: Date.now() + policy.routing.sessionStickinessTtlMs,
+    task: decision.analysis.task, tier: decision.analysis.tier, subTask: decision.analysis.subTask || null
+  });
+  const retainedOutcome = decisionLog.options?.logAnswerText && answerText
+    ? { ...outcome, answerText: String(answerText).slice(0, 262144) } : outcome;
+  decisionLog.write({ sessionFingerprint: sessionFingerprintOf(req.headers['x-session-id']), requestId: req.requestId,
+    keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, retainedOutcome);
+  maybeJudgeRequest({ requestId: req.requestId, outcome, decision, body, answerText, sessionIdRaw: req.headers['x-session-id'] });
+}
+
+async function consumeGoSemantic(event, metadata) {
+  const r = event.review;
+  const attempted = r.status !== 'shadow_capacity_exhausted';
+  counters.semantic.eligible += 1;
+  if (attempted) counters.semantic.attempted += 1;
+  if (r.status === 'error') counters.semantic.errors += 1;
+  else if (attempted) counters.semantic.succeeded += 1;
+  if (r.status === 'applied') counters.semantic.applied += 1;
+  if (r.status === 'rejected_low_confidence') counters.semantic.rejectedLowConfidence += 1;
+  if (r.rollout?.bucketKeySource) counters.semantic.bucketKeySource[r.rollout.bucketKeySource] = (counters.semantic.bucketKeySource[r.rollout.bucketKeySource] || 0) + 1;
+  const disagreed = Boolean(r.proposedTask && (r.proposedTask !== r.baseTask || r.proposedTier !== r.baseTier || r.proposedModel !== r.baseModel));
+  if (disagreed) counters.semantic.disagreed += 1;
+  if (r.cascade?.level) {
+    counters.semantic.byCascadeLevel[r.cascade.level] = (counters.semantic.byCascadeLevel[r.cascade.level] || 0) + 1;
+    counters.semantic.cascadeLatency ??= {};
+    const agg = counters.semantic.cascadeLatency[r.cascade.level] ||= { count: 0, sumMs: 0 };
+    agg.count += 1; agg.sumMs += r.cascade.totalLatencyMs || 0;
+  }
+  const overheadCostYuan = r.overheadMicros === null ? null : r.overheadMicros / 1000000;
+  if (r.usage) {
+    if (overheadCostYuan !== null) await budgetTracker.chargeRouterOverhead(overheadCostYuan);
+    counters.routingOverhead ??= { calls: 0, costYuan: 0, promptTokens: 0, completionTokens: 0 };
+    counters.routingOverhead.calls += 1; counters.routingOverhead.costYuan += overheadCostYuan || 0;
+    counters.routingOverhead.promptTokens += r.usage.prompt || 0; counters.routingOverhead.completionTokens += r.usage.completion || 0;
+  }
+  const review = { at: new Date().toISOString(), v: 1, requestId: metadata.requestId, keyFingerprint: metadata.keyFingerprint,
+    core: 'go', status: r.status, configRevision: event.configRevision, disagreed,
+    ...(r.status === 'error' ? { error: 'semantic_review_failed' } : {}),
+    base: { task: r.baseTask, tier: r.baseTier, complexity: r.baseComplexity, model: r.baseModel },
+    proposed: { task: r.proposedTask, tier: r.proposedTier, complexity: r.proposedComplexity, model: r.proposedModel },
+    assessment: { task: r.proposedTask, tier: r.proposedTier, complexity: r.proposedComplexity, confidence: r.confidence, model: r.classifierModel, cascade: r.cascade },
+    cascade: r.cascade?.level || null, cascadeLatencyMs: r.cascade?.totalLatencyMs ?? r.latencyMs,
+    smallLatencyMs: r.cascade?.smallLatencyMs ?? null, largeLatencyMs: r.cascade?.largeLatencyMs ?? null,
+    totalLatencyMs: r.cascade?.totalLatencyMs ?? r.latencyMs, overheadUsage: r.usage || null, overheadCostYuan,
+    bucket: r.rollout?.bucket, bucketKey: r.rollout?.bucketKey, bucketKeySource: r.rollout?.bucketKeySource };
+  recordSemanticReview(review); semanticLog.writeRaw(review); scheduleCountersWrite();
+}
+
+async function proxyGoCompletion(req, res, body, auto) {
+  if (goConfigPublication.blocked()) return errorJson(res, 503, '配置发布尚未完成，请稍后重试', 'core_publication_pending');
+  const policy = config;
+  const observationHealth = structuredClone(health);
+  counters[auto ? 'auto' : 'explicit'] += 1;
+  return goCoreEdge.proxy(req, res, body, {
+    configRevision: getConfigRevision(policy), models: policy.models.map(m => m.id), timeoutMs: policy.routing.requestTimeoutMs,
+    onSemantic: consumeGoSemantic, semanticMetadata: { requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization) },
+    marketSignals: Object.fromEntries(['default', 'coding', 'reasoning', 'creative', 'extraction'].map(task =>
+      [task, Object.fromEntries(policy.models.map(m => [m.id, marketSignal.adjustFor(task, m.id)]))])),
+    onAttempt: async event => {
+      const attempt = goAttempt(event);
+      // Mirror observations into the existing management ledger. Go exclusively
+      // owns admission and its durable ledger; Node does not enforce this mirror.
+      const reserve = await budgetTracker.reserve(attempt.estimatedCostYuan);
+      await budgetTracker.settle(reserve, attempt.actualCostYuan, attempt.costFromUsage);
+      if (attempt.usage && attempt.costFromUsage) {
+        counters.tokens ??= {};
+        counters.tokens.prompt = (counters.tokens.prompt || 0) + attempt.usage.prompt;
+        counters.tokens.completion = (counters.tokens.completion || 0) + attempt.usage.completion;
+      }
+      if (!attempt.ok) counters.failures = (counters.failures || 0) + 1;
+      scheduleCountersWrite();
+    },
+    onComplete: result => {
+      const timings = counters.responseTimingsV2 ||= {};
+      const outcome = goOutcome(result);
+      observeLatency(timings, outcome.ok ? 'completion' : 'failedCompletion', outcome.completionLatencyMs);
+      observeLatency(timings, 'headers', outcome.responseHeaderLatencyMs);
+      observeLatency(timings, 'ttft', outcome.ttftMs);
+      observeLatency(timings, 'firstOutput', outcome.firstOutputMs);
+      counters[outcome.ok ? 'success' : 'errors'] += 1;
+      counters.outcome[auto ? 'auto' : 'explicit'][outcome.ok ? 'success' : 'error'] += 1;
+      if (result.stream) { counters.stream ??= { completed: 0, aborted: 0 }; counters.stream[outcome.ok ? 'completed' : 'aborted'] += 1; }
+      if (result.last) {
+        const decision = goDecision(result.last, policy);
+        attachGoLatencyObservation(decision, policy, { health: observationHealth,
+          ...latencyRuntime(body, req.headers.authorization), budgetPressure: 0 });
+        if (auto) latencyStore.noteShadow(decision.latencyShadow, decision.candidates);
+        counters.suggested[decision.suggestedModel] = (counters.suggested[decision.suggestedModel] || 0) + 1;
+        counters.task[decision.analysis.task] = (counters.task[decision.analysis.task] || 0) + 1;
+        counters.fallback += Math.max(0, result.events.length - 1);
+        if (outcome.ok) {
+          counters.selected[outcome.model] = (counters.selected[outcome.model] || 0) + 1;
+          const by = counters.selectedBy[outcome.model] ||= { explicit: 0, auto: 0, autoPreference: 0 };
+          by[auto ? 'auto' : 'explicit'] += 1;
+          if (auto && decision.preference?.model === outcome.model) by.autoPreference += 1;
+        }
+        for (const event of result.events) {
+          const a = goAttempt(event), m = policy.models.find(m => m.id === a.model);
+          const context = latencyContextFor(m, body, decision.analysis, decision.reasoningLevel, req.headers.authorization);
+          const row = { ...context, at: Date.now(), ok: a.ok && (!event.attempt.ok || outcome.ok), failureScope: a.failureScope,
+            timeout: a.timeout, ttftMs: a.model === outcome.model ? outcome.ttftMs : null,
+            firstOutputMs: a.model === outcome.model ? outcome.firstOutputMs : null,
+            upstreamTtftMs: a.timing.ttftMs, upstreamFirstOutputMs: a.timing.firstOutputMs, completionMs: outcome.completionLatencyMs, attemptMs: a.latencyMs };
+          if (latencySettings().mode !== 'off') latencyStore.record(row);
+          operations.record(row, req.requestId);
+        }
+        commitRequestOutcome({ req, body, decision, outcome, answerText: result.answerText, policy });
+      }
+      scheduleCountersWrite();
+    }
+  });
+}
+
 async function proxyCompletion(req, res) {
   const requestStarted = Date.now();
 
@@ -2438,6 +2599,8 @@ async function proxyCompletion(req, res) {
   counters.total += 1; scheduleCountersWrite();
 
   const auto = isAutoRequest(body, config);
+
+  if (goCoreEdge) return proxyGoCompletion(req, res, body, auto);
 
   let decision;
 
@@ -2581,28 +2744,7 @@ async function proxyCompletion(req, res) {
         : attemptOutcomes.reduce((sum, a) => sum + (a.actualCostYuan ?? a.estimatedCostYuan), 0),
       totalAttemptCostKind: attemptOutcomes.some(a => a.actualCostYuan == null && a.estimatedCostYuan == null) ? 'unknown'
         : attemptOutcomes.every(a => a.actualCostYuan != null) ? 'actual' : 'estimated_or_mixed' };
-    record({ at: new Date().toISOString(), requested: decision.requestedModel, selected: outcome.model,
-      suggested: decision.suggestedModel, task: decision.analysis.task, complexity: decision.analysis.complexity,
-      routeMethod: decision.analysis.routeMethod, reasoningLevel: decision.reasoningLevel,
-      reasoningApplied: Boolean(config.models.find(m => m.id === outcome.model)?.reasoningControl?.verified) && decision.reasoningLevel !== 'off',
-      keyFingerprint: keyFingerprint(req.headers.authorization), ...outcome });
-    scheduleCountersWrite();
-    if (outcome.ok && req.routingSessionKey) sessions.set(req.routingSessionKey, {
-      model: outcome.model, expiresAt: Date.now() + config.routing.sessionStickinessTtlMs,
-      task: decision.analysis.task, tier: decision.analysis.tier, subTask: decision.analysis.subTask || null
-    });
-
-    // 数据留存：回答原文入决策日志（logAnswerText 开时；judgeCtx.answerText 为交付路径
-    // 提取的纯正文——非流式 choices[0].message.content / 流式 SSE delta 拼接）
-    const retainedOutcome = decisionLog.options?.logAnswerText && judgeCtx.answerText
-      ? { ...outcome, answerText: String(judgeCtx.answerText).slice(0, 262144) }
-      : outcome;
-
-    decisionLog.write({ sessionFingerprint: sessionFingerprintOf(req.headers['x-session-id']), requestId: req.requestId, keyFingerprint: keyFingerprint(req.headers.authorization), redactedBody: decisionLog.redact(body) }, decision, retainedOutcome);
-
-    // judge：异步 shadow 评分钩子（内部自带 enabled/抽样/护栏闸，失败静默不影响任何路径）
-
-    maybeJudgeRequest({ requestId: req.requestId, outcome, decision, body, answerText: judgeCtx.answerText, sessionIdRaw: req.headers['x-session-id'] });
+    commitRequestOutcome({ req, body, decision, outcome, answerText: judgeCtx.answerText });
 
   };
 
@@ -3161,6 +3303,11 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
+  if (url.pathname === '/internal/v1/go-events') {
+    if (!goCoreEdge) return errorJson(res, 404, '未启用 Go 请求链路', 'not_found');
+    return goCoreEdge.accept(req, res);
+  }
+
   // CORS 收紧：仅同源（管理页自身）放行。旧值 '*' 允许任意网页跨域调用管理 API——
 
   // 本机绑定+未设 ADMIN_TOKEN 时，浏览器里任意恶意页面可静默读写配置（CSRF/驱动式攻击）。
@@ -3201,9 +3348,10 @@ const server = http.createServer(async (req, res) => {
 
     }
 
+    await refreshGoRuntime();
     const disk = await decisionLog.diskUsage();
 
-    const body = renderPrometheusMetrics({ counters: { ...counters, judge: { ...judgeCounters, gaugeCircuit: judgeGuard.snapshot().circuit === 'open' ? 2 : (judgeGuard.snapshot().circuit === 'half-open' ? 1 : 0), guardCalls: judgeGuard.snapshot().calls, guardTokens: judgeGuard.snapshot().tokens } }, health, modelLoad: modelLoad.snapshot(), budget: budgetTracker.snapshot(), decisionLog: { ...decisionLog.snapshot(), diskUsage: disk }, config, sessions: sessions.size, draining: shutdownManager.draining, inflight: shutdownManager.inflightCount() });
+    const body = renderPrometheusMetrics({ counters: { ...counters, judge: { ...judgeCounters, gaugeCircuit: judgeGuard.snapshot().circuit === 'open' ? 2 : (judgeGuard.snapshot().circuit === 'half-open' ? 1 : 0), guardCalls: judgeGuard.snapshot().calls, guardTokens: judgeGuard.snapshot().tokens } }, health, modelLoad: runtimeModelLoad(), budget: budgetTracker.snapshot(), decisionLog: { ...decisionLog.snapshot(), diskUsage: disk }, config, sessions: goCoreEdge ? goRuntimeSnapshot.sessions : sessions.size, draining: shutdownManager.draining, inflight: shutdownManager.inflightCount() });
 
     res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
 
@@ -3211,13 +3359,20 @@ const server = http.createServer(async (req, res) => {
 
   }
 
-  if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { status: shutdownManager.draining ? 'draining' : 'ok', configVersion: config.version, upstreamConfigured: Boolean(process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY), upstreamMode: process.env.UPSTREAM_BASE_URL ? 'gateway' : 'direct_maas', uptimeSeconds: Math.round(process.uptime()), inflight: shutdownManager.inflightCount() });
+  if (req.method === 'GET' && url.pathname === '/health') {
+    const core = await refreshGoRuntime();
+    const ok = !core || core.available;
+    return json(res, ok ? 200 : 503, { status: shutdownManager.draining ? 'draining' : ok ? 'ok' : 'core_unavailable',
+      configVersion: config.version, core: goCoreEdge ? 'go' : 'node', upstreamConfigured: Boolean(process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY),
+      upstreamMode: process.env.UPSTREAM_BASE_URL ? 'gateway' : 'direct_maas', uptimeSeconds: Math.round(process.uptime()), inflight: shutdownManager.inflightCount() });
+  }
 
   if (req.method === 'GET' && url.pathname === '/health/ready') {
 
     const probe = await probeUpstream();
 
-    const ready = probe.reachable && !shutdownManager.draining;
+    const core = await refreshGoRuntime();
+    const ready = probe.reachable && !shutdownManager.draining && (!core || core.available);
 
     return json(res, ready ? 200 : 503, { ready, status: ready ? 'ready' : 'not_ready', upstreamReachable: probe.reachable, upstreamStatus: probe.status ?? null, upstreamError: probe.error ?? null, configVersion: config.version, checkedAt: new Date().toISOString() });
 
@@ -4057,12 +4212,14 @@ function subCategoryOf(task, subTask) {
 
   if (req.method === 'GET' && url.pathname === '/admin/api/metrics') {
 
+    await refreshGoRuntime();
+
     const visibleRecent = recentKeyFilter ? recent.filter((x) => (x.keyFingerprint || '') === recentKeyFilter) : recent;
 
 
     // 真正执行闸一致（进程 counters 重启清零，guard 从磁盘恢复；两者并列展示，不互相覆盖）。
 
-    return json(res, 200, { counters, judge: judgeRuntime.enabled ? { ...judgeCounters, gaugeCircuit: judgeGuard.snapshot().circuit === 'open' ? 2 : (judgeGuard.snapshot().circuit === 'half-open' ? 1 : 0), guard: judgeGuard.snapshot() } : null, health, modelLoad: Object.fromEntries(config.models.map(m => [m.id, loadAssessment(m, config.routing, modelLoad.snapshot())])), recent: visibleRecent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: sessions.size });
+    return json(res, 200, { counters, judge: judgeRuntime.enabled ? { ...judgeCounters, gaugeCircuit: judgeGuard.snapshot().circuit === 'open' ? 2 : (judgeGuard.snapshot().circuit === 'half-open' ? 1 : 0), guard: judgeGuard.snapshot() } : null, health, modelLoad: Object.fromEntries(config.models.map(m => [m.id, loadAssessment(m, config.routing, runtimeModelLoad())])), recent: visibleRecent, semanticReviews, budget: budgetTracker.snapshot(), decisionLog: decisionLog.snapshot(), feedback: feedbackLog.snapshot(), sessions: goCoreEdge ? goRuntimeSnapshot.sessions : sessions.size });
 
   }
 
@@ -4280,7 +4437,7 @@ function subCategoryOf(task, subTask) {
 
     try {
 
-      const next = await loadConfig();
+      const next = goConfigPublication ? await goConfigPublication.reload() : await loadConfig();
 
       assertSemanticBucketSecretForMode(next.semanticRouter?.mode);
 
@@ -4356,7 +4513,14 @@ const shutdownManager = createShutdownManager({
 
   timeoutMs: Number(process.env.SHUTDOWN_TIMEOUT_MS || 20000),
 
+  beforeClose: async () => {
+    const remaining = await goCoreEdge?.drain(Number(process.env.SHUTDOWN_TIMEOUT_MS || 20000));
+    if (remaining) logger.warn('shutdown_go_events_remaining', { remaining });
+  },
+
   flush: async () => {
+    clearInterval(goRuntimeTimer);
+    goCoreEdge?.close();
     clearInterval(latencyPersistTimer); clearInterval(latencyProbeTimer); clearInterval(operationsTimer);
     latencyProbeController?.abort(new Error('draining'));
     await latencyProbes.done();
@@ -4420,6 +4584,12 @@ if (process.env.AMR_TEST_STUCK_SEMANTIC_TASK === '1') {
 }
 
 const latencyPersistTimer = setInterval(() => { latencyStore.flush().catch(() => {}); }, 30000);
+const goRuntimeTimer = goCoreEdge ? setInterval(async () => {
+  if (shutdownManager.draining) return;
+  const state = await refreshGoRuntime();
+  if (state?.available) for (const model of config.models) maybePromoteVerified(model.id);
+}, 1000) : null;
+goRuntimeTimer?.unref();
 checkOperations();
 const operationsTimer = setInterval(() => { checkOperations(); operations.flush().catch(() => {}); }, 30000);
 operationsTimer.unref();

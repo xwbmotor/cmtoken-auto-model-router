@@ -13,6 +13,7 @@ export function runtimeBundle(config) {
     analysis: { semanticRequired: config.semanticRouter?.enabled === true && config.semanticRouter.mode === 'active', taskRules: { simpleMaxComplexity: config.taskRules.simpleMaxComplexity, complexMinComplexity: config.taskRules.complexMinComplexity, patterns: config.taskRules.patterns }, budget: { defaultEstimatedOutputTokens: config.budget?.defaultEstimatedOutputTokens } },
     semantic: semanticPolicy(config),
     runtime: {
+	  rateLimit: { enabled: config.rateLimit?.enabled !== false, rpm: finite(config.rateLimit?.rpm, 120), burst: finite(config.rateLimit?.burst, config.rateLimit?.rpm ?? 120) },
       maxAttempts: finite(config.routing.maxAttempts, 3),
       requestTimeoutMs: finite(config.routing.requestTimeoutMs, 120000),
       circuitBreakerFailures: finite(config.routing.circuitBreakerFailures, 3),

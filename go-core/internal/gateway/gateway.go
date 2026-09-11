@@ -16,6 +16,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"runtime/trace"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,8 @@ import (
 const MaxBodyBytes = 2 << 20
 
 type Options struct {
+	EdgeURL              string
+	EdgeToken            string
 	Candidate            bool
 	Bundle               *Bundle
 	Authenticator        *auth.Authenticator
@@ -55,6 +58,7 @@ type Options struct {
 }
 
 type Gateway struct {
+	edgeClient        *http.Client
 	runtime           *runtimeState
 	auth              *auth.Authenticator
 	semantic          *semantic.Client
@@ -85,6 +89,9 @@ func LoopbackURL(raw string) (*url.URL, error) {
 }
 
 func New(o Options) (*Gateway, error) {
+	if err := validateEdge(o); err != nil {
+		return nil, err
+	}
 	nativeFeatures := o.Bundle != nil && o.Bundle.Features != nil
 	var assessor *url.URL
 	var err error
@@ -134,6 +141,9 @@ func New(o Options) (*Gateway, error) {
 		client:    &http.Client{Transport: t, Timeout: o.AssessmentTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		admission: NewAdmission(), requests: make(chan struct{}, o.MaxRequests)}
 	g.runtime, g.auth = o.Shared, o.Authenticator
+	if o.EdgeURL != "" {
+		g.edgeClient = labnet.Client(2 * time.Second)
+	}
 	if g.runtime != nil {
 		g.admission = g.runtime.admission
 		g.requests = g.runtime.requests
@@ -243,6 +253,9 @@ func New(o Options) (*Gateway, error) {
 }
 
 func (g *Gateway) Close() {
+	if g.edgeClient != nil {
+		g.edgeClient.CloseIdleConnections()
+	}
 	g.closeOnce.Do(func() {
 		g.backgroundMu.Lock()
 		g.backgroundClosing = true
@@ -327,6 +340,13 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
+	if g.runtime != nil && r.URL.Path == "/v1/chat/completions" {
+		if allowed, retry := g.runtime.rateLimiter.check(r.Header.Get("Authorization"), g.options.Bundle.Runtime.RateLimit, time.Now()); !allowed {
+			w.Header().Set("Retry-After", strconv.Itoa(retry))
+			writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded")
+			return
+		}
+	}
 	select {
 	case g.requests <- struct{}{}:
 		defer func() { <-g.requests }()
@@ -368,6 +388,16 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if json.Unmarshal(data, &body) != nil || body == nil {
 		writeError(w, 400, "invalid_json")
 		return
+	}
+	edge, edgeErr := g.readEdge(r, body)
+	if edgeErr != nil {
+		writeError(w, 503, edgeErr.Error())
+		return
+	}
+	if edge != nil {
+		data, _ = json.Marshal(body)
+		ctx = context.WithValue(ctx, edgeContextKey{}, edge)
+		r = r.WithContext(context.WithValue(r.Context(), edgeContextKey{}, edge))
 	}
 	var requested string
 	if raw := body["model"]; len(raw) > 0 && json.Unmarshal(raw, &requested) != nil {

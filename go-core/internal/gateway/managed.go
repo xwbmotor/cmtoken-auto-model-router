@@ -258,6 +258,70 @@ func (m *Managed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.workers.Done()
 	}()
 	w.Header().Set("X-AMR-Runtime-Revision", gen.revision)
+	if r.URL.Path == "/internal/v1/probe/acquire" || r.URL.Path == "/internal/v1/probe/release" {
+		if !gen.g.auth.AdminAuthorized(r.Header.Get("Authorization")) {
+			writeError(w, 403, "admin_required")
+			return
+		}
+		if r.Method != "POST" || r.URL.RawQuery != "" || gen.g.features == nil {
+			writeError(w, 404, "not_found")
+			return
+		}
+		var input struct {
+			Model          string `json:"model"`
+			TTLMS          int64  `json:"ttlMs"`
+			ConfigRevision string `json:"configRevision"`
+			Lease          string `json:"lease"`
+		}
+		if decodeStrict(http.MaxBytesReader(w, r.Body, 2048), &input) != nil {
+			writeError(w, 400, "invalid_probe_request")
+			return
+		}
+		defer r.Body.Close()
+		lease := ""
+		if r.URL.Path == "/internal/v1/probe/acquire" {
+			if input.ConfigRevision != gen.g.options.Bundle.Revision {
+				writeError(w, 409, "configuration_revision_conflict")
+				return
+			}
+			capacity, ok := gen.g.features.ProbeCapacity(input.Model)
+			if !ok || input.TTLMS <= 0 || input.TTLMS > 120000 {
+				writeError(w, 400, "invalid_probe_request")
+				return
+			}
+			lease, ok = m.state.admission.AcquireProbe(input.Model, capacity, time.Duration(input.TTLMS)*time.Millisecond)
+			if !ok {
+				writeError(w, 409, "probe_capacity_exhausted")
+				return
+			}
+		} else {
+			if len(input.Lease) != 64 {
+				writeError(w, 400, "invalid_probe_lease")
+				return
+			}
+			m.state.admission.ReleaseProbe(input.Lease)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{"revision": gen.revision, "configRevision": gen.g.options.Bundle.Revision, "lease": lease, "released": r.URL.Path == "/internal/v1/probe/release"})
+		return
+	}
+	if r.URL.Path == "/internal/v1/status" {
+		if !gen.g.auth.AdminAuthorized(r.Header.Get("Authorization")) {
+			writeError(w, 403, "admin_required")
+			return
+		}
+		if r.Method != "GET" || r.URL.RawQuery != "" {
+			writeError(w, 404, "not_found")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{"revision": gen.revision, "configRevision": gen.g.options.Bundle.Revision,
+			"health": m.state.health.States(), "inflight": m.state.admission.Snapshot(), "sessions": m.state.admission.SessionCount(float64(time.Now().UnixMilli())),
+			"persistenceHealthy": !m.state.failed.Load(), "edgeErrors": m.state.edgeErrors.Load(), "edgeEnabled": gen.g.options.EdgeURL != ""})
+		return
+	}
 	if r.URL.Path == "/internal/v1/runtime" && r.Method == "GET" && r.URL.RawQuery == "" {
 		if !gen.g.auth.AdminAuthorized(r.Header.Get("Authorization")) {
 			writeError(w, 403, "admin_required")

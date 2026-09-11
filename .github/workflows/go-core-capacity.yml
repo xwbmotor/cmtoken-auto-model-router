@@ -12,7 +12,7 @@ on:
       profile:
         description: Local mock workload size (never production)
         type: choice
-        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features]
+        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard]
         default: smoke
 
 permissions:
@@ -40,7 +40,15 @@ jobs:
         env:
           PROFILE: ${{ inputs.profile || 'smoke' }}
         run: |
-          if [ "$PROFILE" = "standard" ]; then
+          if [ "$PROFILE" = "edge-observation-smoke" ] || [ "$PROFILE" = "edge-observation-standard" ]; then
+            seconds=1; rounds=1; rates=8; stream_seconds=2; streams=2
+            if [ "$PROFILE" = "edge-observation-standard" ]; then
+              seconds=10; rounds=3; rates=100,300; stream_seconds=60; streams=32
+            fi
+            node -e 'require("node:fs").writeFileSync("data/go-migration/capacity-edge-source.json", JSON.stringify({commit:process.env.GITHUB_SHA,profile:process.env.PROFILE,architecture:"Node HTTP edge + Go runtime + Node events in same cgroup",budget:"observation",judge:false,semantic:false,rateLimit:false,decisionLog:true}, null, 2) + "\n")'
+            node go-core/compat/compare-capacity.mjs --edge --feature-mode snapshot --budget-mode observation --binary data/go-migration/amr-core-linux --seconds "$seconds" --rounds "$rounds" --rates "$rates" --stream-seconds "$stream_seconds" --streams "$streams" --cpus 2 --memory-mib 512 --out "data/go-migration/capacity-$PROFILE.json"
+            node go-core/compat/summarize-capacity.mjs "data/go-migration/capacity-$PROFILE.json" "data/go-migration/capacity-$PROFILE.md"
+          elif [ "$PROFILE" = "standard" ]; then
             node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 50,150,300 --stream-seconds 60 --streams 32 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-standard.json
           elif [ "$PROFILE" = "optimization" ] || [ "$PROFILE" = "tail-optimization" ]; then
             baseline=f30e8d7eddd290732b66210c9b6fbf8123f1a192
@@ -105,6 +113,10 @@ jobs:
           else
             node go-core/compat/compare-capacity.mjs --binary data/go-migration/amr-core-linux --seconds 1 --rounds 1 --rates 8 --stream-seconds 2 --streams 2 --cpus 1 --memory-mib 512 --out data/go-migration/capacity-smoke.json
           fi
+      - name: Hash edge experiment evidence
+        if: always() && startsWith(inputs.profile, 'edge-observation-')
+        run: |
+          find data/go-migration -maxdepth 1 -type f \( -name 'capacity-edge-*.json' -o -name 'capacity-edge-*.md' -o -name 'amr-core-linux' \) -print0 | sort -z | xargs -0 -r sha256sum > data/go-migration/capacity-edge-sha256.txt
       - name: Preserve raw evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
@@ -112,6 +124,8 @@ jobs:
           name: go-core-capacity-evidence
           path: |
             data/go-migration/capacity-*.json
+            data/go-migration/capacity-edge-*.md
+            data/go-migration/capacity-edge-sha256.txt
             data/go-migration/analysis*.pprof
             data/go-migration/analysis*.txt
             data/go-migration/*-benchmark.log

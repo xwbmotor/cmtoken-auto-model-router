@@ -10,8 +10,8 @@ if (!control || !upstream) throw new Error('isolated fixture required');
 let calls = 0, duplicates = 0, fixtureErrors = 0, active = 0;
 const seen = new Set();
 function authorized(req, token) { const got = Buffer.from(req.headers.authorization || ''), expected = Buffer.from(`Bearer ${token}`); return got.length === expected.length && timingSafeEqual(got, expected); }
-const resources = async role => {
-  const res = await fetch(`http://127.0.0.1:${role === 'node' ? 18786 : 18791}/resources`, { headers: { authorization: `Bearer ${control}` }, signal: AbortSignal.timeout(2000) });
+const resources = async (role, path = '/resources') => {
+  const res = await fetch(`http://127.0.0.1:${role === 'node' ? 18786 : 18791}${path}`, { headers: { authorization: `Bearer ${control}` }, signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error('resource query failed'); return res.json();
 };
 createServer(async (req, res) => {
@@ -19,6 +19,7 @@ createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/state') return res.end(JSON.stringify({ calls, duplicates, fixtureErrors, active }));
     if (req.method === 'GET' && ['/resources/node', '/resources/go'].includes(req.url)) return res.end(JSON.stringify(await resources(req.url.split('/').at(-1))));
+    if (req.method === 'GET' && ['/decisions/node', '/decisions/go'].includes(req.url)) return res.end(JSON.stringify(await resources(req.url.split('/').at(-1), '/decisions')));
     res.writeHead(404); res.end();
   } catch { res.writeHead(503); res.end('{"error":"fixture_unavailable"}'); }
 }).listen(8799, '0.0.0.0');
@@ -28,6 +29,7 @@ createServer(async (req, res) => {
   try {
     let raw = ''; for await (const chunk of req) { raw += chunk; if (raw.length > 2 * 1024 * 1024) throw new Error('body limit'); }
     const body = JSON.parse(raw);
+    if (body.__amr_edge !== undefined || req.headers['x-amr-edge-token'] !== undefined) throw new Error('private edge context leaked');
     const id = body.messages?.[0]?.content;
     if (typeof id !== 'string' || !/^m4:[a-z0-9-]+$/.test(id) || body.model !== 'm4-fixture-model') throw new Error('invalid fixture input');
     calls++; if (seen.has(id)) duplicates++; seen.add(id); active++; counted = true;
@@ -52,7 +54,7 @@ createServer(async (req, res) => {
 }).listen(8790, '0.0.0.0');
 // Go deliberately remains bound to literal loopback. Both measured gateways use
 // identical byte relays in the shared fixture namespace, not privileged networking.
-for (const [front, back] of [[8785, 8786], [8792, 8791], [8784, 8787]]) {
+for (const [front, back] of [[8785, 8786], [8792, process.env.M4_EDGE === '1' ? 8787 : 8791], [8784, 8787]]) {
   tcpServer(client => {
     const target = connect(back, '127.0.0.1'); client.pipe(target); target.pipe(client);
     client.on('error', () => target.destroy()); target.on('error', () => client.destroy());

@@ -1,7 +1,10 @@
 package gateway
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"sync"
+	"time"
 
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/decision"
 )
@@ -12,6 +15,73 @@ type Admission struct {
 	mu       sync.Mutex
 	active   map[string]int
 	sessions map[string]Session
+	probes   map[string]probeLease
+	probeNow func() time.Time
+}
+
+type probeLease struct {
+	model     string
+	expiresAt time.Time
+}
+
+// Expiration and release share the same lock and lease removal. An old lease
+// cannot release a subsequently admitted business request or replacement probe.
+func (a *Admission) expireProbes() {
+	now := time.Now()
+	if a.probeNow != nil {
+		now = a.probeNow()
+	}
+	for id, lease := range a.probes {
+		if !now.Before(lease.expiresAt) {
+			a.removeProbe(id, lease)
+		}
+	}
+}
+func (a *Admission) removeProbe(id string, lease probeLease) {
+	delete(a.probes, id)
+	a.active[lease.model]--
+	if a.active[lease.model] == 0 {
+		delete(a.active, lease.model)
+	}
+}
+
+func (a *Admission) AcquireProbe(model string, capacity int, ttl time.Duration) (string, bool) {
+	if model == "" || len(model) > 256 || capacity < 0 || ttl <= 0 || ttl > 120*time.Second {
+		return "", false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.expireProbes()
+	if len(a.probes) >= 256 || (capacity > 0 && float64(a.active[model])/float64(capacity) >= .8) {
+		return "", false
+	}
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", false
+	}
+	id := hex.EncodeToString(raw[:])
+	if _, exists := a.probes[id]; exists {
+		return "", false
+	}
+	if a.probes == nil {
+		a.probes = make(map[string]probeLease)
+	}
+	now := time.Now()
+	if a.probeNow != nil {
+		now = a.probeNow()
+	}
+	a.probes[id] = probeLease{model: model, expiresAt: now.Add(ttl)}
+	a.active[model]++
+	return id, true
+}
+
+func (a *Admission) ReleaseProbe(id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.expireProbes()
+	if lease, ok := a.probes[id]; ok {
+		a.removeProbe(id, lease)
+	}
 }
 
 func NewAdmission() *Admission {
@@ -21,6 +91,7 @@ func NewAdmission() *Admission {
 func (a *Admission) Snapshot() map[string]int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.expireProbes()
 	snapshot := make(map[string]int, len(a.active))
 	for id, count := range a.active {
 		snapshot[id] = count
@@ -32,11 +103,25 @@ func (a *Admission) Select(in decision.Input) (decision.Decision, func(), error)
 	return a.SelectSession(in, "")
 }
 
+func (a *Admission) SessionCount(now float64) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.expireProbes()
+	count := 0
+	for _, s := range a.sessions {
+		if s.ExpiresAt > now {
+			count++
+		}
+	}
+	return count
+}
+
 // AcquireModel rechecks a pinned fallback against current capacity and health.
 // It cannot widen the original qualified fallback list supplied by the caller.
 func (a *Admission) AcquireModel(in decision.Input, model string) (func(), bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.expireProbes()
 	in.Runtime.Inflight = a.active
 	d, e := decision.Decide(in)
 	if e != nil {
@@ -62,6 +147,7 @@ func (a *Admission) AcquireModel(in decision.Input, model string) (func(), bool)
 		once.Do(func() {
 			a.mu.Lock()
 			defer a.mu.Unlock()
+			a.expireProbes()
 			a.active[model]--
 			if a.active[model] == 0 {
 				delete(a.active, model)
@@ -72,6 +158,7 @@ func (a *Admission) AcquireModel(in decision.Input, model string) (func(), bool)
 func (a *Admission) SelectSession(in decision.Input, key string) (decision.Decision, func(), error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.expireProbes()
 	in.Runtime.Inflight = a.active
 	d, err := decision.Decide(in)
 	if err != nil {
@@ -88,6 +175,7 @@ func (a *Admission) SelectSession(in decision.Input, key string) (decision.Decis
 		once.Do(func() {
 			a.mu.Lock()
 			defer a.mu.Unlock()
+			a.expireProbes()
 			a.active[d.SelectedModel]--
 			if a.active[d.SelectedModel] == 0 {
 				delete(a.active, d.SelectedModel)
@@ -104,6 +192,7 @@ func (a *Admission) CompleteSession(key string, in decision.Input, d decision.De
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.expireProbes()
 	for k, s := range a.sessions {
 		if s.ExpiresAt <= now {
 			delete(a.sessions, k)

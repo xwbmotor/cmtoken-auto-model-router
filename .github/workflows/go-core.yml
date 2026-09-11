@@ -60,6 +60,13 @@ jobs:
         run: node --test tests/go-core-admin.test.mjs tests/go-core-publication.test.mjs
       - name: Verify offline rollback accounting continuity
         run: node go-core/compat/demo-rollback.mjs --binary data/go-migration/amr-core
+      - name: Verify Node HTTP edge and Go event contracts
+        run: node --test tests/go-core-edge.test.mjs tests/go-config-publication.test.mjs tests/go-core-observation.test.mjs tests/go-core-runtime-admin.test.mjs
+      - name: Verify production edge integration with mock providers
+        run: |
+          node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --out data/go-migration/edge-default.json
+          node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --semantic shadow --out data/go-migration/edge-shadow.json
+          node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --semantic active --out data/go-migration/edge-active.json
       - name: Exercise same-host gateway comparison (smoke only, no capacity claim)
         run: node go-core/compat/compare-gateways.mjs --binary data/go-migration/amr-core --seconds 1 --rounds 1 --concurrency 1,8 --chunk-ms 40 --out data/go-migration/gateway-smoke.json
         # Includes real cookie-authenticated Node config save -> snapshot -> Go.

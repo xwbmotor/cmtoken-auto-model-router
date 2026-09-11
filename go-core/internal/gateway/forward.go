@@ -19,6 +19,10 @@ import (
 )
 
 func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body map[string]json.RawMessage, in decision.Input, native analysis.Result, sessionKey, token string) {
+	edge, _ := r.Context().Value(edgeContextKey{}).(*edgeContext)
+	if edge != nil && edge.adoptedAnalysis != nil {
+		native = *edge.adoptedAnalysis
+	}
 	controller := http.NewResponseController(w)
 	defer controller.SetWriteDeadline(time.Time{})
 	if g.runtime.failed.Load() {
@@ -48,6 +52,26 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 		return
 	}
 	w.Header().Set("X-AMR-Request-ID", id)
+	if edge != nil {
+		w.Header().Set("X-Request-ID", edge.RequestID)
+		w.Header().Set("X-Router-Suggested-Model", d.SuggestedModel)
+		task, method := in.Analysis.Task, "rules"
+		if w.Header().Get("X-AMR-Semantic-Status") == "applied" {
+			method = "semantic"
+		}
+		if in.RequestedModel != in.Policy.AutoModelID {
+			task = "explicit"
+			method = "explicit"
+		}
+		w.Header().Set("X-Router-Task", task)
+		w.Header().Set("X-Router-Route-Method", method)
+		w.Header().Set("X-Router-Cost-Tier", in.Policy.CostTier)
+		w.Header().Set("X-Router-Policy-Version", d.ConfigVersion)
+		w.Header().Set("X-Router-Policy-Revision", g.options.Bundle.Revision)
+		w.Header().Set("X-Router-Quality-Degraded", strconv.FormatBool(d.QualityDegraded))
+		w.Header().Set("X-Router-Shadow", strconv.FormatBool(d.Shadow))
+		w.Header().Set("X-Router-Reasoning-Level", d.ReasoningLevel)
+	}
 	order := []string{d.SelectedModel}
 	for _, m := range d.FallbackOrder {
 		if m != d.SelectedModel {
@@ -64,6 +88,9 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 	stream := bytes.Equal(body["stream"], []byte("true"))
 	lastStatus, lastCode := 503, "model_capacity_exhausted"
 	for index, model := range order {
+		if edge != nil {
+			w.Header().Set("X-Router-Selected-Model", model)
+		}
 		if r.Context().Err() != nil {
 			return
 		}
@@ -154,6 +181,7 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 		status := 0
 		outputStarted, complete := false, false
 		var usage *tokenUsage
+		var ttftMS, firstOutputMS *int64
 		outcome := resilience.Outcome{}
 		if callErr == nil {
 			headerMS = time.Since(started).Milliseconds()
@@ -164,7 +192,7 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 					outcome.NoRetry = true
 					res.Body.Close()
 				} else {
-					observer := &completionBody{ReadCloser: res.Body, stream: stream, onRead: func() {
+					observer := &completionBody{ReadCloser: res.Body, stream: stream, startedAt: started, onRead: func() {
 						if firstByteMS < 0 {
 							firstByteMS = time.Since(started).Milliseconds()
 						}
@@ -232,6 +260,7 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 					}
 					observer.Close()
 					usage = observer.usage
+					ttftMS, firstOutputMS = observer.FirstContentMS(), observer.FirstOutputMS()
 					complete = callErr == nil && observer.Complete() && ctx.Err() == nil
 					if !complete && callErr == nil {
 						callErr = errors.New("incomplete upstream response")
@@ -266,6 +295,14 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 		region = trace.StartRegion(r.Context(), "gateway.audit")
 		_ = g.runtime.record(attemptEvent{RequestID: id, Revision: g.options.Bundle.Revision, Model: model, Attempt: index, Status: status, Outcome: classification.Scope, DurationMS: duration.Milliseconds(), HeaderMS: headerMS, FirstByteMS: firstByteMS, EstimatedMicros: estimate, ActualMicros: actual, At: time.Now().UTC().Format(time.RFC3339Nano)})
 		region.End()
+		if err := g.reportEdge(edge, edgeEvent{Decision: d, Analysis: native, DecisionAnalysis: in.Analysis, SemanticStatus: w.Header().Get("X-AMR-Semantic-Status"), Attempt: edgeAttempt{Index: index, Model: model, OK: complete, Status: status, FailureScope: classification.Scope, DurationMS: duration.Milliseconds(), HeaderMS: headerMS, FirstByteMS: firstByteMS, EstimatedMicros: estimate, ActualMicros: actual, Usage: usage, TTFTMS: ttftMS, FirstOutputMS: firstOutputMS, Timeout: timedOut}}); err != nil {
+			g.runtime.edgeErrors.Add(1)
+			if outputStarted {
+				panic(http.ErrAbortHandler)
+			}
+			writeError(w, 503, "edge_event_unavailable")
+			return
+		}
 		if complete {
 			if !g.runtime.failed.Load() {
 				g.admission.CompleteSession(sessionKey, in, attemptDecision, float64(time.Now().UnixMilli()))

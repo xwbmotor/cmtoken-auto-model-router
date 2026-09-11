@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Observe a bounded copy without delaying any upstream bytes. A broken or
@@ -18,6 +19,12 @@ type completionBody struct {
 	data                        []byte
 	usage                       *tokenUsage
 	onRead                      func()
+	startedAt                   time.Time
+	now                         func() time.Time
+	firstContentMs              *int64
+	firstOutputMs               *int64
+	timingEvent                 []byte
+	timingEventOverflow         bool
 }
 
 func (b *completionBody) Read(p []byte) (int, error) {
@@ -34,6 +41,7 @@ func (b *completionBody) Read(p []byte) (int, error) {
 					break
 				}
 				line := strings.TrimSuffix(string(b.pending[:i]), "\r")
+				b.observeTimingLine(line)
 				if strings.HasPrefix(line, "data:") && strings.TrimSpace(strings.TrimPrefix(line, "data:")) == "[DONE]" {
 					b.done = true
 				}
@@ -49,6 +57,8 @@ func (b *completionBody) Read(p []byte) (int, error) {
 			}
 			if len(b.pending) > 65536 {
 				b.pending = nil
+				b.timingEvent = nil
+				b.timingEventOverflow = true
 				b.overflow = true
 			}
 		}
@@ -64,9 +74,88 @@ func (b *completionBody) Read(p []byte) (int, error) {
 		b.eof = true
 		if !b.stream && !b.overflow {
 			b.usage = parseUsage(b.data)
+			b.observeOutputTiming(b.data)
 		}
 	}
 	return n, e
+}
+
+// Nil means no corresponding output was observed. Content TTFT is intentionally
+// distinct from reasoning/tool output and from onRead's first-byte timestamp.
+func (b *completionBody) FirstContentMS() *int64 { return b.firstContentMs }
+func (b *completionBody) FirstOutputMS() *int64  { return b.firstOutputMs }
+
+func (b *completionBody) observeTimingLine(line string) {
+	if b.firstContentMs != nil {
+		return
+	}
+	if line == "" {
+		if !b.timingEventOverflow && len(b.timingEvent) != 0 {
+			b.observeOutputTiming(b.timingEvent)
+		}
+		b.timingEvent = nil
+		b.timingEventOverflow = false
+		return
+	}
+	if !strings.HasPrefix(line, "data:") || b.timingEventOverflow {
+		return
+	}
+	data := strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
+	if len(b.timingEvent)+len(data)+1 > 65536 {
+		b.timingEvent = nil
+		b.timingEventOverflow = true
+		return
+	}
+	if len(b.timingEvent) != 0 {
+		b.timingEvent = append(b.timingEvent, '\n')
+	}
+	b.timingEvent = append(b.timingEvent, data...)
+}
+
+func (b *completionBody) observeOutputTiming(data []byte) {
+	if b.startedAt.IsZero() || b.firstContentMs != nil {
+		return
+	}
+	type message struct {
+		Content          string                     `json:"content"`
+		ReasoningContent string                     `json:"reasoning_content"`
+		Reasoning        string                     `json:"reasoning"`
+		ToolCalls        []json.RawMessage          `json:"tool_calls"`
+		FunctionCall     map[string]json.RawMessage `json:"function_call"`
+	}
+	var value struct {
+		Choices []struct {
+			Delta   *message `json:"delta"`
+			Message *message `json:"message"`
+		} `json:"choices"`
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(data, &value) != nil || len(value.Choices) == 0 || len(value.Error) != 0 {
+		return
+	}
+	m := value.Choices[0].Delta
+	if m == nil {
+		m = value.Choices[0].Message
+	}
+	if m == nil {
+		return
+	}
+	content := m.Content != ""
+	output := content || m.ReasoningContent != "" || m.Reasoning != "" || len(m.ToolCalls) > 0 || len(m.FunctionCall) > 0
+	if !output {
+		return
+	}
+	now := time.Now
+	if b.now != nil {
+		now = b.now
+	}
+	ms := max(int64(0), now().Sub(b.startedAt).Milliseconds())
+	if b.firstOutputMs == nil {
+		b.firstOutputMs = &ms
+	}
+	if content {
+		b.firstContentMs = &ms
+	}
 }
 func (b *completionBody) Complete() bool {
 	if !b.eof || b.overflow {

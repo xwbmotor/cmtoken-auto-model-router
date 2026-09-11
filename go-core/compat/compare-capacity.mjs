@@ -21,6 +21,9 @@ const profiling = process.argv.includes('--profile');
 const goProcs = arg('--go-procs') ?? 'auto';
 const featureMode = arg('--feature-mode') ?? 'bootstrap';
 assert.ok(['bootstrap','snapshot'].includes(featureMode), 'invalid --feature-mode');
+const budgetMode = arg('--budget-mode') ?? 'protection', edge = process.argv.includes('--edge');
+assert.ok(['protection', 'observation'].includes(budgetMode), 'invalid --budget-mode');
+assert.ok((!edge && budgetMode !== 'observation') || featureMode === 'snapshot', 'edge/observation requires --feature-mode snapshot');
 assert.ok(goProcs === 'auto' || (/^[1-9]\d*$/.test(goProcs) && Number(goProcs) <= 64), 'invalid --go-procs');
 assert.ok(Number.isInteger(seconds) && seconds >= 1 && seconds <= 60 && Number.isInteger(rounds) && rounds >= 1 && rounds <= 5);
 assert.ok(Number.isInteger(streamSeconds) && streamSeconds >= 2 && streamSeconds <= 600 && Number.isInteger(streams) && streams >= 1 && streams <= 128);
@@ -30,9 +33,9 @@ const runKey = 'm4-' + randomBytes(6).toString('hex'), dataRoot = resolve(root, 
 const stage = resolve(dataRoot, runKey), out = resolve(arg('--out') || resolve(dataRoot, `${runKey}.json`));
 const binary = resolve(arg('--binary')), image = arg('--image') || 'node:24-bookworm-slim';
 const secret = () => randomBytes(24).toString('hex');
-const credentials = { M4_ACCESS: secret(), M4_ADMIN: secret(), M4_CORE_ADMIN: secret(), M4_UPSTREAM: secret(), M4_ASSESSOR: secret(), M4_CONTROL_TOKEN: secret() };
+const credentials = { M4_ACCESS: secret(), M4_ADMIN: secret(), M4_CORE_ADMIN: secret(), M4_UPSTREAM: secret(), M4_ASSESSOR: secret(), M4_CONTROL_TOKEN: secret(), M4_EDGE_TOKEN: secret() };
 const containers = [], requests = [], runs = [];
-let sourceHash, imageEvidence, hostPorts, engine, quotas, preflight, longStreams, failure, goRuntime;
+let sourceHash, imageEvidence, hostPorts, engine, quotas, preflight, longStreams, failure, goRuntime, decisionEvidence;
 const docker = args => execFileSync('docker', args, { cwd: root, windowsHide: true, encoding: 'utf8', timeout: 120000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const percentile = (values, q) => { const sorted = [...values].sort((a, b) => a - b); return sorted.length ? sorted[Math.ceil(sorted.length * q) - 1] : null; };
@@ -55,7 +58,8 @@ function config(role) {
   m.quality = Object.fromEntries(Object.keys(m.quality).map(k => [k, .95])); m.quality.default = .95;
   m.benchmarkScores = null; m.minimumCompletionTokensForReliableAnswer = 0; m.contextWindow = 131072;
   m.pricingYuanPerMillionTokens = { input: 1, output: 2 };
-  c.budget = { ...c.budget, enabled: true, dailyBudgetYuan: 10000, cacheHitRatio: 0, ledgerPath: `${dir}/node-ledger.json` };
+  c.budget = { ...c.budget, enabled: budgetMode === 'protection', dailyBudgetYuan: budgetMode === 'protection' ? 10000 : 0, cacheHitRatio: 0, ledgerPath: `${dir}/node-ledger.json` };
+  if (edge) c.calibration = { ...c.calibration, enabled: false };
   validateConfig(c); return c;
 }
 const controlHeaders = { authorization: `Bearer ${credentials.M4_CONTROL_TOKEN}` };
@@ -81,7 +85,7 @@ async function request(target, shape, run, stream = false, due = performance.now
   const started = performance.now(), sample = { run, target, shape, stream, id, requestBytes: Buffer.byteLength(payload), schedulerDelayMs: Math.max(0, started - due), status: null, complete: false, firstByteMs: null, serviceMs: null };
   try {
     const response = await fetch(`http://127.0.0.1:${hostPorts[target]}/v1/chat/completions`, { method: 'POST', signal: AbortSignal.timeout((stream ? streamSeconds + 30 : 30) * 1000),
-      headers: { authorization: `Bearer ${target === 'direct' ? credentials.M4_UPSTREAM : credentials.M4_ACCESS}`, 'content-type': 'application/json' }, body: payload });
+      headers: { authorization: `Bearer ${target === 'direct' ? credentials.M4_UPSTREAM : credentials.M4_ACCESS}`, 'content-type': 'application/json', 'x-request-id': id }, body: payload });
     sample.status = response.status; let text = ''; const decoder = new TextDecoder();
     for await (const chunk of response.body) { if (sample.firstByteMs === null) sample.firstByteMs = performance.now() - started; text += decoder.decode(chunk, { stream: true }); }
     text += decoder.decode();
@@ -147,7 +151,7 @@ try {
   sourceHash = sha(readFileSync(resolve(root, 'src/server.mjs')));
   for (const role of ['node', 'go']) { mkdirSync(resolve(stage, role)); writeFileSync(resolve(stage, role, 'router.json'), JSON.stringify(config(role))); }
   writeFileSync(resolve(stage, 'go/auth.json'), JSON.stringify({ mode: 'strict', accessToken: credentials.M4_ACCESS, adminToken: credentials.M4_CORE_ADMIN, upstreamToken: credentials.M4_UPSTREAM }));
-  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, M4_PROFILE: profiling ? '1' : '0', M4_FEATURE_MODE:featureMode, ...(goProcs === 'auto' ? {} : {GOMAXPROCS: goProcs}), NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
+  const envFile = resolve(stage, 'fixture.env'); writeFileSync(envFile, Object.entries({ ...credentials, M4_STREAM_SECONDS: streamSeconds, M4_PROFILE: profiling ? '1' : '0', M4_FEATURE_MODE:featureMode, M4_EDGE: edge ? '1' : '0', ...(goProcs === 'auto' ? {} : {GOMAXPROCS: goProcs}), NODE_NO_WARNINGS: '1' }).map(([k, v]) => `${k}=${v}`).join('\n'));
   const fixture = `${runKey}-fixture`;
   const mounts = ['--mount', `type=bind,source=${resolve(stage, 'app')},target=/app,readonly`, '--mount', `type=bind,source=${stage},target=/lab`, '--env-file', envFile];
   containers.push(fixture);
@@ -197,6 +201,24 @@ try {
     longStreams.push(result); assert.equal(result.errors, 0, 'long SSE integrity failure'); assert.equal(result.upstreamCalls, streams);
   }
   const finalState = await control('/state'); assert.equal(finalState.active, 0); assert.equal(finalState.duplicates, 0); assert.equal(finalState.fixtureErrors, 0);
+  if (edge) {
+    decisionEvidence = {};
+    for (const role of ['node', 'go']) {
+      const expected = requests.filter(r => r.target === role && r.complete).map(r => r.id);
+      let rows = [];
+      for (let i = 0; i < 50; i++) {
+        rows = (await control(`/decisions/${role}`)).requestIds;
+        const found = new Set(rows);
+        if (expected.every(id => found.has(id))) break;
+        await sleep(100);
+      }
+      const counts = new Map(); for (const id of rows) counts.set(id, (counts.get(id) || 0) + 1);
+      const missing = expected.filter(id => !counts.has(id)), duplicates = [...counts].filter(([, n]) => n > 1).length;
+      decisionEvidence[role] = { successfulRequests: expected.length, records: rows.length, missing: missing.length, duplicates };
+      assert.equal(missing.length, 0, `${role}: successful request decision missing`);
+      assert.equal(duplicates, 0, `${role}: duplicate decision record`);
+    }
+  }
   if (profiling) {
     const pid = Number(readFileSync(resolve(stage, 'go/core.pid'), 'utf8'));
     assert.ok(Number.isInteger(pid) && pid > 1);
@@ -224,8 +246,8 @@ finally {
     return { name, log };
   }) : undefined;
   const report = { schemaVersion: 1, experiment: 'm4-cgroup-open-loop', at: new Date().toISOString(), runKey, productionReady: false, formalAcceptance: 'not evaluated: production workload and SLO not supplied',
-    failure, diagnostics, profiling, goRuntime, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB, goProcs, featureMode }, engine, image: imageEvidence, quotas,
-    groups: { node: ['Node gateway + resource endpoint'], go: ['Go runtime', 'Node adapter', 'real Node administration + resource endpoint'], outsideQuota: ['common TCP ingress', 'mock upstream', 'load generator'] },
+    failure, diagnostics, profiling, goRuntime, decisionEvidence, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB, goProcs, featureMode, budgetMode, edge, decisionLog: true, judge: false, semantic: false, rateLimit: false }, engine, image: imageEvidence, quotas,
+    groups: { node: ['Node gateway + resource endpoint'], go: ['Go runtime', ...(featureMode === 'snapshot' ? [] : ['Node adapter']), edge ? 'real Node HTTP edge, events, administration + resource endpoint' : 'real Node administration + resource endpoint'], outsideQuota: ['common TCP ingress', 'mock upstream', 'load generator'] },
     corpus: { model, shapes, synthetic: true, semanticReview: false, inputMix: 'equal round-robin', mockDelayMs: 10 },
     binarySha256: sha(readFileSync(binary)), nodeSourceSha256: sourceHash, preflight, runs, requests,
     limits: ['These are synthetic workloads, not business quality evidence.', 'CPU/memory limits cover each full service group; shared ingress/upstream and client are outside them.', 'clientPathResidual subtracts measured mock service duration but still includes client, network and relay costs; it is not pure gateway latency.', 'Rate-sweep errors and generator drops are retained; overload is not hidden by a successful-only throughput denominator.', 'Minute-scale SSE is not an hours-long soak. Resource state is reused across runs.'] };

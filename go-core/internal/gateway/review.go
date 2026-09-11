@@ -77,6 +77,8 @@ func (g *Gateway) assess(ctx context.Context, data []byte, native *analysis.Resu
 		if e != nil {
 			return input, errors.New("invalid_assessment_contract")
 		}
+		edge, _ := ctx.Value(edgeContextKey{}).(*edgeContext)
+		applyEdgeSignals(&in, edge)
 		return in, nil
 	}
 	payload := data
@@ -146,16 +148,23 @@ func applyScope(in decision.Input, ids []string) decision.Input {
 }
 
 type Review struct {
-	RequestID     string            `json:"requestId"`
-	Status        string            `json:"status"`
-	Rollout       semantic.Rollout  `json:"rollout"`
-	BaseTask      string            `json:"baseTask"`
-	BaseModel     string            `json:"baseModel"`
-	ProposedTask  string            `json:"proposedTask,omitempty"`
-	ProposedModel string            `json:"proposedModel,omitempty"`
-	Confidence    float64           `json:"confidence"`
-	Cascade       *semantic.Cascade `json:"cascade,omitempty"`
-	Usage         *semantic.Usage   `json:"usage,omitempty"`
+	BaseTier           string            `json:"baseTier"`
+	BaseComplexity     float64           `json:"baseComplexity"`
+	ProposedTier       string            `json:"proposedTier"`
+	ProposedComplexity float64           `json:"proposedComplexity"`
+	ClassifierModel    string            `json:"classifierModel"`
+	OverheadMicros     *int64            `json:"overheadMicros"`
+	LatencyMS          int64             `json:"latencyMs"`
+	RequestID          string            `json:"requestId"`
+	Status             string            `json:"status"`
+	Rollout            semantic.Rollout  `json:"rollout"`
+	BaseTask           string            `json:"baseTask"`
+	BaseModel          string            `json:"baseModel"`
+	ProposedTask       string            `json:"proposedTask,omitempty"`
+	ProposedModel      string            `json:"proposedModel,omitempty"`
+	Confidence         float64           `json:"confidence"`
+	Cascade            *semantic.Cascade `json:"cascade,omitempty"`
+	Usage              *semantic.Usage   `json:"usage,omitempty"`
 }
 
 func (g *Gateway) recordReview(v Review) {
@@ -226,11 +235,20 @@ func (g *Gateway) reviewInput(ctx context.Context, r *http.Request, w http.Respo
 	requestID := hex.EncodeToString(nonce)
 	w.Header().Set("X-AMR-Request-ID", requestID)
 	bucket := semantic.Bucket(g.options.SemanticBucketSecret, r.Header.Get("X-Session-ID"), r.Header.Get("Authorization"), requestID)
-	initial := Review{RequestID: requestID, Rollout: bucket, BaseTask: base.Analysis.Task, BaseModel: baseDecision.SuggestedModel}
+	edge, _ := ctx.Value(edgeContextKey{}).(*edgeContext)
+	initial := Review{RequestID: requestID, Rollout: bucket, BaseTask: base.Analysis.Task, BaseModel: baseDecision.SuggestedModel, BaseTier: base.Analysis.Tier, BaseComplexity: base.Analysis.Complexity}
+	if edge != nil {
+		initial.RequestID = edge.RequestID
+	}
 	evaluate := func(reviewCtx context.Context, active bool) (decision.Input, string) {
 		review := initial
 		review.Status = "error"
-		defer func() { g.recordReview(review) }()
+		defer func() {
+			g.recordReview(review)
+			if g.reportEdgeReview(edge, review) != nil && g.runtime != nil {
+				g.runtime.edgeErrors.Add(1)
+			}
+		}()
 		a, err := g.semantic.ClassifyWithCredential(reviewCtx, raw, upstreamToken)
 		if err != nil {
 			return base, review.Status
@@ -238,6 +256,11 @@ func (g *Gateway) reviewInput(ctx context.Context, r *http.Request, w http.Respo
 		review.Confidence = a.Confidence
 		review.Cascade = a.Cascade
 		review.Usage = a.OverheadUsage
+		review.ClassifierModel = a.Model
+		review.LatencyMS = a.LatencyMS
+		if a.OverheadUsage != nil && g.options.Bundle != nil {
+			review.OverheadMicros = g.options.Bundle.Runtime.Prices[a.Model].actual(&tokenUsage{Prompt: a.OverheadUsage.Prompt, Completion: a.OverheadUsage.Completion})
+		}
 		reason := a.Reason
 		if reason == "" {
 			reason = a.Tier
@@ -252,11 +275,21 @@ func (g *Gateway) reviewInput(ctx context.Context, r *http.Request, w http.Respo
 		}
 		// Reassessment must preserve the original experiment and tenant/runtime view.
 		proposed.Runtime = base.Runtime
+		edge, _ := ctx.Value(edgeContextKey{}).(*edgeContext)
+		// Reclassification changes the task: retain health/scope but use that
+		// task's market adjustment rather than the original task's values.
+		proposed.Runtime.MarketAdjustments = make(map[string]float64, len(base.Runtime.MarketAdjustments))
+		for id, value := range base.Runtime.MarketAdjustments {
+			proposed.Runtime.MarketAdjustments[id] = value
+		}
+		applyEdgeSignals(&proposed, edge)
 		selected, err := decision.Decide(proposed)
 		if err != nil {
 			return base, review.Status
 		}
 		review.ProposedTask = merged.Task
+		review.ProposedTier = merged.Tier
+		review.ProposedComplexity = merged.Complexity
 		review.ProposedModel = selected.SuggestedModel
 		if !active {
 			review.Status = "shadow_complete"
@@ -267,6 +300,9 @@ func (g *Gateway) reviewInput(ctx context.Context, r *http.Request, w http.Respo
 			return base, review.Status
 		}
 		review.Status = "applied"
+		if edge != nil {
+			edge.adoptedAnalysis = &merged
+		}
 		return proposed, review.Status
 	}
 	if p.Mode == "shadow" || float64(bucket.Bucket) >= p.ActiveTrafficPercent {
@@ -278,6 +314,9 @@ func (g *Gateway) reviewInput(ctx context.Context, r *http.Request, w http.Respo
 			status = "shadow_capacity_exhausted"
 			initial.Status = status
 			g.recordReview(initial)
+			if g.reportEdgeReview(edge, initial) != nil && g.runtime != nil {
+				g.runtime.edgeErrors.Add(1)
+			}
 		}
 		w.Header().Set("X-AMR-Semantic-Status", status)
 		return base, nil

@@ -24,6 +24,7 @@ const percentile = (samples, q) => {
 };
 const lines = ['# M4 同配额开放负载实测', '',
   `原始记录时间：${report.at}。原始 JSON SHA256：\`${createHash('sha256').update(bytes).digest('hex')}\`。`, '',
+  `预算模式：${report.parameters.budgetMode === 'observation' ? '保护关闭，保留成本观察' : '保护启用'}；HTTP edge：${report.parameters.edge ? '启用，流量经过真实 Node HTTP 入口再进入 Go，事件回传 Node；两者全部纳入 Go 组配额' : '未启用'}。决策日志开启；Judge、语义复核、限流关闭。本结果仅代表这些条件下的合成负载。`, '',
   `每个服务组均限制为 ${report.parameters.cpus} CPU、${report.parameters.memoryMiB} MiB 内存且不提供额外 swap。Go 组包含 Go runtime${report.parameters.featureMode === 'snapshot' ? ' 和真实 Node 管理服务，不启动 Node 适配器' : '、Node 适配器和真实 Node 管理服务'}。模拟上游、公共 TCP 入口和发压器在配额之外。`, '',
   `以下均为合成负载。非流式上游固定等待约 10 ms，输入类型 ${report.corpus.shapes.join('/')} 均匀轮换；关闭语义复核。延迟分位数合并各轮完整成功请求，错误和发压丢弃单列；完整吞吐按调度开始至最后请求结束的实测跨度计算，包含排空。末次发起比计划窗口结束早一个请求间隔，因此低负载下实测跨度可能略短于计划窗口。`, '',
   '| 路径 | 目标 RPS | 发起/计划 | 完整成功 | 错误 | 发压丢弃 | 完整 RPS | P95 ms | P99 ms | 调度迟到 P95 ms |',
@@ -45,6 +46,15 @@ for (const rate of report.parameters.rates) for (const target of ['node', 'go'])
 lines.push('', `SSE：每条持续 ${report.parameters.streamSeconds} 秒，每路径同时 ${report.parameters.streams} 条；校验逐段内容、唯一且末尾的 DONE，以及首段在结束前到达。`, '',
   '| 路径 | 完整/发起 | 上游调用 | 首字节 P95 ms | 总时长 P95 ms | 采样峰值 MiB |', '|---|---:|---:|---:|---:|---:|');
 for (const run of report.runs.filter(r => r.streamSeconds)) lines.push(`| ${run.target} | ${run.complete}/${run.started} | ${run.upstreamCalls} | ${fmt(run.firstByteP95Ms)} | ${fmt(run.p95Ms)} | ${fmt(run.resources ? run.resources.peakSampledMemoryBytes / 1048576 : null)} |`);
+if (report.parameters.edge) {
+  assert.ok(report.decisionEvidence, 'edge decision evidence missing');
+  lines.push('', '逐请求决策日志完整性：');
+  for (const role of ['node', 'go']) {
+    const evidence = report.decisionEvidence[role];
+    assert.equal(evidence.missing, 0); assert.equal(evidence.duplicates, 0);
+    lines.push(`- ${role}：${evidence.successfulRequests} 个完整请求，${evidence.records} 条记录；缺失 ${evidence.missing}，重复 ${evidence.duplicates}。`);
+  }
+}
 lines.push('', '逐请求 clientPathResidualMs 已扣除该请求模拟服务用时，但仍包含客户端、网络、公共入口等开销，不能称为纯网关延迟。未用两个独立 P95 相减。', '',
   '本实验不能证明真实模型回答质量、小时级稳定性、生产容量上限或正式 SLO 达标。资源状态在各组测试间复用，目标环境和真实流量仍需独立验收。', '',
   `Go 二进制 SHA256：\`${report.binarySha256}\`。`, '', `Node server SHA256：\`${report.nodeSourceSha256}\`。`, '', `容器镜像：\`${report.image.id}\`。`, '');

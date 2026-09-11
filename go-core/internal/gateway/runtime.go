@@ -22,6 +22,7 @@ type Bundle struct {
 	Runtime  RuntimePolicy    `json:"runtime"`
 }
 type RuntimePolicy struct {
+	RateLimit                *RateLimitPolicy `json:"rateLimit,omitempty"`
 	MaxAttempts              int              `json:"maxAttempts"`
 	RequestTimeoutMS         int64            `json:"requestTimeoutMs"`
 	CircuitBreakerFailures   int              `json:"circuitBreakerFailures"`
@@ -35,6 +36,9 @@ type RuntimePolicy struct {
 
 func (b Bundle) validate() error {
 	p := b.Runtime
+	if p.RateLimit != nil && (p.RateLimit.RPM < 1 || p.RateLimit.Burst < 1) {
+		return errors.New("invalid tenant rate limit")
+	}
 	if len(b.Revision) != 66 {
 		return errors.New("invalid revision")
 	}
@@ -83,6 +87,7 @@ func (p RuntimePolicy) limit() int64 {
 }
 
 type runtimeState struct {
+	rateLimiter   tenantRateLimiter
 	ledger        *ledger.Ledger
 	health        *resilience.Manager
 	admission     *Admission
@@ -91,6 +96,7 @@ type runtimeState struct {
 	semanticGuard *semantic.Guard
 	audit         *auditJournal
 	failed        atomic.Bool
+	edgeErrors    atomic.Uint64
 }
 
 // A separate bounded-schema audit journal never serializes request bodies,

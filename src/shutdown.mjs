@@ -4,7 +4,7 @@ import { logger } from './logger.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function createShutdownManager({ server, timeoutMs = 20000, flush = async () => {}, log = logger, exit = (code) => process.exit(code) } = {}) {
+export function createShutdownManager({ server, timeoutMs = 20000, beforeClose = async () => {}, flush = async () => {}, log = logger, exit = (code) => process.exit(code) } = {}) {
   const inflight = new Set();
   let draining = false;
   let shuttingDown = null;
@@ -16,8 +16,7 @@ export function createShutdownManager({ server, timeoutMs = 20000, flush = async
     res.on('close', () => inflight.delete(res));
   });
 
-  async function drain() {
-    const deadline = Date.now() + timeoutMs;
+  async function drain(deadline) {
     while (inflight.size > 0 && Date.now() < deadline) await sleep(100);
     if (inflight.size > 0) {
       log.warn('shutdown_forcing', { remaining: inflight.size });
@@ -26,9 +25,11 @@ export function createShutdownManager({ server, timeoutMs = 20000, flush = async
   }
 
   async function doShutdown() {
+    const deadline = Date.now() + timeoutMs;
+    await beforeClose();
     server.close(() => {});
     server.closeIdleConnections?.(); // 只关空闲 keep-alive 连接，不影响 in-flight
-    await drain();
+    await drain(deadline);
     server.closeAllConnections?.(); // 排空（或强断）后清理所有连接
     try { await flush(); } catch (error) { log.error('shutdown_flush_failed', { err: error }); }
     log.info('shutdown_complete', { inflightRemaining: inflight.size });
