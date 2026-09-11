@@ -61,7 +61,7 @@ jobs:
       - name: Verify offline rollback accounting continuity
         run: node go-core/compat/demo-rollback.mjs --binary data/go-migration/amr-core
       - name: Verify Node HTTP edge and Go event contracts
-        run: node --test tests/go-core-edge.test.mjs tests/go-config-publication.test.mjs tests/go-core-observation.test.mjs tests/go-core-runtime-admin.test.mjs
+        run: node --test tests/go-core-edge.test.mjs tests/go-config-publication.test.mjs tests/go-core-observation.test.mjs tests/go-core-runtime-admin.test.mjs tests/go-import-publication.test.mjs
       - name: Verify production edge integration with mock providers
         run: |
           node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --out data/go-migration/edge-default.json

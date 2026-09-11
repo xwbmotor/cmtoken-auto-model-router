@@ -1345,7 +1345,10 @@ function claimCircuitAttempt(model) {
 
 // 持久化到 config（fire-and-forget），重启后仍保持 verified。
 
+const calibrationPending = new Set();
 function maybePromoteVerified(model) {
+
+  if (calibrationPending.has(model)) return;
 
   const modelConfig = config.models.find((item) => item.id === model);
 
@@ -1353,15 +1356,18 @@ function maybePromoteVerified(model) {
 
   if (!verdict) return;
 
-  modelConfig.reliabilityStatus = 'verified';
+  const expectedRevision = getConfigRevision(config), draft = structuredClone(config);
+  const updatedModel = draft.models.find(item => item.id === model);
+  updatedModel.reliabilityStatus = 'verified';
 
-  modelConfig.calibrationStatus = 'verified'; // 旧字段同步写（未升级的旧 UI 仍读此字段）
+  updatedModel.calibrationStatus = 'verified'; // 旧字段同步写（未升级的旧 UI 仍读此字段）
 
+  calibrationPending.add(model);
+
+  saveConfig(draft, { expectedRevision }).then((next) => { config = next;
   logger.info('model_calibrated', { model, samples: verdict.samples, failureRate: verdict.failureRate });
 
-  saveConfig(config).then((next) => { config = next;
-
-  if (marketSignal) { marketSignal.updateConfig(config); marketSignal.rebuild().catch(() => {}); } }).catch((error) => logger.warn('model_calibrated_save_failed', { model, error: error.message }));
+  if (marketSignal) { marketSignal.updateConfig(config); marketSignal.rebuild().catch(() => {}); } }).catch((error) => logger.warn('model_calibrated_save_failed', { model, error: error.message })).finally(() => calibrationPending.delete(model));
 
 }
 
@@ -3670,6 +3676,7 @@ const server = http.createServer(async (req, res) => {
     try {
 
       const raw = (await readRawBody(req)).toString('utf-8').replace(/^\uFEFF/, '');
+      const expectedRevision = getConfigRevision(config), draft = structuredClone(config);
 
       const lines = raw.split(/\r?\n/).filter((l) => l.trim());
 
@@ -3712,7 +3719,7 @@ const server = http.createServer(async (req, res) => {
 
         if (!id) continue;
 
-        const target = config.models.find((m) => m.id === id);
+        const target = draft.models.find((m) => m.id === id);
 
         if (!target) { skipped.push(`${id} 不存在`); continue; }
 
@@ -3746,7 +3753,7 @@ const server = http.createServer(async (req, res) => {
 
       if (!applied.length) return errorJson(res, 400, `全部 ${skipped.length} 条被跳过：${skipped.join('；')}`, 'invalid_request_error');
 
-      config = await saveConfig(config);
+      config = await saveConfig(draft, { expectedRevision });
 
       return json(res, 200, { ok: true, applied, skipped, format: 'csv' });
 
@@ -3761,6 +3768,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
 
       const incoming = Array.isArray(body?.models) ? body.models : null;
+      const expectedRevision = getConfigRevision(config), draft = structuredClone(config);
 
       if (!incoming || !incoming.length) return errorJson(res, 400, '导入文件需含 models 数组（见模板）', 'invalid_request_error');
 
@@ -3784,7 +3792,7 @@ const server = http.createServer(async (req, res) => {
 
         if (!item?.id || typeof item.id !== 'string') { skipped.push(`${JSON.stringify(item?.id)} 缺有效 id`); continue; }
 
-        const target = config.models.find((m) => m.id === item.id);
+        const target = draft.models.find((m) => m.id === item.id);
 
         if (!target) { skipped.push(`${item.id} 不存在`); continue; }
 
@@ -3838,7 +3846,7 @@ const server = http.createServer(async (req, res) => {
 
       if (!applied.length) return errorJson(res, 400, `全部 ${skipped.length} 条被跳过：${skipped.join('；')}`, 'invalid_request_error');
 
-      config = await saveConfig(config);
+      config = await saveConfig(draft, { expectedRevision });
 
       return json(res, 200, { ok: true, applied, skipped, issues: bsImportIssues.slice(0, 20) }); // v0.11.5：导入拒绝明细回显
 
