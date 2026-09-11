@@ -24,6 +24,8 @@ assert.ok(['bootstrap','snapshot'].includes(featureMode), 'invalid --feature-mod
 const nodeCostObservation = process.argv.includes('--node-cost-observation');
 const relayNagle = process.argv.includes('--relay-nagle');
 const isolatedHost = process.argv.includes('--isolated-host');
+const sseIdleSeconds = Number(arg('--sse-idle-seconds') ?? 0);
+assert.ok(Number.isInteger(sseIdleSeconds) && sseIdleSeconds >= 0 && sseIdleSeconds <= 180, 'invalid SSE idle interval');
 const budgetMode = arg('--budget-mode') ?? 'protection', nativeFront = process.argv.includes('--native-front'), edge = nativeFront || process.argv.includes('--edge');
 assert.ok(['protection', 'observation'].includes(budgetMode), 'invalid --budget-mode');
 assert.ok(!nodeCostObservation || (edge && budgetMode === 'observation'), 'Node cost observation requires edge and disabled budget');
@@ -133,7 +135,9 @@ async function measure(target, id, action) {
     elapsedMs: end - start, deliveredRps: good.length * 1000 / (end - start), p95Ms: percentile(good.map(s => s.durationMs), .95), p99Ms: percentile(good.map(s => s.durationMs), .99),
     firstByteP95Ms: percentile(good.map(s => s.firstByteMs), .95), schedulerDelayP95Ms: percentile(samples.map(s => s.schedulerDelayMs), .95),
     clientPathResidualP95Ms: percentile(good.map(s => s.clientPathResidualMs).filter(n => n != null), .95),
-    upstreamCalls: stateAfter.calls - stateBefore.calls, resources: before ? { before, after, resourceSamples,
+    upstreamCalls: stateAfter.calls - stateBefore.calls,
+    newIngressConnections: target === 'direct' ? null : stateAfter.ingressConnections[target] - stateBefore.ingressConnections[target],
+    resources: before ? { before, after, resourceSamples,
       averageCpuCores: (after.cpu.usage_usec - before.cpu.usage_usec) / 1000 / (after.at - before.at),
       throttledPeriods: after.cpu.nr_throttled - before.cpu.nr_throttled, throttledMs: (after.cpu.throttled_usec - before.cpu.throttled_usec) / 1000,
       peakSampledMemoryBytes: Math.max(before.memoryBytes, after.memoryBytes, ...resourceSamples.map(s => s.memoryBytes)), oomKills: after.memoryEvents.oom_kill - before.memoryEvents.oom_kill } : null };
@@ -202,6 +206,7 @@ try {
       });
     }
   }
+  if (sseIdleSeconds) await sleep(sseIdleSeconds * 1000);
   longStreams = [];
   for (const target of ['direct', 'node', 'go']) {
     const result = await measure(target, `${target}-long-sse`, async () => {
@@ -260,7 +265,7 @@ finally {
     return { name, log };
   }) : undefined;
   const report = { schemaVersion: 1, experiment: 'm4-cgroup-open-loop', at: new Date().toISOString(), runKey, productionReady: false, formalAcceptance: 'not evaluated: production workload and SLO not supplied',
-    failure, diagnostics, profiling, goRuntime, decisionEvidence, parameters: { seconds, rounds, rates, streamSeconds, streams, cpus, memoryMiB, goProcs, featureMode, budgetMode, edge, nativeFront, nodeCostObservation, relayNagle, isolatedHost, decisionLog: true, judge: false, semantic: false, rateLimit: false }, engine, image: imageEvidence, quotas,
+    failure, diagnostics, profiling, goRuntime, decisionEvidence, parameters: { seconds, rounds, rates, streamSeconds, streams, sseIdleSeconds, cpus, memoryMiB, goProcs, featureMode, budgetMode, edge, nativeFront, nodeCostObservation, relayNagle, isolatedHost, decisionLog: true, judge: false, semantic: false, rateLimit: false }, engine, image: imageEvidence, quotas,
     groups: { node: ['Node gateway + resource endpoint'], go: ['Go runtime', ...(featureMode === 'snapshot' ? [] : ['Node adapter']), nativeFront ? 'Go public front + real Node events, administration + resource endpoint' : edge ? 'real Node HTTP edge, events, administration + resource endpoint' : 'real Node administration + resource endpoint'], outsideQuota: ['common TCP ingress', 'mock upstream', 'load generator'] },
     corpus: { model, shapes, synthetic: true, semanticReview: false, inputMix: 'equal round-robin', mockDelayMs: 10 },
     binarySha256: sha(readFileSync(binary)), nodeSourceSha256: sourceHash, budgetSourceSha256: sha(readFileSync(resolve(root, 'src/budget.mjs'))), preflight, runs, requests,

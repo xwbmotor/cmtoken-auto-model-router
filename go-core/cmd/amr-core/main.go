@@ -191,7 +191,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "unable to bind native front")
 			os.Exit(2)
 		}
-		publicServer = &http.Server{Handler: front, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 300 * time.Second, MaxHeaderBytes: 16384}
+		publicServer = &http.Server{Handler: front, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: gateway.NativeIdleTimeout, MaxHeaderBytes: 16384}
 		go func() {
 			if e := publicServer.Serve(publicListener); e != nil && !errors.Is(e, http.ErrServerClosed) {
 				_ = server.Close()

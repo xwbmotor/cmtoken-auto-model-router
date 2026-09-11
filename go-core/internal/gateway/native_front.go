@@ -21,6 +21,9 @@ import (
 
 type nativeFrontKey struct{}
 
+// Match Node's public idle policy, including its client-visible lifetime hint.
+const NativeIdleTimeout = 300 * time.Second
+
 // NativeFront exposes only the completion handler. Management and compatibility
 // requests retain the Node HTTP contract; Go control endpoints stay private.
 type NativeFront struct {
@@ -55,6 +58,11 @@ func NewNativeFront(core http.Handler, nodeURL, token string) (*NativeFront, err
 }
 func (f *NativeFront) Close() { f.client.CloseIdleConnections() }
 func (f *NativeFront) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.ProtoMajor == 1 && !r.Close {
+		// Without this hint, clients such as Undici retire an otherwise reusable
+		// connection after their shorter default despite our 300-second timeout.
+		w.Header().Set("Keep-Alive", "timeout=300")
+	}
 	if strings.HasPrefix(path.Clean(r.URL.Path), "/internal/") {
 		writeError(w, 404, "not_found")
 		return

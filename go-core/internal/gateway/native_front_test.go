@@ -16,6 +16,35 @@ import (
 	"unicode/utf8"
 )
 
+func TestNativeFrontAdvertisesPublicIdleLifetime(t *testing.T) {
+	front, err := NewNativeFront(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}), "http://127.0.0.1:8789", strings.Repeat("s", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer front.Close()
+	for _, tc := range []struct {
+		protocol int
+		close    bool
+		want     string
+	}{
+		{1, false, "timeout=300"}, {1, true, ""}, {2, false, ""},
+	} {
+		r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{}`))
+		r.Header.Set("Authorization", "Bearer fixture")
+		r.ProtoMajor, r.Close = tc.protocol, tc.close
+		w := httptest.NewRecorder()
+		front.ServeHTTP(w, r)
+		if got := w.Header().Get("Keep-Alive"); got != tc.want {
+			t.Fatalf("protocol %d close %v: keep-alive %q", tc.protocol, tc.close, got)
+		}
+	}
+	if NativeIdleTimeout != 300*time.Second {
+		t.Fatal("public timeout contract changed")
+	}
+}
+
 func TestNativeCompletionWaitsForAckAndNeverForwardsCredentials(t *testing.T) {
 	const secret = "native-session-secret-for-test-00000001"
 	var revision string

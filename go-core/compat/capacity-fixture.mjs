@@ -9,6 +9,7 @@ const control = process.env.M4_CONTROL_TOKEN, upstream = process.env.M4_UPSTREAM
 if (!control || !upstream) throw new Error('isolated fixture required');
 let calls = 0, duplicates = 0, fixtureErrors = 0, active = 0;
 const seen = new Set();
+const ingressConnections = { node: 0, go: 0, edge: 0 };
 function authorized(req, token) { const got = Buffer.from(req.headers.authorization || ''), expected = Buffer.from(`Bearer ${token}`); return got.length === expected.length && timingSafeEqual(got, expected); }
 const resources = async (role, path = '/resources') => {
   const res = await fetch(`http://127.0.0.1:${role === 'node' ? 18786 : 18791}${path}`, { headers: { authorization: `Bearer ${control}` }, signal: AbortSignal.timeout(5000) });
@@ -17,7 +18,7 @@ const resources = async (role, path = '/resources') => {
 createServer(async (req, res) => {
   if (!authorized(req, control)) { res.writeHead(403); return res.end(); }
   try {
-    if (req.method === 'GET' && req.url === '/state') return res.end(JSON.stringify({ calls, duplicates, fixtureErrors, active }));
+    if (req.method === 'GET' && req.url === '/state') return res.end(JSON.stringify({ calls, duplicates, fixtureErrors, active, ingressConnections }));
     if (req.method === 'GET' && ['/resources/node', '/resources/go'].includes(req.url)) return res.end(JSON.stringify(await resources(req.url.split('/').at(-1))));
     if (req.method === 'GET' && ['/decisions/node', '/decisions/go'].includes(req.url)) return res.end(JSON.stringify(await resources(req.url.split('/').at(-1), '/decisions')));
     if (req.method === 'GET' && ['/profile-stop/node', '/profile-stop/go'].includes(req.url)) return res.end(JSON.stringify(await resources(req.url.split('/').at(-1), '/profile-stop')));
@@ -57,6 +58,7 @@ createServer(async (req, res) => {
 // identical byte relays in the shared fixture namespace, not privileged networking.
 for (const [front, back] of [[8785, 8786], [8792, process.env.M4_NATIVE_FRONT === '1' ? 8793 : process.env.M4_EDGE === '1' ? 8787 : 8791], [8784, 8787]]) {
   tcpServer(client => {
+    ingressConnections[front === 8785 ? 'node' : front === 8792 ? 'go' : 'edge']++;
     const target = connect(back, '127.0.0.1');
     // A byte relay must not add a Nagle/delayed-ACK wait when a gateway flushes
     // content before its final HTTP chunk. Apply equally to both directions.
