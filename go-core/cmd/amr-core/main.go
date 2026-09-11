@@ -160,6 +160,7 @@ func main() {
 		AssessmentTimeout: 3 * time.Second, RequestTimeout: *timeout, MaxRequests: 256}
 	var g interface {
 		http.Handler
+		Drain(context.Context) error
 		Close()
 	}
 	if *runtimeMode {
@@ -204,7 +205,7 @@ func main() {
 	go func() {
 		<-ctx.Done()
 		defer close(drained)
-		drain, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		drain, cancel := context.WithTimeout(context.Background(), gateway.GracefulDrainTimeout)
 		defer cancel()
 		if publicServer != nil {
 			if publicServer.Shutdown(drain) != nil {
@@ -214,6 +215,7 @@ func main() {
 		if server.Shutdown(drain) != nil {
 			_ = server.Close()
 		}
+		_ = g.Drain(drain)
 	}()
 	milestone := "m2b"
 	if *runtimeMode {

@@ -75,6 +75,20 @@ jobs:
           node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --node-cost-observation --out data/go-migration/native-node-cost-default.json
           node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --node-cost-observation --semantic shadow --out data/go-migration/native-node-cost-shadow.json
           node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --node-cost-observation --semantic active --out data/go-migration/native-node-cost-active.json
+          node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --node-cost-observation --semantic shadow --go-shutdown --out data/go-migration/native-go-shutdown.json
+      - name: Confirm the shutdown regression reproduces on the previous candidate
+        run: |
+          git fetch --no-tags --depth=1 origin tag v0.14.7
+          baseline="$RUNNER_TEMP/amr-before-shadow-drain"
+          mkdir -p "$baseline"
+          git archive v0.14.7 go-core | tar -x -C "$baseline"
+          (cd "$baseline/go-core" && go build -trimpath -o "$GITHUB_WORKSPACE/data/go-migration/amr-before-shadow-drain" ./cmd/amr-core)
+          set +e
+          node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-before-shadow-drain --native-front --node-cost-observation --semantic shadow --go-shutdown > data/go-migration/shutdown-before.log 2>&1
+          result=$?
+          set -e
+          test "$result" -ne 0
+          grep -q 'Go exited with an unfinished shadow review' data/go-migration/shutdown-before.log
       - name: Exercise same-host gateway comparison (smoke only, no capacity claim)
         run: node go-core/compat/compare-gateways.mjs --binary data/go-migration/amr-core --seconds 1 --rounds 1 --concurrency 1,8 --chunk-ms 40 --out data/go-migration/gateway-smoke.json
         # Includes real cookie-authenticated Node config save -> snapshot -> Go.

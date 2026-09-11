@@ -32,6 +32,10 @@ import (
 
 const MaxBodyBytes = 2 << 20
 
+// GracefulDrainTimeout matches the existing Node shutdown budget and remains
+// below the production container's 30-second stop grace period.
+const GracefulDrainTimeout = 20 * time.Second
+
 type Options struct {
 	NodeCostObservation  bool
 	EdgeURL              string
@@ -259,17 +263,36 @@ func New(o Options) (*Gateway, error) {
 	return g, nil
 }
 
+func (g *Gateway) stopBackground(cancel bool) {
+	g.backgroundMu.Lock()
+	g.backgroundClosing = true
+	if cancel && g.cancelBackground != nil {
+		g.cancelBackground()
+	}
+	g.backgroundMu.Unlock()
+}
+
+// Drain is called after HTTP admission has stopped. Completed responses can
+// still own shadow reviews; let those finish before cancellation or disposal.
+func (g *Gateway) Drain(ctx context.Context) error {
+	g.stopBackground(false)
+	done := make(chan struct{})
+	go func() { g.backgroundWorkers.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		g.stopBackground(true)
+		return ctx.Err()
+	}
+}
+
 func (g *Gateway) Close() {
 	if g.edgeClient != nil {
 		g.edgeClient.CloseIdleConnections()
 	}
 	g.closeOnce.Do(func() {
-		g.backgroundMu.Lock()
-		g.backgroundClosing = true
-		if g.cancelBackground != nil {
-			g.cancelBackground()
-		}
-		g.backgroundMu.Unlock()
+		g.stopBackground(true)
 		g.backgroundWorkers.Wait()
 		if g.semantic != nil {
 			g.semantic.Close()

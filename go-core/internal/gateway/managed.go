@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -47,6 +48,7 @@ type Managed struct {
 	active        *generation
 	all           map[*generation]bool
 	closing       bool
+	draining      bool
 	workers       sync.WaitGroup
 	state         *runtimeState
 	store         *liveconfig.Store[generationConfig]
@@ -196,7 +198,7 @@ func (m *Managed) Reload(expected string) (string, error) {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
 	m.mu.Lock()
-	if m.closing {
+	if m.closing || m.draining {
 		m.mu.Unlock()
 		return "", errors.New("runtime closing")
 	}
@@ -239,17 +241,17 @@ func (m *Managed) Reload(expected string) (string, error) {
 	m.all[next] = true
 	closeOld := old.refs == 0
 	if closeOld {
-		delete(m.all, old)
+		m.workers.Add(1)
 	}
 	m.mu.Unlock()
 	if closeOld {
-		old.g.Close()
+		m.retire(old)
 	}
 	return revision, nil
 }
 func (m *Managed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
-	if m.closing {
+	if m.closing || m.draining {
 		m.mu.Unlock()
 		writeError(w, 503, "runtime_draining")
 		return
@@ -263,11 +265,11 @@ func (m *Managed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		gen.refs--
 		closeOld := gen.retired && gen.refs == 0
 		if closeOld {
-			delete(m.all, gen)
+			m.workers.Add(1)
 		}
 		m.mu.Unlock()
 		if closeOld {
-			gen.g.Close()
+			m.retire(gen)
 		}
 		m.workers.Done()
 	}()
@@ -409,6 +411,48 @@ func (m *Managed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	gen.g.ServeHTTP(w, r)
 }
+func (m *Managed) retire(gen *generation) {
+	// With no HTTP references left, no new review can enter this generation.
+	// Preserve immediate disposal for the usual case without background work.
+	if len(gen.g.backgroundSlots) == 0 {
+		m.closeRetired(gen)
+	} else {
+		go m.closeRetired(gen)
+	}
+}
+
+func (m *Managed) closeRetired(gen *generation) {
+	defer m.workers.Done()
+	ctx, cancel := context.WithTimeout(context.Background(), GracefulDrainTimeout)
+	defer cancel()
+	_ = gen.g.Drain(ctx)
+	gen.g.Close()
+	m.mu.Lock()
+	delete(m.all, gen)
+	m.mu.Unlock()
+}
+
+// Drain runs after the HTTP servers have stopped. Retired generations remain
+// tracked until their background reviews finish, including across publication.
+func (m *Managed) Drain(ctx context.Context) error {
+	m.reloadMu.Lock()
+	m.mu.Lock()
+	m.draining = true
+	generations := make([]*generation, 0, len(m.all))
+	for gen := range m.all {
+		generations = append(generations, gen)
+	}
+	m.mu.Unlock()
+	m.reloadMu.Unlock()
+	var result error
+	for _, gen := range generations {
+		if err := gen.g.Drain(ctx); err != nil {
+			result = err
+		}
+	}
+	return result
+}
+
 func (m *Managed) Close() {
 	m.reloadMu.Lock()
 	m.mu.Lock()

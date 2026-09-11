@@ -14,7 +14,9 @@ assert.ok(arg('--binary'), '--binary required');
 const binary = resolve(arg('--binary'));
 const semantic = arg('--semantic') || 'disabled';
 const nativeFront = process.argv.includes('--native-front'), nodeCostObservation = process.argv.includes('--node-cost-observation');
+const goShutdown = process.argv.includes('--go-shutdown');
 assert.ok(['disabled', 'shadow', 'active'].includes(semantic), '--semantic must be shadow or active');
+if (goShutdown) assert.ok(nativeFront && semantic === 'shadow' && process.platform !== 'win32', 'Go SIGTERM verification requires native shadow mode on POSIX');
 const dir = await mkdtemp(join(root, 'data/go-migration/edge-'));
 const secret = () => randomBytes(24).toString('hex');
 const edgeToken = secret(), admin = secret(), access = secret(), provider = secret();
@@ -22,6 +24,8 @@ const semanticSecret = secret();
 const children = [], seen = [];
 let failures = 0;
 let classifierCalls = 0;
+let delayNextClassifier = false;
+const classifierEntered = Promise.withResolvers(), classifierRelease = Promise.withResolvers();
 const mock = createServer(async (req, res) => {
   if (req.url.endsWith('/models')) { res.setHeader('content-type', 'application/json'); res.end('{"data":[]}'); return; }
   let raw = ''; for await (const chunk of req) raw += chunk;
@@ -31,6 +35,11 @@ const mock = createServer(async (req, res) => {
     assert.ok(body.text.length > 0);
     assert.equal(req.headers['x-amr-edge-token'], undefined, 'edge token leaked to classifier');
     classifierCalls++;
+    if (delayNextClassifier) {
+      delayNextClassifier = false;
+      classifierEntered.resolve();
+      await classifierRelease.promise;
+    }
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify({ task: 'reasoning', tier: 'complex', complexity: .91, confidence: .96, reason: 'fixture reclassification' }));
     return;
@@ -191,8 +200,30 @@ try {
   }
   const noAuth = await fetch(base + '/internal/v1/go-events', { method: 'POST', body: '{}' }); assert.equal(noAuth.status, nativeFront ? 404 : 403);
   const cors = await fetch(base + '/v1/chat/completions', { method: 'OPTIONS', headers: { origin: 'https://outside.example' } }); assert.equal(cors.status, 204);
-  let gracefulNativeDrain = false;
-  if (nativeFront) {
+  let gracefulNativeDrain = false, gracefulGoDrain = false;
+  if (goShutdown) {
+    delayNextClassifier = true;
+    const draining = await post({}, 'edge-go-drain');
+    assert.equal(draining.status, 200); await draining.text();
+    await classifierEntered.promise;
+    const ended = once(go.child, 'close');
+    go.child.kill('SIGTERM');
+    let exitedBeforeReview = false;
+    await Promise.race([ended.then(() => { exitedBeforeReview = true; }), sleep(300)]);
+    assert.equal(exitedBeforeReview, false, 'Go exited with an unfinished shadow review');
+    classifierRelease.resolve();
+    assert.equal((await ended)[0], 0, go.output());
+    semanticRows = await records('semantic-reviews-');
+    const review = semanticRows.filter(r => r.requestId === 'edge-go-drain');
+    assert.equal(review.length, 1); assert.equal(review[0].status, 'shadow_complete');
+    const persisted = await records('decisions-');
+    assert.equal(persisted.filter(r => r.request?.requestId === 'edge-go-drain').length, 1);
+    const nodeEnded = once(node.child, 'close');
+    node.child.send({ type: 'amr-shutdown', reason: 'after-native-go-drain-test' });
+    assert.equal((await nodeEnded)[0], 0, node.output());
+    judges = await records('judge-reviews-');
+    gracefulNativeDrain = true; gracefulGoDrain = true;
+  } else if (nativeFront) {
     const draining = await post({ stream: true, messages: [{ role: 'user', content: 'drain-fixture' }] }, 'edge-drain');
     const ended = once(node.child, 'close');
     node.child.send({ type: 'amr-shutdown', reason: 'native-front-drain-test' });
@@ -211,12 +242,13 @@ try {
     for (const suffix of ['', '.events.jsonl']) assert.equal((await stat(join(dir, 'go.wal' + suffix))).size, 0);
     assert.equal(await readFile(join(dir, 'go.wal.node-observation'), 'utf8'), 'AMR_NODE_COST_OBSERVATION_V1\n');
   }
-  const result = { experiment: nativeFront ? 'go-native-front-node-events' : 'real-node-go-edge', nativeFront, nodeCostObservation, gracefulNativeDrain, passed: true, requests: requests.length + 1 + (nativeFront ? 1 : 0),
+  const result = { experiment: nativeFront ? 'go-native-front-node-events' : 'real-node-go-edge', nativeFront, nodeCostObservation, gracefulNativeDrain, gracefulGoDrain, passed: true, requests: requests.length + 1 + (nativeFront ? 1 : 0),
     semantic, classifierCalls, semanticReviewRecords: semanticRows.length,
     judgeQualityRecords: judges.filter(r => r.event === 'quality').length, cancellation: true, fallback: true, configPublication: true, at: new Date().toISOString() };
   await writeFile(resolve(arg('--out') || join(root, 'data/go-migration/edge-integration.json')), JSON.stringify(result, null, 2) + '\n');
   console.log(JSON.stringify(result));
 } finally {
+  classifierRelease.resolve();
   for (const child of children.reverse()) if (child.exitCode === null && child.signalCode === null) { const done = once(child, 'close'); child.kill(); await done; }
   mock.closeAllConnections(); await new Promise(r => mock.close(r));
   assert.ok(resolve(dir).startsWith(join(root, 'data/go-migration') + sep));
