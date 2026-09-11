@@ -3,10 +3,11 @@
 # 首次从 Node 迁入：先运行 go-core/deployment/prepare_native.py，使用其受保护的 compose.json。
 # 该脚本保留生产环境与配置并生成内部凭据、go-auth.json / go-runtime.json；不要直接覆盖生产文件。
 # 此模板供新安装复现拓扑：内部 token 必须匹配 go-auth.json，/state 目录归 UID 1000。
+# 停机先 stop go-core，待其排空后再 stop auto-model-router classifier。
 # 重建 classifier 时须同时重建依附其网络命名空间的 Node/Go。
 services:
   auto-model-router:
-    image: cmt-auto-model-router:0.14.7
+    image: cmt-auto-model-router:0.14.8
     container_name: auto-model-router
     restart: unless-stopped
     network_mode: service:classifier
@@ -57,7 +58,7 @@ services:
       retries: 3
 
   classifier:
-    image: cmt-amr-classifier:0.14.7  # 与本次发布源码一同构建，OCI revision 绑定发布提交
+    image: cmt-amr-classifier:0.14.8  # 与本次发布源码一同构建，OCI revision 绑定发布提交
     container_name: amr-classifier
     restart: unless-stopped
     hostname: classifier
@@ -70,7 +71,7 @@ services:
       options: { max-size: "20m", max-file: "2" }
 
   go-core:
-    image: cmt-amr-go:0.14.7
+    image: cmt-amr-go:0.14.8
     container_name: amr-go-core
     restart: unless-stopped
     network_mode: service:classifier
@@ -92,7 +93,7 @@ services:
       AMR_GO_SEMANTIC_SMALL_TOKEN: ${AMR_GO_SEMANTIC_SMALL_TOKEN:-}
     volumes:
       - /opt/amr/config:/app/config:ro
-      - /opt/amr/data/go-native-0.14.7:/state
+      - /opt/amr/data/go-native-0.14.8:/state
     command:
       - --candidate
       - --runtime

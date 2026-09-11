@@ -102,5 +102,6 @@ jobs:
           path: |
             data/go-migration/*.json
             data/go-migration/*.jsonl
+            data/go-migration/*.log
           if-no-files-found: warn
           retention-days: 14
