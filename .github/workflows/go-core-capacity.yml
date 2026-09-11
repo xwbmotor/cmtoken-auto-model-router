@@ -12,7 +12,7 @@ on:
       profile:
         description: Local mock workload size (never production)
         type: choice
-        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard, edge-observation-profile, edge-isolation]
+        options: [smoke, standard, diagnostic, optimization, tail-optimization, runtime-profile, runtime-optimization, cold-optimization, native-features, edge-observation-smoke, edge-observation-standard, edge-observation-profile, edge-isolation, edge-observation-optimization]
         default: smoke
 
 permissions:
@@ -40,7 +40,19 @@ jobs:
         env:
           PROFILE: ${{ inputs.profile || 'smoke' }}
         run: |
-          if [ "$PROFILE" = "edge-isolation" ]; then
+          if [ "$PROFILE" = "edge-observation-optimization" ]; then
+            baseline=9cbfe942ba726f74caa07439cbce16e98136845d
+            git fetch --no-tags --depth=1 origin "$baseline"
+            git worktree add --detach "$RUNNER_TEMP/amr-edge-baseline" "$baseline"
+            (cd "$RUNNER_TEMP/amr-edge-baseline/go-core" && CGO_ENABLED=0 go build -trimpath -o "$GITHUB_WORKSPACE/data/go-migration/amr-core-before" ./cmd/amr-core)
+            for mode in before after after before; do
+              index=$(( ${index:-0} + 1 )); binary=data/go-migration/amr-core-linux
+              if [ "$mode" = "before" ]; then binary=data/go-migration/amr-core-before; fi
+              result="data/go-migration/capacity-edge-optimization-$index-$mode"
+              node go-core/compat/compare-capacity.mjs --edge --feature-mode snapshot --budget-mode observation --binary "$binary" --seconds 5 --rounds 1 --rates 100,300 --stream-seconds 2 --streams 2 --cpus 2 --memory-mib 512 --out "$result.json"
+              node go-core/compat/summarize-capacity.mjs "$result.json" "$result.md"
+            done
+          elif [ "$PROFILE" = "edge-isolation" ]; then
             for mode in native edge edge native; do
               index=$(( ${index:-0} + 1 )); extra=()
               if [ "$mode" = "edge" ]; then extra=(--edge); fi

@@ -30,15 +30,15 @@ func (g *Gateway) forwardRuntime(w http.ResponseWriter, r *http.Request, body ma
 		return
 	}
 	policy := g.options.Bundle.Runtime
-	region := trace.StartRegion(r.Context(), "gateway.budgetSnapshot")
-	snap := g.runtime.ledger.Snapshot()
-	region.End()
 	if limit := policy.limit(); limit > 0 {
+		region := trace.StartRegion(r.Context(), "gateway.budgetSnapshot")
+		snap := g.runtime.ledger.Snapshot()
+		region.End()
 		in.Runtime.BudgetPressure = float64(snap.PendingMicros+snap.ActualMicros+snap.EstimatedMicros) / float64(limit)
 	}
 	in.Runtime.Health = g.runtime.health.Snapshot()
 	in.Runtime.NowMs = float64(time.Now().UnixMilli())
-	region = trace.StartRegion(r.Context(), "gateway.admission")
+	region := trace.StartRegion(r.Context(), "gateway.admission")
 	d, firstRelease, e := g.admission.SelectSession(in, sessionKey)
 	region.End()
 	if e != nil {
