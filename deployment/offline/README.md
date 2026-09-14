@@ -1,8 +1,14 @@
-# 内网离线安装（无需宿主机 Python）
+# Auto Model Router 安装说明
 
-本包用于已有 Docker Engine 和 Compose v2 的 Linux x86_64 服务器。目标环境是 BigCloud Enterprise Linux For Euler 22.10U2 LTS；截图中的 Docker 27.5.1、Compose 2.33.0 符合工具的版本要求。该发行版本身仍需在目标机器上完成最后验收，不能把其他 Linux 上的验证当作系统认证。
+本文说明如何安装、启动和检查 Auto Model Router v0.14.8。安装包已包含三个服务镜像、中台地址和模型配置。
 
-宿主机只使用 Bash 和常规系统命令，例如 tar、gzip、sha256sum。初始化、配置检查和请求验收使用包内 Node 镜像，不安装 Python、Node 或 Go，不访问软件源，不在线拉取镜像。服务运行和业务验收仍需能访问中台地址。
+## 环境要求
+
+- Linux x86_64 服务器，已安装 Docker Engine 和 Docker Compose v2。
+- 可使用 Bash、tar、gzip、sha256sum 等常规系统命令。
+- 服务器能够访问配置中的中台地址，部署人员具有 sudo 权限。
+
+本次目标系统为 BigCloud Enterprise Linux For Euler 22.10U2 LTS，已确认提供的 Docker 27.5.1 和 Compose 2.33.0 满足工具要求。安装后按本文完成服务和业务请求检查。
 
 ## 包里有什么
 
@@ -17,10 +23,9 @@
 
 ## 1. 上传和解压
 
-将 `amr-offline-0.14.8.tar.gz` 及对应 `.sha256` 文件传到服务器同一目录：
+将 `amr-offline-0.14.8.tar.gz` 上传到服务器，然后解压并检查包内文件：
 
 ```bash
-sha256sum -c amr-offline-0.14.8.tar.gz.sha256
 tar -xzf amr-offline-0.14.8.tar.gz
 cd amr-offline-0.14.8
 sha256sum -c SHA256SUMS
