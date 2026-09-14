@@ -1,0 +1,166 @@
+{
+  "upstreamBaseUrl": "https://maas.example.invalid/v1",
+  "routing": {
+    "mode": "active",
+    "activeTrafficPercent": 100,
+    "defaultExplicitModel": "replace-with-your-model",
+    "allowExplicitModel": true,
+    "preferSelfHosted": false,
+    "selfHostedBonus": 0.2,
+    "qualityFloor": 0.5,
+    "qualityWeight": 1,
+    "costWeight": 0.22,
+    "latencyWeight": 0.14,
+    "uncertaintyPenalty": 0.08,
+    "complexQualityMargin": 0.04,
+    "scoreStrategy": "weighted",
+    "latencyObservation": {
+      "mode": "off",
+      "probes": {
+        "enabled": false
+      }
+    },
+    "livePenalty": {
+      "latencyScaleMs": 300000,
+      "latencyMax": 0.2,
+      "errorStep": 0.08,
+      "errorMax": 0.3
+    },
+    "budgetCostMultiplier": 2,
+    "maxAttempts": 1,
+    "requestTimeoutMs": 300000,
+    "circuitBreakerFailures": 3,
+    "circuitBreakerCooldownMs": 30000,
+    "sessionStickinessTtlMs": 1800000,
+    "shadowModel": "replace-with-your-model",
+    "taskPreferences": {},
+    "costTier": "custom",
+    "providerCostWeight": 0.1,
+    "relQualityCap": {
+      "simple": 0.08,
+      "balanced": 0.04,
+      "complex": 0.02
+    },
+    "subtaskSmoothK": 32,
+    "subtaskMinSamples": 4,
+    "subtaskMaxAdjust": 0.06,
+    "sessionStickinessMaxGap": 0.05,
+    "autoModelId": "cmtoken-auto",
+    "exposeModelList": "auto-only",
+    "loadBalancing": {
+      "enabled": false,
+      "limits": {}
+    }
+  },
+  "semanticRouter": {
+    "enabled": false,
+    "mode": "shadow",
+    "model": "replace-with-your-model",
+    "confidenceThreshold": 0.7,
+    "minCharacters": 12,
+    "maxInputCharacters": 6000,
+    "maxOutputTokens": 180,
+    "timeoutMs": 3500,
+    "useJsonMode": false,
+    "provider": "cascade",
+    "openaiChat": {
+      "model": "replace-with-your-model"
+    },
+    "httpJson": {
+      "url": "http://127.0.0.1:8788/classify",
+      "token": ""
+    },
+    "minConfidence": 0,
+    "smallAcceptThreshold": 0.7,
+    "finalAdoptionThreshold": 0.5,
+    "activeTrafficPercent": 5
+  },
+  "reasoningControl": {
+    "enabled": true,
+    "offMaxComplexity": 0.3,
+    "highMinComplexity": 0.78
+  },
+  "budget": {
+    "enabled": false,
+    "dailyBudgetYuan": 0,
+    "degradeThreshold": 0.9,
+    "defaultEstimatedOutputTokens": 800,
+    "timeZone": "Asia/Shanghai",
+    "ledgerPath": "./data/budget-ledger.json",
+    "beansPerYuan": 70,
+    "cacheHitRatio": 0
+  },
+  "calibration": {
+    "enabled": false,
+    "minSamples": 200,
+    "maxFailureRate": 0.05
+  },
+  "taskRules": {
+    "simpleMaxComplexity": 0.34,
+    "complexMinComplexity": 0.7,
+    "longPromptCharacters": 12000
+  },
+  "models": [
+    {
+      "id": "replace-with-your-model",
+      "displayName": "Your model (configure before use)",
+      "ownership": "ecosystem",
+      "enabled": true,
+      "contextWindow": 32768,
+      "costIndex": 1,
+      "latencyIndex": 1,
+      "quality": {
+        "default": 0.5
+      },
+      "capabilities": {
+        "chat": true,
+        "stream": true,
+        "tools": false,
+        "json": false,
+        "vision": false
+      },
+      "calibrationStatus": "pilot",
+      "qualitySource": {
+        "default": "placeholder-not-measured"
+      }
+    }
+  ],
+  "decisionLog": {
+    "enabled": true,
+    "dirPath": "./data/decisions",
+    "maxFileBytes": 16777216,
+    "maxFiles": 14,
+    "redactMessages": true,
+    "logAnswerText": false
+  },
+  "rateLimit": {
+    "enabled": true,
+    "rpm": 120,
+    "burst": 120
+  },
+  "costModel": {
+    "enabled": true,
+    "source": "pricing",
+    "pricingMix": {
+      "input": 10,
+      "output": 1
+    },
+    "cardPrice": {
+      "910B2": 1,
+      "910B4": 1.5
+    },
+    "pricingAnchorYuan": 4.811
+  },
+  "version": "0.14.8",
+  "judge": {
+    "enabled": false,
+    "model": "glm-5.3",
+    "samplePercent": 3,
+    "taskCheckEnabled": false,
+    "timeoutMs": 60000,
+    "dailyMaxCalls": 300,
+    "dailyMaxTokens": 2000000,
+    "circuitThreshold": 5,
+    "cooldownMs": 900000
+  }
+}

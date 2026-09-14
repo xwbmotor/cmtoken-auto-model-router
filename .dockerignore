@@ -33,3 +33,8 @@ data/latency-observations.json*
 data/go-toolchain/
 data/go-build-cache/
 data/go-migration/
+
+# Offline installer bundles and disposable installation checks
+data/installation/
+data/fresh-*/
+data/doc-refresh/

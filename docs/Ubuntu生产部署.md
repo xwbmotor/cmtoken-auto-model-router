@@ -40,22 +40,11 @@ Node 需写入配置和数据，Go 的状态挂载目录需由 UID 1000 写入�
 
 ## 新安装与首次 Node 迁移
 
-仓库的 `docker-compose.prod.yml` 是三服务拓扑模板。它还需要匹配的内部 token、鉴权文件、运行快照与状态目录；复制模板和 `.env.example` 后直接 `up` 不是完整的新安装流程。
+空服务器使用 [空机安装说明](../deployment/README.md)。独立交付包包含三个已验证镜像、配置模板和安装工具；部署同事导入镜像、填写自己的模型参数，再执行 `install.py init` 和 `install.py start`。初始化不依赖已有 Node 服务，自动生成内部凭证、Go 快照和数据目录，并拒绝覆盖已有路径。
 
-已有 Node 部署首次迁入 Go 时，使用 `go-core/deployment/prepare_native.py`。它会核对正在运行的 Node 与磁盘 Compose、镜像 revision 和预算设置，生成独立目录，保留原始回滚文件，并导出快照。它**只准备文件，不切换服务**。
+空机工具生成的是 `compose.json`，支持自定义安装目录、项目名和监听端口。下面的日常运维命令以既有 `/opt/amr/docker-compose.prod.yml` 部署为例；新安装优先使用安装工具的 `start`、`check`、`stop`，手工操作时采用 `installation.json` 中记录的项目名和实际文件。
 
-在具有已核验镜像的目标服务器上，从对应版本的仓库根目录运行：
-
-```bash
-# AMR_VERSION 和 AMR_REVISION 分别填写已核验的版本号和完整发布提交。
-# stage 必须是 /opt/amr 下尚不存在、以 native-release- 开头的目录。
-sudo python3 go-core/deployment/prepare_native.py \
-  --stage "/opt/amr/native-release-$AMR_VERSION" \
-  --version "$AMR_VERSION" \
-  --revision "$AMR_REVISION"
-```
-
-脚本依赖已有 Node 部署，不能用于空服务器，也不能在已有 Go 配置的服务器上重复执行。空服务器应先完成环境专用的内部凭证、快照和挂载准备，并在隔离环境验收；当前仓库没有一条经过空机验收的一键安装命令。准备文件的细节和迁移演练见 [切换验证](go-core-edge.md)。
+已有 Node 部署首次迁入 Go 仍使用 `go-core/deployment/prepare_native.py`。它核对正在运行的服务、磁盘 Compose、镜像提交和预算设置，保留回滚文件并生成快照，只准备文件、不自动切换。已有部署不要重新运行空机初始化，迁移过程见 [切换验证](go-core-edge.md)。
 
 ## 运行检查
 

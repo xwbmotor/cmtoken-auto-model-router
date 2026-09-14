@@ -36,7 +36,7 @@ npm start
 
 该命令会读取存在的 `.env`，启动 `src/server.mjs`；没有指定监听地址时使用 `127.0.0.1:8787`。它不启动 Go 或 Python 分类器，不能代替生产三服务部署。凭证和上游地址参考 `.env.example`，不要将填好的 `.env` 提交到仓库。
 
-生产安装、升级和停止顺序见 [Ubuntu 部署说明](docs/Ubuntu生产部署.md)。Go 的本地构建和检查见 [Go 开发说明](go-core/README.md)。
+新服务器从 [空机安装](deployment/README.md)开始：交付包自带三个镜像，初始化无需预先运行 Node。现有部署的升级和停止顺序见 [Ubuntu 部署说明](docs/Ubuntu生产部署.md)。Go 的本地构建和检查见 [Go 开发说明](go-core/README.md)。
 
 ## 接入示例
 

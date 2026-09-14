@@ -1,0 +1,33 @@
+{
+  "version": "0.14.8",
+  "revision": "90e6e4eb71ff5e323a39caa87e52e1829e77f332",
+  "architecture": "amd64",
+  "sourceArchiveSha256": "c1cba1d56fc659519619ac3edd0a9a04fb363a260d043449a2a91fbb0ee7deb9",
+  "formalValidation": "https://github.com/xwbmotor/cmtoken-auto-model-router/actions/runs/34614987601",
+  "images": {
+    "cmt-auto-model-router": {
+      "archive": "cmt-auto-model-router-0.14.8.tar.gz",
+      "sha256": "d51cc1abbc651ee782fff58e933680f60e3fd463ed07ef29145622d7dd865ffd",
+      "ids": [
+        "sha256:f8f2c0d01b1d68feac6ed194e09c0bee769690de36d5b4d0ad874fb4bc4b393d",
+        "sha256:0571f87f9eaea31764768db0631c60de5656744731405fe0532bd3f46c63985a"
+      ]
+    },
+    "cmt-amr-classifier": {
+      "archive": "cmt-amr-classifier-0.14.8.tar.gz",
+      "sha256": "022547e9b128870ac93c4ad8d1c46f9dee920887c996176a08efeecb3410ca9d",
+      "ids": [
+        "sha256:df2b34e21b3a4868f1fca6754b9c80b1300300e0ca5b0cee26dc4b72ab4f1116",
+        "sha256:760fd4263502f6de69cd1f1cd6fd2bbd2a6645a831dc550af74b598dda8592b5"
+      ]
+    },
+    "cmt-amr-go": {
+      "archive": "cmt-amr-go-0.14.8.tar.gz",
+      "sha256": "bde1bb5016e405b4f06e39e9552d3ddf4a7a705152dfe204c578e2b0456677e9",
+      "ids": [
+        "sha256:fbb0fa8c72796c8b1ec66fc57fc3d15ba40c1279b23e30b8afbfc38ee6677dcb",
+        "sha256:564b1906fc7bb69749ac1c6cb9aff97f2e3d23fda179211204cf11bbe5c62bb2"
+      ]
+    }
+  }
+}

@@ -1,0 +1,31 @@
+name: Fresh installation verification
+on:
+  push:
+    branches: [master]
+    paths: ['deployment/**', '.github/workflows/fresh-install.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  fresh-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - name: Validate installation inputs and protected preparation
+        run: python3 -m unittest discover -s deployment -p 'test_*.py' -v
+      - name: Download the previously verified application images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 34614987601 --name release-images --dir data/fresh-bundle/images
+      - name: Install on an empty directory and verify JSON, SSE and restart
+        run: sudo -E python3 deployment/ci_fresh_install.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: fresh-install-evidence
+          path: data/fresh-install-evidence/
