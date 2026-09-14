@@ -31,6 +31,8 @@
 - [累计统计持久化记录](history/counters-persistence.md)：早期问题和测试隔离经验。
 
 - [版本记录](../CHANGELOG.md)：按版本查看变化。
+- [v0.14.9 生产验收](go-core-production-v0.14.9.md)：可靠回传、评测恢复、容量与生产更新。
+- [结果与任务恢复](reliable-delivery.md)：待发送记录、异常核对及评测中断。
 - [v0.14.8 生产验收](go-core-production-v0.14.8.md)：实际切换、重启、镜像及回滚依据。
 - [Go 切换过程](go-core-edge.md)：候选比较、失败修复和历史实验。
 - [迁移计划](go-core-migration.md)、`go-core-m4-*.md`、`go-core-*-results.md`：各阶段的原始结果，保留当时条件与限制。文中的“尚未切换”是当时状态。

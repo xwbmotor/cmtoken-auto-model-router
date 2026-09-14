@@ -6,11 +6,11 @@ Auto Model Router 是放在应用与 MaaS 平台之间的模型路由服务。�
 
 ## 安装
 
-下载 [v0.14.8 安装包](https://github.com/xwbmotor/cmtoken-auto-model-router/releases/tag/v0.14.8)，在已有 Docker Engine 和 Compose v2 的 Linux x86_64 服务器上解压：
+下载 [v0.14.9 安装包](https://github.com/xwbmotor/cmtoken-auto-model-router/releases/tag/v0.14.9)，在已有 Docker Engine 和 Compose v2 的 Linux x86_64 服务器上解压：
 
 ```bash
-tar -xzf amr-offline-0.14.8.tar.gz
-cd amr-offline-0.14.8
+tar -xzf amr-offline-0.14.9.tar.gz
+cd amr-offline-0.14.9
 sha256sum -c SHA256SUMS
 sudo bash install.sh load-images
 sudo bash install.sh init --root /opt/amr
@@ -23,6 +23,8 @@ sudo bash install.sh check --root /opt/amr
 包内配置提供中台接入和模型池，部署前核对其是否适用于自己的环境。管理凭证会为新实例生成；业务使用调用方自己的中台 key。完整步骤、企业 CA、请求验收和启停方法见 [安装说明](deployment/offline/README.md)。已有服务升级见 [部署与运维](docs/Ubuntu生产部署.md)。
 
 ## 服务组成
+
+当前发布为 v0.14.9，新增结果耐久回传和评测任务恢复，见 [生产验收](docs/go-core-production-v0.14.9.md)。
 
 | 服务 | 负责什么 |
 |---|---|
