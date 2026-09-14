@@ -20,6 +20,7 @@ export class DecisionLog {
     this.currentFile = null;
     this.currentBytes = 0;
     this.errors = 0;
+    this.unsynced = new Set();
     this.written = 0;
     this.writeChain = Promise.resolve(); //串行化写盘，避免并发 append 交错
   }
@@ -62,7 +63,7 @@ export class DecisionLog {
       //轮转 = 把当前文件改名；下一条日志会自动写到当天新文件
       await mkdir(dir, { recursive: true });
       await rename(this.currentFile, rotated);
-      if (this.durable && process.platform !== 'win32') { const handle = await open(dir, 'r'); try { await handle.sync(); } finally { await handle.close(); } }
+      if (this.unsynced.delete(this.currentFile)) this.unsynced.add(rotated);
       this.currentFile = null;
       this.currentBytes = 0;
       await this.prune(dir);
@@ -78,7 +79,7 @@ export class DecisionLog {
     const files = (await readdir(dir)).filter((f) => f.startsWith(prefix) && f.endsWith('.jsonl')).sort();
     while (files.length > this.options.maxFiles) {
       const victim = files.shift();
-      await rm(resolve(dir, victim), { force: true });
+      if (!this.unsynced.has(resolve(dir, victim))) await rm(resolve(dir, victim), { force: true });
     }
   }
 
@@ -161,11 +162,21 @@ export class DecisionLog {
     return this.writeChain;
   }
 
+  flushDurable() {
+    const task=this.writeChain.then(async()=>{
+      const directories=new Set();
+      for(const path of this.unsynced){const file=await open(path,'r+');try{await file.sync();}finally{await file.close();}directories.add(dirname(path));}
+      if(process.platform!=='win32')for(const path of directories){const dir=await open(path,'r');try{await dir.sync();}finally{await dir.close();}}
+      this.unsynced.clear();
+    });
+    this.writeChain=task.catch(()=>{this.errors++;});return task;
+  }
+
   async append(record) {
     if (!this.currentFile || this.fileFor() !== this.currentFile) await this.openExistingOrCreate();
     const line = JSON.stringify(record) + '\n';
     await appendFile(this.currentFile, line, 'utf8');
-    if (this.durable) { const file = await open(this.currentFile, 'r+'); try { await file.sync(); } finally { await file.close(); } if (process.platform !== 'win32') { const dir = await open(dirname(this.currentFile), 'r'); try { await dir.sync(); } finally { await dir.close(); } } }
+    if (this.durable) this.unsynced.add(this.currentFile);
     this.currentBytes += Buffer.byteLength(line);
     this.written += 1;
     if (this.currentBytes >= this.options.maxFileBytes) await this.rotate();

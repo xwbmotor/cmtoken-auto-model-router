@@ -7,7 +7,9 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"github.com/xwbmotor/cmtoken-auto-model-router/go-core/internal/labnet"
 	"io"
@@ -24,7 +26,14 @@ import (
 const edgeOutboxMaxBytes int64 = 256 << 20
 const edgeOutboxMaxRecords = 4096
 
+type edgeSubmission struct {
+	done chan struct{}
+	err  error
+}
+
 type edgeOutbox struct {
+	writing                  map[string]*edgeSubmission
+	writers                  sync.WaitGroup
 	mu                       sync.Mutex
 	dir, endpoint, token     string
 	cipher                   cipher.AEAD
@@ -97,7 +106,7 @@ func openEdgeOutbox(dir, endpoint, token string) (*edgeOutbox, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	q := &edgeOutbox{dir: dir, endpoint: endpoint, token: token, cipher: aead, client: labnet.Client(2 * time.Second), pending: map[string]int64{}, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{})}
+	q := &edgeOutbox{dir: dir, endpoint: endpoint, token: token, cipher: aead, client: labnet.Client(2 * time.Second), pending: map[string]int64{}, writing: map[string]*edgeSubmission{}, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	fail := func(e error) (*edgeOutbox, error) { cancel(); return nil, e }
 	for _, entry := range entries {
 		name := entry.Name()
@@ -170,25 +179,39 @@ func (q *edgeOutbox) signal() {
 	}
 }
 func (q *edgeOutbox) enqueue(payload []byte) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.closed || q.fatal {
-		return errors.New("outbox unavailable")
-	}
 	sum := sha256.Sum256(payload)
 	id := hex.EncodeToString(sum[:])
-	if _, ok := q.pending[id]; ok {
-		return nil
-	}
-	if len(payload) > 15<<20 || len(q.pending) >= edgeOutboxMaxRecords || q.bytes+int64(len(payload))+64 > edgeOutboxMaxBytes {
-		q.saturated = true
-		return errors.New("outbox full")
-	}
 	nonce := make([]byte, q.cipher.NonceSize())
 	if _, e := rand.Read(nonce); e != nil {
 		return e
 	}
 	raw := q.cipher.Seal(nonce, nonce, payload, nil)
+	q.mu.Lock()
+	if q.closed || q.fatal {
+		q.mu.Unlock()
+		return errors.New("outbox unavailable")
+	}
+	if _, ok := q.pending[id]; ok {
+		q.mu.Unlock()
+		return nil
+	}
+	if prior, ok := q.writing[id]; ok {
+		q.mu.Unlock()
+		<-prior.done
+		return prior.err
+	}
+	if len(payload) > 15<<20 || len(q.pending)+len(q.writing) >= edgeOutboxMaxRecords || q.bytes+int64(len(raw)) > edgeOutboxMaxBytes {
+		q.saturated = true
+		q.mu.Unlock()
+		return errors.New("outbox full")
+	}
+	submission := &edgeSubmission{done: make(chan struct{})}
+	q.writing[id] = submission
+	q.bytes += int64(len(raw))
+	q.writers.Add(1)
+	q.mu.Unlock()
+	// Independent records may synchronize concurrently. The shared queue lock
+	// protects accounting only, never the storage latency of other requests.
 	temporary := filepath.Join(q.dir, id+".tmp")
 	f, e := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if e == nil {
@@ -204,14 +227,21 @@ func (q *edgeOutbox) enqueue(payload []byte) error {
 	if e == nil {
 		e = syncEdgeDirectory(q.dir)
 	}
+	q.mu.Lock()
+	delete(q.writing, id)
 	if e != nil {
 		q.fatal = true
-		return errors.New("outbox persistence failed")
+		submission.err = errors.New("outbox persistence failed")
+	} else {
+		q.pending[id] = int64(len(raw))
 	}
-	q.pending[id] = int64(len(raw))
-	q.bytes += int64(len(raw))
-	q.signal()
-	return nil
+	close(submission.done)
+	q.mu.Unlock()
+	q.writers.Done()
+	if e == nil {
+		q.signal()
+	}
+	return submission.err
 }
 func (q *edgeOutbox) deliver() bool {
 	q.mu.Lock()
@@ -220,20 +250,53 @@ func (q *edgeOutbox) deliver() bool {
 		keys = append(keys, id)
 	}
 	sort.Strings(keys)
+	selected := make([]string, 0, 16)
+	var total int64
+	for _, id := range keys {
+		size := q.pending[id]
+		if len(selected) > 0 && total+size > 1<<20 {
+			break
+		}
+		selected = append(selected, id)
+		total += size
+		if len(selected) == 16 {
+			break
+		}
+	}
 	q.mu.Unlock()
-	if len(keys) == 0 {
+	if len(selected) == 0 {
 		return false
 	}
-	id := keys[0]
-	raw, e := os.ReadFile(filepath.Join(q.dir, id+".evt"))
-	if e != nil {
-		return false
+	payloads := make([][]byte, 0, len(selected))
+	for _, id := range selected {
+		raw, e := os.ReadFile(filepath.Join(q.dir, id+".evt"))
+		if e != nil {
+			q.mu.Lock()
+			q.fatal = true
+			q.mu.Unlock()
+			return false
+		}
+		plain, e := q.decode(raw)
+		if e != nil {
+			q.mu.Lock()
+			q.fatal = true
+			q.mu.Unlock()
+			return false
+		}
+		payloads = append(payloads, plain)
 	}
-	plain, e := q.decode(raw)
-	if e != nil {
-		return false
+	body := payloads[0]
+	if len(payloads) > 1 {
+		items := make([]string, len(payloads))
+		for i, p := range payloads {
+			items[i] = base64.StdEncoding.EncodeToString(p)
+		}
+		body, _ = json.Marshal(struct {
+			Kind  string   `json:"kind"`
+			Items []string `json:"items"`
+		}{"native_batch", items})
 	}
-	req, e := http.NewRequestWithContext(q.ctx, http.MethodPost, q.endpoint, bytes.NewReader(plain))
+	req, e := http.NewRequestWithContext(q.ctx, http.MethodPost, q.endpoint, bytes.NewReader(body))
 	if e != nil {
 		return false
 	}
@@ -246,22 +309,31 @@ func (q *edgeOutbox) deliver() bool {
 		res.Body.Close()
 		ok = res.StatusCode == 204
 	}
-	q.mu.Lock()
-	defer q.mu.Unlock()
 	if !ok {
+		q.mu.Lock()
 		q.failures++
+		q.mu.Unlock()
 		return false
 	}
-	if e = os.Remove(filepath.Join(q.dir, id+".evt")); e == nil {
+	for _, id := range selected {
+		if e = os.Remove(filepath.Join(q.dir, id+".evt")); e != nil {
+			break
+		}
+	}
+	if e == nil {
 		e = syncEdgeDirectory(q.dir)
 	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	if e != nil {
 		q.fatal = true
 		return false
 	}
-	q.bytes -= q.pending[id]
-	delete(q.pending, id)
-	if q.bytes < edgeOutboxMaxBytes-(16<<20) && len(q.pending) < edgeOutboxMaxRecords {
+	for _, id := range selected {
+		q.bytes -= q.pending[id]
+		delete(q.pending, id)
+	}
+	if q.bytes < edgeOutboxMaxBytes-(16<<20) && len(q.pending)+len(q.writing) < edgeOutboxMaxRecords {
 		q.saturated = false
 	}
 	return true
@@ -284,7 +356,7 @@ func (q *edgeOutbox) loop() {
 func (q *edgeOutbox) status() (int, int64, uint64, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return len(q.pending), q.bytes, q.failures, q.fatal || q.saturated || q.bytes >= edgeOutboxMaxBytes || len(q.pending) >= edgeOutboxMaxRecords
+	return len(q.pending) + len(q.writing), q.bytes, q.failures, q.fatal || q.saturated || q.bytes >= edgeOutboxMaxBytes || len(q.pending) >= edgeOutboxMaxRecords
 }
 func (q *edgeOutbox) drain(ctx context.Context) error {
 	q.signal()
@@ -309,6 +381,7 @@ func (q *edgeOutbox) close() {
 	q.mu.Lock()
 	q.closed = true
 	q.mu.Unlock()
+	q.writers.Wait()
 	q.cancel()
 	<-q.done
 	q.client.CloseIdleConnections()

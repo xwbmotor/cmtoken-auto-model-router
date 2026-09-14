@@ -30,3 +30,12 @@ test('historic configuration is retained encrypted for delayed results',async()=
  s.savePolicy('revision',{models:[{id:'old'}],privateSetting:'protected'});assert.equal(s.policy('revision').models[0].id,'old');
  assert.equal(Buffer.from(s.db.prepare('SELECT payload FROM policies').get().payload).includes(Buffer.from('protected')),false);
 }));
+
+test('batched receipts share one durability barrier and replay no effects',async()=>fixture(async(s)=>{
+ let effects=0,flushes=0;
+ const items=Array.from({length:8},(_,i)=>({event:{...event(),id:String(i).padStart(32,'0')},digest:'digest-'+i,action:async()=>{effects++}}));
+ await s.applyMany(items,async()=>{flushes++});
+ await s.applyMany(items,async()=>{flushes++});
+ assert.equal(effects,8);assert.equal(flushes,1);
+ assert.equal(s.db.prepare("SELECT count(*) n FROM receipts WHERE state='done'").get().n,8);
+}));

@@ -2513,7 +2513,7 @@ async function consumeGoSemantic(event, metadata) {
 }
 
 async function flushNativeEffects(before = [decisionLog.errors, semanticLog.errors, budgetTracker.persistErrors || 0, countersPersistErrors]) {
-  await Promise.all([decisionLog.writeChain, semanticLog.writeChain, budgetTracker.pendingWrite, countersFlushNow()]);
+  await Promise.all([decisionLog.flushDurable(), semanticLog.flushDurable(), budgetTracker.pendingWrite, countersFlushNow()]);
   if (decisionLog.errors !== before[0] || semanticLog.errors !== before[1] || (budgetTracker.persistErrors || 0) !== before[2] || countersPersistErrors !== before[3]) throw new Error('native_projection_write_failed');
   // Persist current money state explicitly; the normal batched writer may swallow an earlier error.
   await budgetTracker.scheduleWrite();

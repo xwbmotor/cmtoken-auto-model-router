@@ -57,8 +57,26 @@ export function createGoCoreEdge(env = process.env, native = {}) {
       }
       const raw = Buffer.concat(chunks), event = JSON.parse(raw);
       const digest = createHash('sha256').update(raw).digest('hex');
+      if (env.AMR_GO_NATIVE_FRONT === '1' && event.kind === 'native_batch') {
+        if (!native.receipts || !Array.isArray(event.items) || !event.items.length || event.items.length > 16) throw new Error('invalid_native_batch');
+        const entries=[];
+        for(const encoded of event.items) {
+          if(typeof encoded!=='string')throw new Error('invalid_native_batch');
+          const bytes=Buffer.from(encoded,'base64'), item=JSON.parse(bytes);
+          if(!/^[a-f0-9]{32}$/.test(item.id)||!(item.kind==='native_complete'||item.kind==='semantic'&&item.nativeMetadata))throw new Error('invalid_native_batch_item');
+          const digest=createHash('sha256').update(bytes).digest('hex');
+          if(native.receipts.alreadyDone(item,digest))continue;
+          const receiptEvent=structuredClone(item), action=await native.prepare(item,validateEvent);
+          entries.push({event:receiptEvent,digest,action});
+        }
+        const checkpoint=native.checkpoint?.();
+        completing++;
+        try{await native.receipts.applyMany(entries,()=>native.flush(checkpoint));}finally{completing--;}
+        res.writeHead(204);res.end();return;
+      }
       if (env.AMR_GO_NATIVE_FRONT === '1' && (event.kind === 'native_complete' || event.nativeMetadata)) {
         if (!/^[a-f0-9]{32}$/.test(event.id)) throw new Error('invalid_native_id');
+        if (native.receipts?.alreadyDone(event,digest)) { res.writeHead(204); res.end(); return; }
         const key = `${event.id}:${event.kind}`, prior = nativeDone.get(key);
         if (prior && prior.digest !== digest) { res.writeHead(409); res.end(); return; }
         if (!prior) {

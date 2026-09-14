@@ -27,7 +27,7 @@ export class NativeReceipts {
     store.blocked=Number(db.prepare("SELECT count(*) n FROM receipts WHERE state='started'").get().n)>0;
     return store;
   }
-  constructor(db,key) {this.db=db;this.key=key;this.blocked=false;this.lastPrune=0;}
+  constructor(db,key) {this.db=db;this.key=key;this.blocked=false;this.lastPrune=0;this.processing=Promise.resolve();}
   encrypt(value) {
     const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',this.key,iv);
     const data=Buffer.concat([cipher.update(JSON.stringify(value)),cipher.final()]);
@@ -57,23 +57,40 @@ export class NativeReceipts {
     this.prune();this.capacity();
     this.db.prepare('INSERT INTO policies(revision,payload,at) VALUES(?,?,?) ON CONFLICT(revision) DO UPDATE SET at=excluded.at').run(revision,this.encrypt(policy),Date.now());
   }
-  async apply(event,digest,action,flush) {
-    const id=event.id+':'+event.kind;
-    const prior=this.db.prepare('SELECT digest,state FROM receipts WHERE id=?').get(id);
-    if(prior) {
-      if(prior.digest!==digest)throw new Error('native_receipt_conflict');
-      if(prior.state==='done')return;
-      throw new Error('native_receipt_reconciliation_required');
-    }
-    if(this.blocked)throw new Error('native_receipt_reconciliation_required');
-    const at=event.receiptAt ?? Date.now();
-    if(!Number.isSafeInteger(at)||at<Date.now()-MAX_AGE||at>Date.now()+60000)throw new Error('native_receipt_expired');
-    this.prune();this.capacity();
-    this.db.prepare('INSERT INTO receipts(id,digest,state,at,payload) VALUES(?,?,?,?,?)').run(id,digest,'started',at,this.encrypt(event));
-    try {
-      await action();await flush();
-      this.db.prepare("UPDATE receipts SET state='done',payload=NULL WHERE id=?").run(id);
-    }catch(error){this.blocked=true;throw error;}
+  alreadyDone(event,digest) {
+    const prior=this.db.prepare('SELECT digest,state FROM receipts WHERE id=?').get(event.id+':'+event.kind);
+    if(prior && prior.digest!==digest)throw new Error('native_receipt_conflict');
+    return prior?.state==='done';
+  }
+  apply(event,digest,action,flush) {return this.applyMany([{event,digest,action}],flush);}
+  applyMany(entries,flush) {
+    const task=this.processing.catch(()=>{}).then(async()=>{
+      const fresh=[],seen=new Map();
+      for(const item of entries) {
+        const {event,digest}=item,id=event.id+':'+event.kind;
+        if(seen.has(id)){if(seen.get(id)!==digest)throw new Error('native_receipt_conflict');continue;}
+        seen.set(id,digest);
+        const prior=this.db.prepare('SELECT digest,state FROM receipts WHERE id=?').get(id);
+        if(prior){if(prior.digest!==digest)throw new Error('native_receipt_conflict');if(prior.state==='done')continue;throw new Error('native_receipt_reconciliation_required');}
+        if(this.blocked)throw new Error('native_receipt_reconciliation_required');
+        const at=event.receiptAt??Date.now();
+        if(!Number.isSafeInteger(at)||at<Date.now()-MAX_AGE||at>Date.now()+60000)throw new Error('native_receipt_expired');
+        fresh.push({...item,id,at});
+      }
+      if(!fresh.length)return;
+      this.prune();this.capacity();
+      this.db.exec('BEGIN IMMEDIATE');
+      try{for(const item of fresh)this.db.prepare('INSERT INTO receipts(id,digest,state,at,payload) VALUES(?,?,?,?,?)').run(item.id,item.digest,'started',item.at,this.encrypt(item.event));this.db.exec('COMMIT');}
+      catch(error){this.db.exec('ROLLBACK');throw error;}
+      try{
+        for(const item of fresh)await item.action();
+        await flush();
+        this.db.exec('BEGIN IMMEDIATE');
+        try{for(const item of fresh)this.db.prepare("UPDATE receipts SET state='done',payload=NULL WHERE id=?").run(item.id);this.db.exec('COMMIT');}
+        catch(error){this.db.exec('ROLLBACK');throw error;}
+      }catch(error){this.blocked=true;throw error;}
+    });
+    this.processing=task;return task;
   }
   status() {
     const pending=this.db.prepare("SELECT id,at FROM receipts WHERE state='started' ORDER BY at LIMIT 20").all();
