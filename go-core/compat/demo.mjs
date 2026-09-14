@@ -34,6 +34,7 @@ async function start(command, args) {
 }
 const observed = [];
 let doneWritten = false;
+const finishStream = Promise.withResolvers();
 const mock = createServer(async (req, res) => {
   try {
     assert.equal(req.url, '/v1/chat/completions');
@@ -45,8 +46,8 @@ const mock = createServer(async (req, res) => {
     if (body.stream) {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '2' } }] })}\n\n`);
-      const timer = setTimeout(() => { doneWritten = true; res.end('data: [DONE]\n\n'); }, 150);
-      res.on('close', () => clearTimeout(timer));
+      await finishStream.promise;
+      doneWritten = true; res.end('data: [DONE]\n\n');
     } else {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ model: body.model, choices: [{ message: { role: 'assistant', content: '2' } }] }));
@@ -74,12 +75,14 @@ try {
   const plain = await fetch(base+'/v1/chat/completions', { method: 'POST', headers, body: JSON.stringify(body) });
   assert.equal(plain.status, 200); const answer = await plain.json();
   assert.equal(answer.model, expected); assert.equal(answer.choices[0].message.content, '2');
-  const stream = await fetch(base+'/v1/chat/completions', { method: 'POST', headers, body: JSON.stringify({ ...body, stream: true }) });
+  const stream = await fetch(base+'/v1/chat/completions', { method: 'POST', signal: AbortSignal.timeout(10000), headers, body: JSON.stringify({ ...body, stream: true }) });
   assert.equal(stream.status, 200);
   const reader = stream.body.getReader();
   const first = await reader.read();
   assert.equal(doneWritten, false, 'SSE was buffered until completion');
   let text = new TextDecoder().decode(first.value);
+  assert.ok(text.includes('\"content\":\"2\"'), 'first event did not contain answer data');
+  finishStream.resolve();
   for (;;) { const next = await reader.read(); if (next.done) break; text += new TextDecoder().decode(next.value); }
   assert.ok(text.includes('"content":"2"') && text.includes('data: [DONE]'));
   const unauthenticated = await fetch(base+'/v1/chat/completions', { method: 'POST', body: JSON.stringify(body) });
@@ -96,6 +99,7 @@ try {
   mkdirSync(dirname(output), { recursive: true }); writeFileSync(output, JSON.stringify(report, null, 2)+'\n');
   console.log(JSON.stringify(report));
 } finally {
+  finishStream.resolve();
   for (const child of children.reverse()) {
     if (child.exitCode !== null || child.signalCode !== null) continue;
     await new Promise(resolveExit => { const timer = setTimeout(resolveExit, 3000); child.once('exit', () => { clearTimeout(timer); resolveExit(); }); child.kill(); });
