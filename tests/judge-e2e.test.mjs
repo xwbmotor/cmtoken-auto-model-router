@@ -10,6 +10,7 @@ import { readFile, mkdtemp, writeFile, readdir, rm, stat } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import net from 'node:net';
 import http from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -143,6 +144,15 @@ async function setupCase({ judgeOver, judgeBehavior = 'good' }) {
   return { workDir, upstream, seen, child, port };
 }
 
+async function cleanupCase(child, upstream, workDir) {
+  if (child.exitCode === null && child.signalCode === null) {
+    const exited = once(child, 'close'); child.kill(); await exited;
+  }
+  upstream.closeAllConnections();
+  await new Promise(resolve => upstream.close(resolve));
+  await rm(workDir, { recursive: true, force: true });
+}
+
 test('e2e judge 100% 抽样：quality+taskCheck 事件落盘、指纹脱敏、judge 上游被调', async () => {
   const { workDir, upstream, seen, child, port } = await setupCase({ judgeOver: { enabled: true, samplePercent: 100, model: 'judge-model-x', taskCheckEnabled: true } });
   try {
@@ -171,7 +181,7 @@ test('e2e judge 100% 抽样：quality+taskCheck 事件落盘、指纹脱敏、ju
     assert.ok(judgeCall.body.includes('这是流式业务回答内容'), 'judge 输入应含 SSE delta.content 拼接的纯正文');
     assert.ok(!judgeCall.body.includes('[DONE]'), 'judge 输入不得含 [DONE] 协议行');
     assert.ok(!judgeCall.body.includes('completion_tokens'), 'judge 输入不得含 usage 信封字段');
-  } finally { child.kill(); upstream.close(); await rm(workDir, { recursive: true, force: true }); }
+  } finally { await cleanupCase(child, upstream, workDir); }
 });
 
 test('e2e samplePercent=0：零事件、零 judge 上游调用（业务回答照常）', async () => {
@@ -183,7 +193,7 @@ test('e2e samplePercent=0：零事件、零 judge 上游调用（业务回答照
     const events = await readJudgeEvents(workDir);
     assert.equal(events.length, 0, '0% 抽样不得有任何 judge 事件');
     assert.ok(!seen.some((s) => s.body.includes(JUDGE_MARK)), '0% 不得调 judge 上游');
-  } finally { child.kill(); upstream.close(); await rm(workDir, { recursive: true, force: true }); }
+  } finally { await cleanupCase(child, upstream, workDir); }
 });
 
 test('e2e judge 上游 500：error 事件落盘、主请求 200、无进程异常', async () => {
@@ -196,7 +206,7 @@ test('e2e judge 上游 500：error 事件落盘、主请求 200、无进程异�
     assert.ok(err, '应有 error 事件');
     assert.equal(err.stage, 'quality');
     assert.match(err.error, /500/);
-  } finally { child.kill(); upstream.close(); await rm(workDir, { recursive: true, force: true }); }
+  } finally { await cleanupCase(child, upstream, workDir); }
 });
 
 test('e2e judge disabled：开关关闭零事件、零 judge 调用', async () => {
@@ -207,7 +217,7 @@ test('e2e judge disabled：开关关闭零事件、零 judge 调用', async () =
     const events = await readJudgeEvents(workDir);
     assert.equal(events.length, 0, 'disabled 时不得有任何 judge 事件');
     assert.ok(!seen.some((s) => s.body.includes(JUDGE_MARK)), 'disabled 不得调 judge 上游');
-  } finally { child.kill(); upstream.close(); await rm(workDir, { recursive: true, force: true }); }
+  } finally { await cleanupCase(child, upstream, workDir); }
 });
 
 // 十三审 P2：①项目 data/judge-guard-state.json 全程未被动（guardStatePath 已指 workDir）
