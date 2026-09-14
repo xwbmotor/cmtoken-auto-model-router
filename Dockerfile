@@ -1,4 +1,4 @@
-# 零依赖 Node 服务：无需 npm install，单阶段即可；slim(glibc) 对企业内网 DNS 兼容性最好
+# Node 管理服务使用标准库，无需执行 npm install。
 FROM node:24-slim
 
 # OCI label 绑定源码 commit——云端可 docker inspect 验证「运行镜像确实对应
