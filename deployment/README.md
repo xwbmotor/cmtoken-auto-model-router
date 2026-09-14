@@ -1,5 +1,7 @@
 # 空机安装
 
+> 已有 Docker、不能安装 Python 的内网服务器，请使用 [Shell 离线安装包](offline/README.md)。下文保留 Python 安装工具的操作方法。
+
 这套工具用于在一台新的 Linux 服务器上安装 Auto Model Router，不需要先运行 Node 版本。它使用已经验收的 v0.14.8 三个镜像；安装工具单独交付，不会更改现有生产服务。
 
 适用环境：Linux x86_64、Python 3.9+、Docker Engine 和 Compose v2。当前镜像是 `linux/amd64`，不适用于 ARM 服务器。服务器须能访问自己的 HTTPS MaaS 上游；应用和三个镜像可离线传入，目标机不需要 Git、Node、Go 或 pip 安装依赖。

@@ -40,7 +40,7 @@ Node 需写入配置和数据，Go 的状态挂载目录需由 UID 1000 写入�
 
 ## 新安装与首次 Node 迁移
 
-空服务器使用 [空机安装说明](../deployment/README.md)。独立交付包包含三个已验证镜像、配置模板和安装工具；部署同事导入镜像、填写自己的模型参数，再执行 `install.py init` 和 `install.py start`。初始化不依赖已有 Node 服务，自动生成内部凭证、Go 快照和数据目录，并拒绝覆盖已有路径。
+空服务器使用 [空机安装说明](../deployment/offline/README.md)。独立交付包包含三个已验证镜像、配置模板和安装工具；同中台交付包已预置核对过的业务配置，部署同事导入镜像后执行 `bash install.sh init` 和 `bash install.sh start`，宿主机无需安装 Python 或 Node。初始化不依赖已有 Node 服务，自动生成内部凭证、Go 快照和数据目录，并拒绝覆盖已有路径。
 
 空机工具生成的是 `compose.json`，支持自定义安装目录、项目名和监听端口。下面的日常运维命令以既有 `/opt/amr/docker-compose.prod.yml` 部署为例；新安装优先使用安装工具的 `start`、`check`、`stop`，手工操作时采用 `installation.json` 中记录的项目名和实际文件。
 
