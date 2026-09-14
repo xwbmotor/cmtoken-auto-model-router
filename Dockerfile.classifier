@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # sklearn/joblib/numpy/scipy：v0.10.5 起按 requirements-classifier.lock 精确锁定安装
-# （十九审：Dockerfile 此前未用锁文件，重建会重新解析版本、ABI 组合不可复现）
+# 固定依赖版本，避免重建时改变版本和 ABI 组合。
 COPY --chown=nobody:nogroup requirements-classifier.lock ./requirements-classifier.lock
 RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     -r requirements-classifier.lock

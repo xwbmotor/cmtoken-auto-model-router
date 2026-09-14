@@ -1,4 +1,4 @@
-"""Build the customer-specific offline archive on the packaging machine only."""
+"""Build a standard or configured installation archive on the packaging machine."""
 import argparse
 import hashlib
 import json
@@ -7,6 +7,7 @@ import shutil
 import tarfile
 import zipfile
 import sys
+import subprocess
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from install import manifest, sha
 REPO=Path(__file__).resolve().parents[2]
@@ -15,11 +16,24 @@ REPO=Path(__file__).resolve().parents[2]
 def build(images, config, provenance, out):
     release=manifest(REPO/'deployment/release.json')
     if out.exists() or out.with_name(out.name+'.tar.gz').exists():raise ValueError('Output already exists')
-    if sha(images)!=release['sourceArchiveSha256']:raise ValueError('Formal image archive differs')
+    if images.is_dir():
+        for item in release['images'].values():
+            image = images/item['archive']
+            if not image.is_file() or image.is_symlink() or sha(image)!=item['sha256']:
+                raise ValueError('Formal image archive differs')
+    elif sha(images)!=release['sourceArchiveSha256']:
+        raise ValueError('Formal image archive differs')
     cfg=json.loads(config.read_text(encoding='utf-8-sig'))
-    proof=json.loads(provenance.read_text(encoding='utf-8-sig'))
-    if sha(config)!=proof['sha256'] or proof.get('source')!='running-admin-api' or proof.get('goSynchronized') is not True:
-        raise ValueError('Effective configuration proof required')
+    if provenance:
+        proof=json.loads(provenance.read_text(encoding='utf-8-sig'))
+        if sha(config)!=proof['sha256'] or proof.get('source')!='running-admin-api' or proof.get('goSynchronized') is not True:
+            raise ValueError('Effective configuration proof mismatch')
+    else:
+        proof={'source':'repository-config' if config.resolve()==(REPO/'config/router.json').resolve() else 'supplied-config',
+               'sha256':sha(config),'runtimeVerified':False}
+    proof['installerCommit']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip()
+    if cfg.get('budget',{}).get('enabled') is not False:
+        raise ValueError('budget.enabled must be false for this release')
     def check(v):
         import re
         if isinstance(v,dict):
@@ -30,17 +44,21 @@ def build(images, config, provenance, out):
             for x in v:check(x)
     check(cfg)
     out.mkdir(parents=True);(out/'images').mkdir()
-    with zipfile.ZipFile(images) as z:
-        for item in release['images'].values():
-            target=out/'images'/item['archive']
-            with z.open(item['archive']) as src,target.open('wb') as dst:shutil.copyfileobj(src,dst)
-            if sha(target)!=item['sha256']:raise ValueError('Image checksum mismatch')
+    if images.is_dir():
+        for item in release['images'].values():shutil.copyfile(images/item['archive'],out/'images'/item['archive'])
+    else:
+        with zipfile.ZipFile(images) as z:
+            for item in release['images'].values():
+                target=out/'images'/item['archive']
+                with z.open(item['archive']) as src,target.open('wb') as dst:shutil.copyfileobj(src,dst)
+                if sha(target)!=item['sha256']:raise ValueError('Image checksum mismatch')
     for name in ['install.sh','worker.mjs','compose.template.json','README.md']:
         # Linux scripts must retain LF even when packaged from a Windows checkout.
         text=(REPO/'deployment/offline'/name).read_text(encoding='utf-8-sig')
         (out/name).write_bytes(text.encode('utf-8'))
     shutil.copyfile(REPO/'deployment/release.json',out/'release.json')
-    shutil.copyfile(config,out/'router.json');shutil.copyfile(provenance,out/'config-provenance.json')
+    shutil.copyfile(config,out/'router.json')
+    (out/'config-provenance.json').write_text(json.dumps(proof,indent=2)+'\n',encoding='utf-8')
     files=sorted(p for p in out.rglob('*') if p.is_file())
     (out/'SHA256SUMS').write_text(''.join(sha(p)+'  '+p.relative_to(out).as_posix()+'\n' for p in files),encoding='utf-8')
     archive=out.with_name(out.name+'.tar.gz')
@@ -56,5 +74,8 @@ def build(images, config, provenance, out):
 
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
-    for name in ['images','config','provenance','out']:p.add_argument('--'+name,type=Path,required=True)
+    p.add_argument('--images',type=Path,required=True,help='Verified release ZIP or extracted image directory')
+    p.add_argument('--config',type=Path,default=REPO/'config/router.json')
+    p.add_argument('--provenance',type=Path,help='Optional effective-config export proof')
+    p.add_argument('--out',type=Path,required=True)
     a=p.parse_args();build(a.images,a.config,a.provenance,a.out)

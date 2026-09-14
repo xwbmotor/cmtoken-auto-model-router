@@ -4,9 +4,25 @@ Auto Model Router 是放在应用与 MaaS 平台之间的模型路由服务。�
 
 客户端使用 OpenAI Chat Completions 接口，模型名填 `cmtoken-auto`，也可以省略 `model`。入口名称由 `routing.autoModelId` 配置；若部署方修改了名称，以该部署的 `/v1/models` 为准。
 
-## 当前版本
+## 安装
 
-2026 年 9 月 11 日完成了 **v0.14.8 的 Go 生产入口切换**，代码已合并到默认分支 `master`。[验收记录](docs/go-core-production-v0.14.8.md)包含正式测试、真实请求、重启和回滚证据。这里记录的是该次验收状态，日常运行状态请查健康接口和监控。
+下载 [v0.14.8 安装包](https://github.com/xwbmotor/cmtoken-auto-model-router/releases/tag/v0.14.8)，在已有 Docker Engine 和 Compose v2 的 Linux x86_64 服务器上解压：
+
+```bash
+tar -xzf amr-offline-0.14.8.tar.gz
+cd amr-offline-0.14.8
+sha256sum -c SHA256SUMS
+sudo bash install.sh load-images
+sudo bash install.sh init --root /opt/amr
+sudo bash install.sh start --root /opt/amr
+sudo bash install.sh check --root /opt/amr
+```
+
+`/opt/amr` 必须尚不存在。默认监听 `127.0.0.1:8787`，适合通过同机反向代理访问；需要内网直连时，在初始化命令中增加 `--bind 服务器内网IP`。安装包自带运行镜像，安装过程不访问软件源。
+
+包内配置提供中台接入和模型池，部署前核对其是否适用于自己的环境。管理凭证会为新实例生成；业务使用调用方自己的中台 key。完整步骤、企业 CA、请求验收和启停方法见 [安装说明](deployment/offline/README.md)。已有服务升级见 [部署与运维](docs/Ubuntu生产部署.md)。
+
+## 服务组成
 
 | 服务 | 负责什么 |
 |---|---|
@@ -26,18 +42,6 @@ Auto Model Router 是放在应用与 MaaS 平台之间的模型路由服务。�
 
 路由质量取决于模型池、评分来源和真实业务数据。仓库提供离线比较与学习工具，但尚未证明学习策略的生产收益。[评测说明](docs/evaluation-integrity.md)解释了不同测试能支持什么结论。
 
-## 本地运行
-
-本地查看管理端和开发 Node 服务可使用 Node.js 24：
-
-```bash
-npm start
-```
-
-该命令会读取存在的 `.env`，启动 `src/server.mjs`；没有指定监听地址时使用 `127.0.0.1:8787`。它不启动 Go 或 Python 分类器，不能代替生产三服务部署。凭证和上游地址参考 `.env.example`，不要将填好的 `.env` 提交到仓库。
-
-新服务器从 [空机安装](deployment/offline/README.md)开始：交付包自带三个镜像，使用 Shell 入口，宿主机无需安装 Python 或 Node。现有部署的升级和停止顺序见 [Ubuntu 部署说明](docs/Ubuntu生产部署.md)。Go 的本地构建和检查见 [Go 开发说明](go-core/README.md)。
-
 ## 接入示例
 
 以下请求会调用真实上游。`MAAS_KEY` 是调用方的 MaaS 凭证，地址替换为实际服务地址：
@@ -53,6 +57,15 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 ## 开发与测试
 
+### 开发运行
+
+```bash
+npm start
+```
+
+Node.js 24 可直接启动管理服务，读取存在的 `.env`，默认监听 `127.0.0.1:8787`。此命令供本地开发，不会启动完整的 Go 和分类器部署。环境变量参考 `.env.example`，Go 检查见 [Go 开发说明](go-core/README.md)。
+
+
 ```bash
 npm test
 npm run eval:matrix -- --input data/business-matrix.json --out data/business-matrix-report.json
@@ -62,6 +75,7 @@ npm run eval:matrix -- --input data/business-matrix.json --out data/business-mat
 
 | 目录 | 内容 |
 |---|---|
+| `deployment/` | 安装脚本、交付配置、打包工具和安装验收 |
 | `go-core/` | Go 请求服务、兼容性测试、容量实验和部署工具 |
 | `src/` | Node 管理服务、配置、记录、评审和保留的 Node 请求实现 |
 | `public/` | 管理端页面与脚本 |
@@ -75,5 +89,5 @@ npm run eval:matrix -- --input data/business-matrix.json --out data/business-mat
 - [使用说明](docs/使用说明.md)：接入和日常使用。
 - [MaaS 平台集成](docs/MaaS平台集成部署运营手册.md)：平台分流、凭证和运营。
 - [部署说明](docs/Ubuntu生产部署.md) · [反向代理](docs/反代集成.md)：生产运行。
-- [路由设计](docs/路由设计说明.md) · [开发交接](docs/智能体交接说明.md)：实现与维护。
+- [路由设计](docs/路由设计说明.md) · [开发交接](docs/开发指南.md)：实现与维护。
 - [版本记录](CHANGELOG.md)：各版本的变化及影响。

@@ -38,3 +38,7 @@ data/go-migration/
 data/installation/
 data/fresh-*/
 data/doc-refresh/
+
+# Installation delivery artifacts
+data/distribution/
+data/offline-*/

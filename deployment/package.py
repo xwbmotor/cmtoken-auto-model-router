@@ -23,8 +23,9 @@ def package(source, output):
             target=output/'images'/item['archive']
             with archive.open(item['archive']) as src, target.open('wb') as dst: shutil.copyfileobj(src,dst)
             if sha(target)!=item['sha256']: raise ValueError('Image archive hash mismatch')
-    for name in ['install.py','verify.py','release.json','router.example.json','README.md']:
+    for name in ['install.py','verify.py','release.json','router.example.json']:
         shutil.copyfile(REPO/'deployment'/name,output/name)
+    shutil.copyfile(REPO/'deployment/python-install.md',output/'README.md')
     shutil.copyfile(REPO/'go-core/deployment/native_compose.py',output/'native_compose.py')
     (output/'SHA256SUMS').write_text(''.join(sha(p)+'  '+p.relative_to(output).as_posix()+'\n' for p in sorted(output.rglob('*')) if p.is_file()),encoding='utf-8')
     with zipfile.ZipFile(zipped,'x',compression=zipfile.ZIP_STORED) as archive:

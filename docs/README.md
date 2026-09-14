@@ -13,7 +13,7 @@
 
 ## 开发和实现
 
-- [开发交接](智能体交接说明.md)：代码入口、维护约束和测试注意事项。
+- [开发指南](开发指南.md)：代码入口、维护约束和测试注意事项。
 - [路由设计](路由设计说明.md) · [执行约束](router-foundations.md) · [负载与评分](model-load-and-scoring.md)。
 - [Go 开发说明](../go-core/README.md)：构建、兼容验证和实验模式。
 - [时延观测](latency-observability.md) · [运行证据](operations-evidence.md)。

@@ -1,6 +1,6 @@
 # Auto Model Router 安装说明
 
-本文说明如何安装、启动和检查 Auto Model Router v0.14.8。安装包已包含三个服务镜像、中台地址和模型配置。
+本文说明如何安装、启动和检查 Auto Model Router v0.14.8。安装包包含三个服务镜像、安装脚本和业务配置。标准包可从 [GitHub 发布页](https://github.com/xwbmotor/cmtoken-auto-model-router/releases/tag/v0.14.8)下载。
 
 ## 环境要求
 
@@ -8,15 +8,15 @@
 - 可使用 Bash、tar、gzip、sha256sum 等常规系统命令。
 - 服务器能够访问配置中的中台地址，部署人员具有 sudo 权限。
 
-本次目标系统为 BigCloud Enterprise Linux For Euler 22.10U2 LTS，已确认提供的 Docker 27.5.1 和 Compose 2.33.0 满足工具要求。安装后按本文完成服务和业务请求检查。
+BigCloud Enterprise Linux For Euler 22.10U2 LTS 的 x86_64 环境可按本指南检查。已验证范围和目标机需要完成的检查见文末验收记录。
 
 ## 包里有什么
 
 - 三个 v0.14.8 正式镜像：Go 请求服务、Node 管理服务、Python 分类器。
 - `install.sh`：导入、初始化、启停、检查和请求验收入口。
 - `worker.mjs`、`compose.template.json`、`release.json`：镜像内初始化逻辑及发布信息。
-- `router.json`：交付时从现网实际生效配置导出并排除凭证的中台地址、模型池、价格、能力和业务策略，无需再填写占位模型。
-- `config-provenance.json`：导出时间、配置校验值和 Go 同步核对结果。
+- `router.json`：中台地址、模型池、价格、能力和业务策略。标准包使用仓库配置；定制包可以使用经过核对的环境配置，部署前确认适用范围。
+- `config-provenance.json`：配置来源与校验值；使用现网导出时另记录导出时间和 Go 同步结果。
 - `SHA256SUMS`：包内文件校验值。
 
 本包不携带现网管理 key、Judge 独立凭证、业务日志或费用台账。初始化会生成新的管理、指标和内部凭证。Judge 的开关与其他业务策略保留，但独立评审凭证要由新环境管理员另行配置；业务调用使用对方自己的中台 key。
@@ -108,4 +108,4 @@ sudo docker compose -p amr -f /opt/amr/compose.json logs --tail 100
 
 2026 年 9 月 14 日的 [隔离安装验收](https://github.com/xwbmotor/cmtoken-auto-model-router/actions/runs/34814816190)已通过。测试从宿主机 PATH 移除了 Python 和 Node，使用本包 Shell 入口加载三个正式镜像；初始化容器禁用网络，完成普通/SSE 共 4 次业务请求、重复安装拒绝、错误输入清理和重启后的凭证与费用保留。测试使用模拟 HTTPS 中台，不能替代对方真实网络和 key 的验收。
 
-本次交付配置另经实际生效 API 与 Go 同步核对，并通过初始化和快照生成检查。初始化只调整本机分类器的内部地址，不改中台地址、模型参数或业务策略。导出时点见包内 `config-provenance.json`。
+配置来源见包内 `config-provenance.json`。`repository-config` 表示仓库配置，`supplied-config` 表示交付方指定的配置，`running-admin-api` 表示经过运行状态核对的导出。初始化只调整本机分类器的内部地址，保留业务策略；来源记录不代替目标环境验收。
