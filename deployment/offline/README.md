@@ -23,11 +23,11 @@ BigCloud Enterprise Linux For Euler 22.10U2 LTS 的 x86_64 环境可按本指南
 
 ## 1. 上传和解压
 
-将 `amr-offline-0.14.8.tar.gz` 上传到服务器，然后解压并检查包内文件：
+将 `amr-offline-0.14.9.tar.gz` 上传到服务器，然后解压并检查包内文件：
 
 ```bash
-tar -xzf amr-offline-0.14.8.tar.gz
-cd amr-offline-0.14.8
+tar -xzf amr-offline-0.14.9.tar.gz
+cd amr-offline-0.14.9
 sha256sum -c SHA256SUMS
 ```
 
@@ -88,6 +88,8 @@ sudo bash install.sh verify --root /opt/amr --key-file /root/maas.key
 通过后给业务方的接入参数是：Base URL 为实际服务地址加 `/v1`，模型为 `cmtoken-auto`，API key 为业务方自己的中台 key。
 
 ## 日常启停与排障
+
+结果回传与评测任务的恢复方法见 [恢复说明](reliable-delivery.md)。
 
 ```bash
 sudo bash install.sh stop --root /opt/amr

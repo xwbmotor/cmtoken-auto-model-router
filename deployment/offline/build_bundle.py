@@ -59,6 +59,7 @@ def build(images, config, provenance, out):
             import re
             text=re.sub(r'amr-offline-\d+\.\d+\.\d+', 'amr-offline-'+release['version'],text)
         (out/name).write_bytes(text.encode('utf-8'))
+    shutil.copyfile(REPO/'docs/reliable-delivery.md',out/'reliable-delivery.md')
     shutil.copyfile(REPO/'deployment/release.json',out/'release.json')
     (out/'release-id.txt').write_bytes((release['version']+' '+release['revision']+'\n').encode())
     (out/'image-ids.txt').write_bytes(''.join(name+' '+identity+'\n' for name,item in release['images'].items() for identity in item['ids']).encode())
