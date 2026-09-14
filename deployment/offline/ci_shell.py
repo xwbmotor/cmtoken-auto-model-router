@@ -26,6 +26,9 @@ def main():
     for name in ['install.sh','worker.mjs','compose.template.json']:
         shutil.copyfile(REPO/'deployment/offline'/name,bundle/name)
     shutil.copyfile(REPO/'deployment/release.json',bundle/'release.json')
+    release=json.loads((bundle/'release.json').read_text())
+    (bundle/'release-id.txt').write_bytes((release['version']+' '+release['revision']+'\n').encode())
+    (bundle/'image-ids.txt').write_bytes(''.join(name+' '+identity+'\n' for name,item in release['images'].items() for identity in item['ids']).encode())
     shutil.copytree(REPO/'data/fresh-bundle/images',bundle/'images')
     cfg=json.loads((REPO/'deployment/router.example.json').read_text(encoding='utf-8'))
     cfg=json.loads(json.dumps(cfg).replace('replace-with-your-model','fixture-model'))
@@ -65,7 +68,7 @@ def main():
         call(['docker','run','-d','--name','amr-offline-provider','--network','amr-offline-ci_default',
               '--mount','type=bind,src='+str(fixture)+',dst=/app/config,readonly',
               '--mount','type=bind,src='+str(REPO/'go-core/deployment/native_mock.mjs')+',dst=/mock.mjs,readonly',
-              '--entrypoint','node','cmt-auto-model-router:0.14.8','/mock.mjs'])
+              '--entrypoint','node','cmt-auto-model-router:'+release['version'],'/mock.mjs'])
         checks=[]
         for _ in range(2):
             call(shell+['start',*args],env)
@@ -77,7 +80,7 @@ def main():
         ledger=json.loads((root/'data/budget-ledger.json').read_text())
         assert ledger['settles']==4 and abs(ledger['settledActualSpendYuan']-.00096)<1e-8
         result={'passed':True,'installer':'offline-shell','hostPythonAbsent':True,'hostNodeAbsent':True,
-            'bootstrapNetwork':'none','images':'verified-v0.14.8','threeServicesHealthy':True,
+            'bootstrapNetwork':'none','images':'verified-v'+release['version'],'threeServicesHealthy':True,
             'syntheticUpstream':True,'invalidInputCleaned':True,'existingDirectoryRefused':True,
             'credentialsPreserved':True,'pricedSettlements':4,'checks':checks}
         (evidence/'offline-shell-result.json').write_text(json.dumps(result,indent=2))

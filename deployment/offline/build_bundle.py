@@ -55,12 +55,17 @@ def build(images, config, provenance, out):
     for name in ['install.sh','worker.mjs','compose.template.json','README.md']:
         # Linux scripts must retain LF even when packaged from a Windows checkout.
         text=(REPO/'deployment/offline'/name).read_text(encoding='utf-8-sig')
+        if name=='README.md':
+            import re
+            text=re.sub(r'amr-offline-\d+\.\d+\.\d+', 'amr-offline-'+release['version'],text)
         (out/name).write_bytes(text.encode('utf-8'))
     shutil.copyfile(REPO/'deployment/release.json',out/'release.json')
+    (out/'release-id.txt').write_bytes((release['version']+' '+release['revision']+'\n').encode())
+    (out/'image-ids.txt').write_bytes(''.join(name+' '+identity+'\n' for name,item in release['images'].items() for identity in item['ids']).encode())
     shutil.copyfile(config,out/'router.json')
     (out/'config-provenance.json').write_text(json.dumps(proof,indent=2)+'\n',encoding='utf-8')
     files=sorted(p for p in out.rglob('*') if p.is_file())
-    (out/'SHA256SUMS').write_text(''.join(sha(p)+'  '+p.relative_to(out).as_posix()+'\n' for p in files),encoding='utf-8')
+    (out/'SHA256SUMS').write_bytes(''.join(sha(p)+'  '+p.relative_to(out).as_posix()+'\n' for p in files).encode())
     archive=out.with_name(out.name+'.tar.gz')
     with tarfile.open(archive,'w:gz',compresslevel=1) as t:
         for p in files+[out/'SHA256SUMS']:

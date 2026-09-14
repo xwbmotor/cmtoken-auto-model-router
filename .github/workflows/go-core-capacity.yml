@@ -6,6 +6,7 @@ on:
     paths:
       - 'go-core/compat/capacity-*.mjs'
       - 'go-core/compat/compare-capacity.mjs'
+      - 'go-core/compat/check-capacity.mjs'
       - '.github/workflows/go-core-capacity.yml'
   workflow_dispatch:
     inputs:
@@ -84,6 +85,7 @@ jobs:
               node go-core/compat/compare-capacity.mjs --native-front --node-cost-observation --feature-mode snapshot --budget-mode observation --binary data/go-migration/amr-core-linux --seconds 10 --rounds 3 --rates 100,300 --stream-seconds 60 --streams 32 --cpus 2 --memory-mib 512 --out "$result.json"
               node go-core/compat/summarize-capacity.mjs "$result.json" "$result.md"
             done
+            node go-core/compat/check-capacity.mjs data/go-migration/capacity-native-front-node-cost-1.json data/go-migration/capacity-native-front-node-cost-2.json
           elif [ "$PROFILE" = "native-front-standard" ]; then
             for phase in 1 2; do
               result="data/go-migration/capacity-native-front-$phase"

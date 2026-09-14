@@ -22,25 +22,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release download v0.14.8 --pattern release-images-v0.14.8.zip --dir data/fresh-release; then
+          version=$(python3 -c "import json;print(json.load(open('deployment/release.json'))['version'])")
+          source_run=$(python3 -c "import json;print(json.load(open('deployment/release.json')).get('sourceRunId',34614987601))")
+          if gh release download "v$version" --pattern "release-images-v$version.zip" --dir data/fresh-release; then
             python3 - <<'PY'
           import hashlib, json, pathlib, zipfile
-          p = pathlib.Path('data/fresh-release/release-images-v0.14.8.zip')
-          expected = json.loads(pathlib.Path('deployment/release.json').read_text())['sourceArchiveSha256']
+          release = json.loads(pathlib.Path('deployment/release.json').read_text())
+          p = pathlib.Path('data/fresh-release/release-images-v'+release['version']+'.zip')
+          expected = release['sourceArchiveSha256']
           with p.open('rb') as f:
               assert hashlib.file_digest(f, 'sha256').hexdigest() == expected
           with zipfile.ZipFile(p) as z:
               z.extractall('data/fresh-bundle/images')
           PY
           else
-            gh run download 34614987601 --name release-images --dir data/fresh-bundle/images
+            gh run download "$source_run" --name release-images --dir data/fresh-bundle/images
           fi
       - name: Install with no host Python or Node, then verify JSON, SSE and restart
         run: sudo -E python3 deployment/offline/ci_shell.py
       - name: Build the standard installation archive
         run: |
           node --input-type=module -e "import {readFileSync} from 'node:fs'; import {validateConfig} from './src/config.mjs'; validateConfig(JSON.parse(readFileSync('config/router.json','utf8')));"
-          python3 deployment/offline/build_bundle.py --images data/fresh-bundle/images --out data/distribution/amr-offline-0.14.8
+          version=$(python3 -c "import json;print(json.load(open('deployment/release.json'))['version'])")
+          python3 deployment/offline/build_bundle.py --images data/fresh-bundle/images --out "data/distribution/amr-offline-$version"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: amr-installation

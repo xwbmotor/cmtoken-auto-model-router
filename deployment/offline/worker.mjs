@@ -54,8 +54,9 @@ async function prepare() {
   compose.name = project;
   const node = compose.services['auto-model-router'], go = compose.services['go-core'];
   for (const [role, svc] of Object.entries(compose.services)) {
+    svc.image = ({'auto-model-router':'cmt-auto-model-router','go-core':'cmt-amr-go','classifier':'cmt-amr-classifier'}[role]) + ':' + release.version;
     svc.container_name = project + '-' + ({'auto-model-router':'node','go-core':'go','classifier':'classifier'}[role]);
-    for (const mount of svc.volumes || []) mount.source = root + mount.source.slice('/opt/amr'.length);
+    for (const mount of svc.volumes || []) mount.source = mount.target === '/state' ? root + '/data/go-native-' + release.version : root + mount.source.slice('/opt/amr'.length);
   }
   Object.assign(node.environment, {ADMIN_TOKEN:t.admin, METRICS_TOKEN:t.metrics, SEMANTIC_BUCKET_SECRET:t.bucket,
     AMR_GO_EDGE_TOKEN:t.edge, AMR_GO_ADMIN_TOKEN:t.goAdmin, MAAS_BASE_URL:cfg.upstreamBaseUrl});

@@ -10,9 +10,9 @@ port=8787
 config="$bundle/router.json"
 ca=''
 key=''
-version=0.14.8
-revision=90e6e4eb71ff5e323a39caa87e52e1829e77f332
-node_image="cmt-auto-model-router:$version"
+version=''
+revision=''
+node_image=''
 stage=''
 inspection=''
 fail() { printf '%s\n' "$*" >&2; exit 1; }
@@ -39,6 +39,10 @@ while [[ $# -gt 0 ]]; do
 done
 if [[ "$action" == help || "$action" == --help ]]; then usage; exit 0; fi
 case "$action" in load-images|init|start|check|stop|verify) ;; *) usage; exit 1;; esac
+[[ -r "$bundle/release-id.txt" && -r "$bundle/image-ids.txt" ]] || fail '缺少发布信息，请使用完整安装包。'
+read -r version revision < "$bundle/release-id.txt"
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$revision" =~ ^[a-f0-9]{40}$ ]] || fail '发布信息无效。'
+node_image="cmt-auto-model-router:$version"
 [[ $(id -u) == 0 ]] || fail '请在 Linux 宿主机上通过 sudo 运行。'
 [[ $(uname -m) == x86_64 ]] || fail '本包仅支持 Linux x86_64。'
 command -v docker >/dev/null || fail '需要已安装 Docker Engine。'
@@ -48,15 +52,11 @@ case $(docker compose version --short) in v[2-9].*|[2-9].*) ;; *) fail '需要 D
 check_image() {
   local name=$1 id label platform
   id=$(docker image inspect "$name:$version" --format '{{.Id}}') || return 1
-  case "$name:$id" in
-    cmt-auto-model-router:sha256:f8f2c0d01b1d68feac6ed194e09c0bee769690de36d5b4d0ad874fb4bc4b393d|\
-    cmt-auto-model-router:sha256:0571f87f9eaea31764768db0631c60de5656744731405fe0532bd3f46c63985a|\
-    cmt-amr-classifier:sha256:df2b34e21b3a4868f1fca6754b9c80b1300300e0ca5b0cee26dc4b72ab4f1116|\
-    cmt-amr-classifier:sha256:760fd4263502f6de69cd1f1cd6fd2bbd2a6645a831dc550af74b598dda8592b5|\
-    cmt-amr-go:sha256:fbb0fa8c72796c8b1ec66fc57fc3d15ba40c1279b23e30b8afbfc38ee6677dcb|\
-    cmt-amr-go:sha256:564b1906fc7bb69749ac1c6cb9aff97f2e3d23fda179211204cf11bbe5c62bb2) ;;
-    *) fail "镜像 ID 不符合发布记录：$name";;
-  esac
+  local allowed=false candidate candidate_id
+  while read -r candidate candidate_id; do
+    if [[ "$candidate" == "$name" && "$candidate_id" == "$id" ]]; then allowed=true; break; fi
+  done < "$bundle/image-ids.txt"
+  [[ "$allowed" == true ]] || fail "镜像 ID 不符合发布记录：$name"
   label=$(docker image inspect "$name:$version" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
   platform=$(docker image inspect "$name:$version" --format '{{.Os}}/{{.Architecture}}')
   [[ "$label" == "$revision" && "$platform" == linux/amd64 ]] || fail "镜像提交或架构不匹配：$name"

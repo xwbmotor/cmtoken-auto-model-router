@@ -1,6 +1,6 @@
 # Auto Model Router 安装说明
 
-本文说明如何安装、启动和检查 Auto Model Router v0.14.8。安装包包含三个服务镜像、安装脚本和业务配置。标准包可从 [GitHub 发布页](https://github.com/xwbmotor/cmtoken-auto-model-router/releases/tag/v0.14.8)下载。
+本文说明如何安装、启动和检查 Auto Model Router。安装包包含三个服务镜像、安装脚本和业务配置。标准包可从 [GitHub 发布页](https://github.com/xwbmotor/cmtoken-auto-model-router/releases/latest)下载。
 
 ## 环境要求
 
@@ -12,7 +12,7 @@ BigCloud Enterprise Linux For Euler 22.10U2 LTS 的 x86_64 环境可按本指南
 
 ## 包里有什么
 
-- 三个 v0.14.8 正式镜像：Go 请求服务、Node 管理服务、Python 分类器。
+- 三个正式镜像（版本见 `release.json`）：Go 请求服务、Node 管理服务、Python 分类器。
 - `install.sh`：导入、初始化、启停、检查和请求验收入口。
 - `worker.mjs`、`compose.template.json`、`release.json`：镜像内初始化逻辑及发布信息。
 - `router.json`：中台地址、模型池、价格、能力和业务策略。标准包使用仓库配置；定制包可以使用经过核对的环境配置，部署前确认适用范围。
@@ -102,7 +102,7 @@ sudo docker compose -p amr -f /opt/amr/compose.json logs --tail 100
 
 如果安装时改了项目名或目录，替换对应值。日志可能含业务内容，仅在本地排查并按需脱敏。
 
-本工具只负责新安装及日常启停。现有实例升级应走备份、版本核验和回滚流程，不应重新执行 init。应用镜像仍为 v0.14.8，镜像内旧手册未被替换；空机操作以本文件为准。
+本工具只负责新安装及日常启停。现有实例升级应走备份、版本核验和回滚流程，不应重新执行 init。应用版本由安装包内的发布信息确定，空机操作以本文件为准。
 
 ## 验收记录
 
