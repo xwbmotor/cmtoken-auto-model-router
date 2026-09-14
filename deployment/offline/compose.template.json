@@ -1,0 +1,162 @@
+{
+  "services": {
+    "auto-model-router": {
+      "image": "cmt-auto-model-router:0.14.8",
+      "container_name": "amr-node",
+      "environment": {
+        "NODE_ENV": "production",
+        "ROUTER_KEY_MODE": "passthrough",
+        "ADMIN_TOKEN": "placeholder-admin",
+        "METRICS_TOKEN": "placeholder-metrics",
+        "MAAS_BASE_URL": "https://placeholder.invalid/v1",
+        "SEMANTIC_BUCKET_SECRET": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "SEMANTIC_CLASSIFIER_URL": "http://127.0.0.1:8788/classify",
+        "TZ": "Asia/Shanghai",
+        "HOST": "127.0.0.1",
+        "PORT": "8789",
+        "AMR_GO_NATIVE_FRONT": "1",
+        "AMR_GO_CHAT_URL": "http://127.0.0.1:8791/v1/chat/completions",
+        "AMR_GO_ADMIN_URL": "http://127.0.0.1:8791",
+        "AMR_GO_ADMIN_TOKEN": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "AMR_GO_EDGE_TOKEN": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "AMR_GO_RUNTIME_CONFIG": "/app/config/go-runtime.json"
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/opt/amr/config",
+          "target": "/app/config"
+        },
+        {
+          "type": "bind",
+          "source": "/opt/amr/data",
+          "target": "/app/data"
+        }
+      ],
+      "depends_on": {
+        "classifier": {
+          "condition": "service_healthy"
+        },
+        "go-core": {
+          "condition": "service_healthy"
+        }
+      },
+      "restart": "unless-stopped",
+      "stop_grace_period": "30s",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "20m",
+          "max-file": "3"
+        }
+      },
+      "network_mode": "service:classifier",
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8789/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      }
+    },
+    "classifier": {
+      "image": "cmt-amr-classifier:0.14.8",
+      "container_name": "amr-classifier",
+      "hostname": "classifier",
+      "restart": "unless-stopped",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "20m",
+          "max-file": "2"
+        }
+      },
+      "ports": [
+        {
+          "target": 8787,
+          "published": "8787",
+          "host_ip": "127.0.0.1",
+          "protocol": "tcp"
+        }
+      ]
+    },
+    "go-core": {
+      "image": "cmt-amr-go:0.14.8",
+      "container_name": "amr-go-core",
+      "restart": "unless-stopped",
+      "network_mode": "service:classifier",
+      "depends_on": {
+        "classifier": {
+          "condition": "service_healthy"
+        }
+      },
+      "user": "1000:1000",
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "pids_limit": 128,
+      "cpus": 2,
+      "mem_limit": "512m",
+      "stop_grace_period": "30s",
+      "environment": {
+        "AMR_GO_EDGE_URL": "http://127.0.0.1:8789/internal/v1/go-events",
+        "AMR_GO_EDGE_TOKEN": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "AMR_GO_SEMANTIC_BUCKET_SECRET": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "AMR_GO_SEMANTIC_SMALL_TOKEN": ""
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/opt/amr/config",
+          "target": "/app/config",
+          "read_only": true
+        },
+        {
+          "type": "bind",
+          "source": "/opt/amr/data/go-native-0.14.8",
+          "target": "/state"
+        }
+      ],
+      "command": [
+        "--candidate",
+        "--runtime",
+        "--native-semantics",
+        "--node-cost-observation",
+        "--runtime-config",
+        "/app/config/go-runtime.json",
+        "--auth-config",
+        "/app/config/go-auth.json",
+        "--ledger",
+        "/state/runtime.wal",
+        "--listen",
+        "127.0.0.1:8791",
+        "--public-listen",
+        "0.0.0.0:8787",
+        "--node-origin",
+        "http://127.0.0.1:8789",
+        "--upstream",
+        "https://placeholder.invalid/v1/chat/completions",
+        "--scope-url",
+        "https://placeholder.invalid/v1/models",
+        "--semantic-small",
+        "http://127.0.0.1:8788/classify",
+        "--semantic-large",
+        "https://placeholder.invalid/v1/chat/completions",
+        "--timeout",
+        "50s"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      }
+    }
+  }
+}

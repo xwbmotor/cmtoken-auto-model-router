@@ -22,8 +22,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh run download 34614987601 --name release-images --dir data/fresh-bundle/images
-      - name: Install on an empty directory and verify JSON, SSE and restart
-        run: sudo -E python3 deployment/ci_fresh_install.py
+      - name: Install with no host Python or Node, then verify JSON, SSE and restart
+        run: sudo -E python3 deployment/offline/ci_shell.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
