@@ -1,5 +1,5 @@
-# 分类器 replay/评测 依赖——精确锁定（生产构建用）
-# v0.10.5：与 Dockerfile.classifier 共用；升级依赖时同步改本文件并重跑 tests/replay 验证 ABI 组合。
+# 分类器镜像、回放与正式测试使用的精确依赖版本。
+# 升级时同步验证模型加载、推理结果和回放测试。
 scikit-learn==1.9.0
 joblib==1.5.3
 numpy==2.4.6

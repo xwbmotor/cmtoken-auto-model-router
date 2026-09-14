@@ -1,1 +1,0 @@
-{"upstreamBaseUrl":"http://127.0.0.1:1","upstreamApiKey":"k","models":[{"id":"model-a","displayName":"A","enabled":false,"ownership":"unknown"}],"routing":{"weights":{"cost":1,"latency":1,"quality":1},"tiers":{},"taskPreferences":{},"maxAttempts":1,"defaultExplicitModel":"model-a"},"decisionLog":{"enabled":false,"dirPath":"amr-dbg-4kWj3t"}}

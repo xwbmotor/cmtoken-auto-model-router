@@ -28,6 +28,8 @@
 
 ## 发布与历史证据
 
+- [累计统计持久化记录](history/counters-persistence.md)：早期问题和测试隔离经验。
+
 - [版本记录](../CHANGELOG.md)：按版本查看变化。
 - [v0.14.8 生产验收](go-core-production-v0.14.8.md)：实际切换、重启、镜像及回滚依据。
 - [Go 切换过程](go-core-edge.md)：候选比较、失败修复和历史实验。

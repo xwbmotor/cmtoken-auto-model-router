@@ -24,3 +24,6 @@ reports/release-*.json
 
 # 管理端浏览器验收产物留作本地证据，不污染发布提交
 reports/workspace-ux/
+
+# Temporary local debug directories
+amr-dbg-*/

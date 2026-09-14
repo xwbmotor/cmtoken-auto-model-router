@@ -1,12 +1,6 @@
-# 分类器 replay/评测依赖（release 门禁 0-skip 要求）
-# 用法：python -m pip install -r requirements-classifier.txt（先清 HTTP(S)_PROXY + 用清华镜像）
-#
-# Python 3.11.5（Anaconda E:\\ProgramData\\anaconda3 + venv --system-site-packages=false）
-# 已验证组合（v0.10.4 重建通过）：
-#   scikit-learn 1.9.0
-#   joblib 1.5.3
-#   numpy 2.4.6
-#   scipy 1.17.1（scikit-learn 隐式依赖；不写版本号，pip 解析后务必记录到本文件）
+# 本地开发使用的分类器依赖范围。
+# 安装：python -m pip install -r requirements-classifier.txt
+# 正式构建和可复现验证使用 requirements-classifier.lock。
 scikit-learn==1.9.0
 joblib>=1.3,<2.0
 numpy>=1.26,<3.0
