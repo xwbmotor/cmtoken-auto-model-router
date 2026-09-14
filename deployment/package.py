@@ -13,7 +13,8 @@ REPO = Path(__file__).resolve().parents[1]
 
 def package(source, output):
     release = manifest(REPO / 'deployment/release.json')
-    if output.exists(): raise ValueError('Output must not exist')
+    zipped=output.parent/(output.name+'.zip')
+    if output.exists() or zipped.exists(): raise ValueError('Output directory and ZIP must not exist')
     if sha(source) != release['sourceArchiveSha256']: raise ValueError('Release archive hash mismatch')
     output.mkdir(parents=True)
     with zipfile.ZipFile(source) as archive:
@@ -26,8 +27,6 @@ def package(source, output):
         shutil.copyfile(REPO/'deployment'/name,output/name)
     shutil.copyfile(REPO/'go-core/deployment/native_compose.py',output/'native_compose.py')
     (output/'SHA256SUMS').write_text(''.join(sha(p)+'  '+p.relative_to(output).as_posix()+'\n' for p in sorted(output.rglob('*')) if p.is_file()),encoding='utf-8')
-    zipped=output.with_suffix('.zip')
-    if zipped.exists():raise ValueError('Zip target must not exist')
     with zipfile.ZipFile(zipped,'x',compression=zipfile.ZIP_STORED) as archive:
         for p in sorted(output.rglob('*')):
             if p.is_file():archive.write(p,output.name+'/'+p.relative_to(output).as_posix())

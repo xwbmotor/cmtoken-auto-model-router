@@ -26,6 +26,7 @@ def main():
     load_images(REPO/'data/fresh-bundle',release)
     config=json.loads((REPO/'deployment/router.example.json').read_text(encoding='utf-8'))
     config=json.loads(json.dumps(config).replace('replace-with-your-model','fixture-model'))
+    config['models'][0]['pricingYuanPerMillionTokens'] = {'input': 1, 'output': 2}
     (fixture/'router.json').write_text(json.dumps(config))
     (fixture/'business.key').write_text('fixture-service-key')
     run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN=amr-fresh-provider',
@@ -56,8 +57,10 @@ def main():
         manage(root,'start',release)
         checks.append(verify(root,fixture/'business.key'))
         assert (root/'credentials.json').read_bytes()==creds
+        manage(root,'stop',release)  # Flush persisted costs before inspecting the ledger.
         ledger=json.loads((root/'data/budget-ledger.json').read_text())
         assert ledger['settles']==4,ledger['settles']
+        assert abs(ledger['settledActualSpendYuan'] - .00096) < 1e-8
         result={'passed':True,'release':release['version'],'freshInitialization':True,'existingDirectoryRefused':True,
                 'permissionsChecked':True,'threeRealReleaseImages':True,'syntheticUpstream':True,'realClassifierHealth':True,
                 'requests':4,'jsonAndSSE':True,'restartPreservedCredentials':True,'settles':4,'checks':checks}
