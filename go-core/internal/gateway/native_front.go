@@ -122,6 +122,12 @@ type nativeRequest struct {
 
 func (g *Gateway) readNativeEdge(f *NativeFront, r *http.Request, body map[string]json.RawMessage) (*edgeContext, error) {
 	defer trace.StartRegion(r.Context(), "gateway.nativeContext").End()
+	if g.runtime != nil && g.runtime.outbox != nil {
+		_, _, _, blocked := g.runtime.outbox.status()
+		if blocked {
+			return nil, errors.New("edge_outbox_unavailable")
+		}
+	}
 	c, err := f.current(r.Context())
 	if err != nil {
 		return nil, err
@@ -306,7 +312,7 @@ func (g *Gateway) finishNative(w *nativeWriter, r *http.Request, edge *edgeConte
 		w.firstContentMS, w.firstOutputMS = w.timing.FirstContentMS(), w.timing.FirstOutputMS()
 	}
 	lastOK := len(edge.native.Events) > 0 && edge.native.Events[len(edge.native.Events)-1].Attempt.OK
-	payload, err := nativeCompletionPayload(edge, map[string]any{"startedAt": w.started.UnixMilli(), "headerLatencyMs": w.headerMS,
+	payload, err := nativeCompletionPayload(edge, map[string]any{"startedAt": w.started.UnixMilli(), "finishedAt": time.Now().UnixMilli(), "headerLatencyMs": w.headerMS,
 		"timing":     map[string]any{"firstContentMs": w.firstContentMS, "firstOutputMs": w.firstOutputMS},
 		"answerText": w.answer.String(), "ok": lastOK && !w.failed && r.Context().Err() == nil && !g.runtime.failed.Load(),
 		"clientGone": w.failed || r.Context().Err() != nil, "stream": bytes.Equal(edge.native.Body["stream"], []byte("true")), "status": w.status})

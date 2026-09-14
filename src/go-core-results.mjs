@@ -30,7 +30,7 @@ export function goAttempt(event) {
 
 export function goOutcome(result) {
   const attempts = result.events.map(goAttempt), last = attempts.at(-1);
-  const duration = Math.max(0, Date.now() - result.startedAt);
+  const duration = Math.max(0, (result.finishedAt ?? Date.now()) - result.startedAt);
   return { ...last, ok: result.ok, transportOk: result.ok, taskSuccess: null, core: 'go',
     error: result.ok ? undefined : result.error || 'upstream_unavailable',
     latencyMs: duration, completionLatencyMs: duration, responseHeaderLatencyMs: result.headerLatencyMs,

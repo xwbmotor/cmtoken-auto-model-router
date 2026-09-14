@@ -1,3 +1,5 @@
+import { NativeReceipts } from './native-receipts.mjs';
+import { EvalJobStore } from './eval-job-store.mjs';
 import { completionBudgetEligible } from './completion-budget.mjs';
 import { createGoCoreAdmin } from './go-core-admin.mjs';
 import { createGoCoreEdge } from './go-core-edge.mjs';
@@ -70,12 +72,13 @@ const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 8787);
 const goCoreAdmin = createGoCoreAdmin();
 const nativePolicies = new Map();
+const nativeReceipts = process.env.AMR_GO_NATIVE_FRONT === '1' ? await NativeReceipts.open(resolve(projectRoot, process.env.AMR_NATIVE_RECEIPTS_DIR || (process.env.CONFIG_PATH ? join(process.env.CONFIG_PATH, '..', 'native-receipts') : './data/native-receipts'))) : null;
 if (process.env.AMR_GO_NATIVE_FRONT === '1' && String(process.env.SEMANTIC_BUCKET_SECRET || '').length < 32) throw new Error('Native Go front requires a shared stable semantic secret');
-const goCoreEdge = createGoCoreEdge(process.env, { context: nativeGoContext, prepare: prepareNativeGoEvent,
+const goCoreEdge = createGoCoreEdge(process.env, { context: nativeGoContext, prepare: prepareNativeGoEvent, receipts: nativeReceipts, flush: flushNativeEffects, checkpoint: () => [decisionLog.errors, semanticLog.errors, budgetTracker.persistErrors || 0, countersPersistErrors],
   pending: async () => {
     const state = await goCoreAdmin.runtime();
     if (state.status !== 200 || state.activeRequests === undefined || state.backgroundReviews === undefined) return 1;
-    return state.activeRequests + state.backgroundReviews;
+    return state.activeRequests + state.backgroundReviews + (state.outbox?.pending || 0);
   } });
 if (goCoreEdge && (!goCoreAdmin || !process.env.AMR_GO_RUNTIME_CONFIG)) throw new Error('Go chat edge requires automatic snapshot publication');
 const goConfigPublication = goCoreEdge ? createGoConfigPublication(goCoreAdmin, next => { assertSemanticBucketSecretForMode(next.semanticRouter?.mode); assertJudgeGuardStatePathStable(next.judge); }) : null;
@@ -422,7 +425,7 @@ async function refreshGoRuntime() {
     try {
       const state = await goCoreAdmin.runtime();
       if (state.status !== 200) throw new Error('core_unavailable');
-      const available = state.persistenceHealthy && state.edgeEnabled && state.configRevision === getConfigRevision(config) && !goConfigPublication.blocked();
+      const available = state.persistenceHealthy && state.edgeEnabled && state.configRevision === getConfigRevision(config) && !goConfigPublication.blocked() && !nativeReceipts?.blocked && !state.outbox?.blocked;
       goRuntimeSnapshot = { ...state, available, checkedAt: Date.now() };
       for (const model of config.models) health[model.id] = state.health[model.id] || newHealthState();
     } catch { goRuntimeSnapshot = { ...goRuntimeSnapshot, available: false, checkedAt: Date.now(), error: 'core_unavailable' }; }
@@ -521,6 +524,7 @@ function countersToPersist() {
   return { version: 1, savedAt: new Date().toISOString(), cumulative };
 }
 let countersWriteTimer = null;
+let countersPersistErrors = 0;
 let countersWriteChain = Promise.resolve(); // 串行保存统计快照，避免旧快照后完成而覆盖新数据。
 function countersFlushNow() {
   if (countersWriteTimer) { clearTimeout(countersWriteTimer); countersWriteTimer = null; }
@@ -530,7 +534,7 @@ function countersFlushNow() {
     const temp = `${countersStatePath}.${process.pid}.${Date.now()}.tmp`;
     await fsp.writeFile(temp, snapshot, { encoding: 'utf8', mode: 0o600 });
     await fsp.rename(temp, countersStatePath);
-  }).catch((e) => { logger.warn('counters_write_failed', { error: String(e?.message || e) }); });
+  }).catch((e) => { countersPersistErrors++; logger.warn('counters_write_failed', { error: String(e?.message || e) }); });
   return countersWriteChain;
 }
 function scheduleCountersWrite() {
@@ -1754,9 +1758,10 @@ async function fetchUpstreamModels() {
   return result;
 }
 
-// ── P2 评测任务运行器：体检（8题冒烟）/ 完整评测（eval-gate 题集）。单进程内存队列，重启即失。
-const evalJobs = new Map();
+// 评测结果持久化；重启后保留已完成结果，将未完成任务标记为中断。
 const EVAL_JOB_TTL_MS = 2 * 3600 * 1000;
+const evalJobStore = await EvalJobStore.load(resolve(projectRoot, process.env.AMR_EVAL_JOBS_PATH || (process.env.CONFIG_PATH ? join(process.env.CONFIG_PATH, '..', 'eval-jobs.json') : './data/eval-jobs.json')), EVAL_JOB_TTL_MS);
+const evalJobs = evalJobStore.jobs;
 
 function getEvalJob(id) {
   const j = id ? evalJobs.get(id) : null;
@@ -1811,7 +1816,7 @@ async function callUpstreamChat(modelId, prompt, maxTokens = 300) {
   return { text, latencyMs: Date.now() - t0, usage: payload?.usage || null };
 }
 
-function startEvalJob(body) {
+async function startEvalJob(body) {
   const type = body?.type;
   const modelId = String(body?.modelId || '').trim();
   if (!['checkup', 'full', 'interleaved'].includes(type)) throw new Error('type 必须是 checkup（体检冒烟）、full（56 题稳定性巡检）或 interleaved（交错评测——多模型同窗口轮转+Judge 评分+置信区间，仅出建议值）');
@@ -1826,23 +1831,23 @@ function startEvalJob(body) {
     const ineligible = ids.filter((id) => { const m = (config.models || []).find((x) => x.id === id); return m && (m.enabled !== true || m.ownership === 'unknown'); });
     if (ineligible.length) throw new Error(`模型未启用或归属待定（不参与评测）：${ineligible.join('、')}`);
     for (const j of evalJobs.values()) if (!j.finishedAt) throw new Error(`已有任务在跑（${j.id} ${j.type}），请等它完成`);
-    const id = `job_${Date.now().toString(36)}`;
+    const id = `job_${randomUUID()}`;
     const job = { id, type, modelIds: ids, startedAt: new Date().toISOString(), finishedAt: null, status: 'running',
       total: null, done: 0, failed: 0, results: [], autoApplied: false, error: null,
       judge: { configured: Boolean((judgeSecretStore.get()?.apiKey || process.env.UPSTREAM_API_KEY || process.env.MAAS_API_KEY)), model: (config.judge || {}).model || 'glm-5.3', rubricVersion: null } };
-    evalJobs.set(id, job);
-    runInterleavedEval(job).catch((e) => { job.error = String(e?.message || e); job.status = 'failed'; job.finishedAt = new Date().toISOString(); });
+    await evalJobStore.add(job);
+    runInterleavedEval(job).catch((e) => { job.error = String(e?.message || e); job.status = 'failed'; job.finishedAt = new Date().toISOString(); }).finally(() => evalJobStore.save()).catch(() => { logger.error('eval_job_persist_failed', { id: job.id }); });
     return job;
   }
   const model = (config.models || []).find((m) => m.id === modelId);
   if (!model) throw new Error(`模型 ${modelId} 不在注册表中（请先注册）`);
   // 并发上限：同时只跑一个评测任务，防止打爆上游
   for (const j of evalJobs.values()) if (!j.finishedAt) throw new Error(`已有任务在跑（${j.id} ${j.type}），请等它完成`);
-  const id = `job_${Date.now().toString(36)}`;
+  const id = `job_${randomUUID()}`;
   const job = { id, type, modelId, startedAt: new Date().toISOString(), finishedAt: null, status: 'running',
     total: type === 'checkup' ? CHECKUP_CASES.length : 56, done: 0, failed: 0, results: [], autoApplied: false, error: null };
-  evalJobs.set(id, job);
-  runEvalJob(job).catch((e) => { job.error = String(e?.message || e); job.status = 'failed'; job.finishedAt = new Date().toISOString(); });
+  await evalJobStore.add(job);
+  runEvalJob(job).catch((e) => { job.error = String(e?.message || e); job.status = 'failed'; job.finishedAt = new Date().toISOString(); }).finally(() => evalJobStore.save()).catch(() => { logger.error('eval_job_persist_failed', { id: job.id }); });
   return job;
 }
 
@@ -1898,6 +1903,7 @@ async function runInterleavedEval(job) {
         if (!modelWarmup) job.failed += 1;
       }
       job.done += 1;
+      await evalJobStore.save();
     }
   }
 
@@ -1928,7 +1934,7 @@ async function runInterleavedEval(job) {
         r.judgeScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
         if (r.judgeScore == null) { r.judgeError = 'no_scored_dim'; continue; }
         job.judge.scored += 1;
-      } catch (e) { judgeGuard.settle(rq.handle, { ok: false }); r.judgeError = String(e?.message || e).slice(0, 100); job.judge.skippedError += 1; }
+      } catch (e) { judgeGuard.settle(rq.handle, { ok: false }); r.judgeError = String(e?.message || e).slice(0, 100); job.judge.skippedError += 1; } finally { await evalJobStore.save(); }
     }
   }
 
@@ -2013,6 +2019,7 @@ async function runEvalJob(job) {
       job.failed += 1;
     }
     job.done += 1;
+    await evalJobStore.save();
   }
   job.status = job.error ? 'failed' : 'done';
   job.finishedAt = new Date().toISOString();
@@ -2505,9 +2512,23 @@ async function consumeGoSemantic(event, metadata) {
   recordSemanticReview(review); semanticLog.writeRaw(review); scheduleCountersWrite();
 }
 
+async function flushNativeEffects(before = [decisionLog.errors, semanticLog.errors, budgetTracker.persistErrors || 0, countersPersistErrors]) {
+  await Promise.all([decisionLog.writeChain, semanticLog.writeChain, budgetTracker.pendingWrite, countersFlushNow()]);
+  if (decisionLog.errors !== before[0] || semanticLog.errors !== before[1] || (budgetTracker.persistErrors || 0) !== before[2] || countersPersistErrors !== before[3]) throw new Error('native_projection_write_failed');
+  // Persist current money state explicitly; the normal batched writer may swallow an earlier error.
+  await budgetTracker.scheduleWrite();
+  if ((budgetTracker.persistErrors || 0) !== before[2]) throw new Error('native_cost_write_failed');
+  for (const file of [budgetTracker.path, countersStatePath]) {
+    const handle = await fsp.open(file, 'r+'); try { await handle.sync(); } finally { await handle.close(); }
+    if (process.platform !== 'win32') { const dir = await fsp.open(dirname(file), 'r'); try { await dir.sync(); } finally { await dir.close(); } }
+  }
+}
+
 function nativeGoContext() {
+  if (nativeReceipts?.blocked) return null;
   if (goConfigPublication.blocked() || shutdownManager.draining) return null;
   const revision = getConfigRevision(config);
+  try { nativeReceipts?.savePolicy(revision, config); } catch { return null; }
   nativePolicies.set(revision, config);
   if (nativePolicies.size > 64) nativePolicies.delete(nativePolicies.keys().next().value);
   return { configRevision: revision, sessionProof: createHmac('sha256', semanticBucketSecret).update('go-native-front-v1').digest('hex'), marketSignals: Object.fromEntries(['default', 'coding', 'reasoning', 'creative', 'extraction'].map(task =>
@@ -2515,7 +2536,8 @@ function nativeGoContext() {
 }
 
 function prepareNativeGoEvent(event, validateEvent) {
-  const policy = nativePolicies.get(event.configRevision);
+  decisionLog.durable = true; semanticLog.durable = true;
+  const policy = nativePolicies.get(event.configRevision) || nativeReceipts?.policy(event.configRevision);
   const metadata = event.nativeMetadata || event.request?.metadata;
   if (!policy || !metadata || typeof metadata.requestId !== 'string' || !metadata.requestId || metadata.requestId.length > 256 ||
       !/^[a-f0-9]{8}$/.test(metadata.keyFingerprint) ||
@@ -2530,7 +2552,7 @@ function prepareNativeGoEvent(event, validateEvent) {
   }
   const { body, events } = event.request, result = event.result;
   if (!body || typeof body !== 'object' || !Array.isArray(body.messages) || !Array.isArray(events) || events.length > 16 ||
-      !result || !Number.isSafeInteger(result.startedAt) || typeof result.ok !== 'boolean' ||
+      !result || (result.finishedAt !== undefined && (!Number.isSafeInteger(result.finishedAt) || result.finishedAt < result.startedAt)) || !Number.isSafeInteger(result.startedAt) || typeof result.ok !== 'boolean' ||
       typeof result.stream !== 'boolean' || !result.timing || typeof result.answerText !== 'string' || result.answerText.length > 65536 ||
       !Number.isInteger(result.status) || result.status < 100 || result.status > 599) throw new Error('invalid_native_completion');
   const models = new Set(policy.models.map(m => m.id));
@@ -2603,7 +2625,7 @@ function goCompletionOptions(req, body, auto, policy = config) {
         for (const event of result.events) {
           const a = goAttempt(event), m = policy.models.find(m => m.id === a.model);
           const context = latencyContextFor(m, body, decision.analysis, decision.reasoningLevel, (req.goMetadata || req.headers.authorization));
-          const row = { ...context, at: Date.now(), ok: a.ok && (!event.attempt.ok || outcome.ok), failureScope: a.failureScope,
+          const row = { ...context, at: result.finishedAt ?? Date.now(), ok: a.ok && (!event.attempt.ok || outcome.ok), failureScope: a.failureScope,
             timeout: a.timeout, ttftMs: a.model === outcome.model ? outcome.ttftMs : null,
             firstOutputMs: a.model === outcome.model ? outcome.firstOutputMs : null,
             upstreamTtftMs: a.timing.ttftMs, upstreamFirstOutputMs: a.timing.firstOutputMs, completionMs: outcome.completionLatencyMs, attemptMs: a.latencyMs };
@@ -3417,7 +3439,7 @@ const server = http.createServer(async (req, res) => {
 
     res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
 
-    const coreMetrics = goCoreEdge ? `# TYPE amr_go_core_available gauge\namr_go_core_available ${goRuntimeSnapshot.available ? 1 : 0}\n# TYPE amr_go_edge_report_errors_total counter\namr_go_edge_report_errors_total ${goRuntimeSnapshot.edgeErrors || 0}\n` : '';
+    const coreMetrics = goCoreEdge ? `# TYPE amr_go_core_available gauge\namr_go_core_available ${goRuntimeSnapshot.available ? 1 : 0}\n# TYPE amr_go_edge_report_errors_total counter\namr_go_edge_report_errors_total ${goRuntimeSnapshot.edgeErrors || 0}\n# TYPE amr_go_outbox_pending gauge\namr_go_outbox_pending ${goRuntimeSnapshot.outbox?.pending || 0}\n# TYPE amr_native_receipts_blocked gauge\namr_native_receipts_blocked ${nativeReceipts?.blocked ? 1 : 0}\n` : '';
     return res.end(body + coreMetrics);
 
   }
@@ -3489,8 +3511,9 @@ const server = http.createServer(async (req, res) => {
       const result = req.method === 'GET' ? await goCoreAdmin.status() : await goCoreAdmin.reload(req.headers['if-match']);
       if (result.status !== 200) return errorJson(res, result.status, 'Go 配置操作未成功，请重新查询生效版本', result.error);
       const { status, ...view } = result;
+      const delivery = req.method === 'GET' ? await goCoreAdmin.runtime().catch(() => null) : null;
       res.setHeader('ETag', view.revision);
-      return json(res, 200, { ...view, servesTraffic: Boolean(goCoreEdge), savedConfigRevision: getConfigRevision(config), ...(view.configRevision ? { synchronized: view.configRevision === getConfigRevision(config) } : {}) });
+      return json(res, 200, { ...view, servesTraffic: Boolean(goCoreEdge), savedConfigRevision: getConfigRevision(config), nativeReceipts: nativeReceipts?.status() ?? null, outbox: delivery?.outbox ?? null, ...(view.configRevision ? { synchronized: view.configRevision === getConfigRevision(config) } : {}) });
     } catch { return errorJson(res, 502, 'Go 管理接口不可用，请查询状态后再决定是否重试', 'core_control_unavailable'); }
   }
   if (req.method === 'GET' && url.pathname === '/admin/api/config') { res.setHeader('ETag', getConfigRevision(config)); res.setHeader('Cache-Control', 'no-store'); return json(res, 200, config); }
@@ -3623,13 +3646,14 @@ const server = http.createServer(async (req, res) => {
         if (!job) return errorJson(res, 404, '任务不存在或已过期', 'eval_job_not_found');
         if (job.finishedAt) return json(res, 200, { ok: true, alreadyFinished: true, status: job.status });
         job.cancelRequested = true;
+        await evalJobStore.save();
         return json(res, 202, { ok: true, cancelling: true });
       } catch (error) { return errorJson(res, 400, error.message, 'invalid_body'); }
     }
     if (req.method === 'POST') {
       try {
         const body = await readJson(req);
-        const job = startEvalJob(body);
+        const job = await startEvalJob(body);
         return json(res, 202, job);
       } catch (error) { return errorJson(res, 400, error.message, error.code || 'eval_job_error'); }
     }
@@ -3638,7 +3662,7 @@ const server = http.createServer(async (req, res) => {
       if (!id) {
         sweepEvalJobs();
         const jobs = [...evalJobs.values()].sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt)).map(({ id, type, modelId, modelIds, status, startedAt, finishedAt, total, done, failed, cancelRequested }) => ({ id, type, modelId, modelIds, status, startedAt, finishedAt, total, done, failed, cancelRequested }));
-        return json(res, 200, { jobs, retentionHours: EVAL_JOB_TTL_MS / 3600000, survivesRestart: false });
+        return json(res, 200, { jobs, retentionHours: EVAL_JOB_TTL_MS / 3600000, survivesRestart: true, maxRetainedJobs: 32 });
       }
       const job = getEvalJob(id);
       if (!job) return errorJson(res, 404, '任务不存在或已过期', 'eval_job_not_found');
@@ -4613,6 +4637,9 @@ const shutdownManager = createShutdownManager({
 
     await Promise.allSettled([decisionLog.writeChain, semanticLog.writeChain, judgeLog.writeChain, budgetTracker.pendingWrite]);
     await guardPersist.drain();
+    await evalJobStore.save();
+    nativeReceipts?.close();
+    nativeReceipts?.close();
 
   },
 

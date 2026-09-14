@@ -55,8 +55,15 @@ export function createGoCoreAdmin(env = process.env) {
                 pending[key] = body[key];
               }
             }
+            const outbox = body.outbox;
+            let delivery = {};
+            if (outbox !== undefined) {
+              if (!outbox || typeof outbox.enabled !== 'boolean') throw new Error('invalid_core_outbox');
+              if (outbox.enabled && (typeof outbox.blocked !== 'boolean' || ['pending','bytes','deliveryFailures'].some(k => !Number.isSafeInteger(outbox[k]) || outbox[k] < 0))) throw new Error('invalid_core_outbox');
+              delivery = { outbox: outbox.enabled ? {enabled:true,pending:outbox.pending,bytes:outbox.bytes,deliveryFailures:outbox.deliveryFailures,blocked:outbox.blocked} : {enabled:false} };
+            }
             return resolve({ status: 200, revision: body.revision, configRevision: body.configRevision,
-              health, inflight, ...pending, sessions: body.sessions, persistenceHealthy: body.persistenceHealthy, edgeEnabled: body.edgeEnabled, edgeErrors: body.edgeErrors });
+              health, inflight, ...pending, ...delivery, sessions: body.sessions, persistenceHealthy: body.persistenceHealthy, edgeEnabled: body.edgeEnabled, edgeErrors: body.edgeErrors });
           }
           resolve({ status: 200, revision: body.revision, ...(method === 'GET' ? { configRevision: body.configRevision } : {}) });
         } catch { reject(new Error('invalid_core_response')); }

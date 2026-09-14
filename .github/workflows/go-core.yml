@@ -2,7 +2,7 @@ name: Go core migration
 
 on:
   push:
-    branches: [codex/go-core-migration]
+    branches: [master, codex/go-core-migration]
   pull_request:
     paths:
       - 'go-core/**'
@@ -76,6 +76,8 @@ jobs:
           node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --node-cost-observation --semantic shadow --out data/go-migration/native-node-cost-shadow.json
           node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --node-cost-observation --semantic active --out data/go-migration/native-node-cost-active.json
           node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --node-cost-observation --semantic shadow --go-shutdown --out data/go-migration/native-go-shutdown.json
+      - name: Verify persistent result delivery across receiver and sender restart
+        run: node go-core/compat/demo-edge.mjs --binary data/go-migration/amr-core --native-front --node-cost-observation --delivery-restart --out data/go-migration/native-delivery-restart.json
       - name: Confirm the shutdown regression reproduces on the previous candidate
         run: |
           git fetch --no-tags --depth=1 origin tag v0.14.7
@@ -105,3 +107,23 @@ jobs:
             data/go-migration/*.log
           if-no-files-found: warn
           retention-days: 14
+
+  node-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - name: Prepare classifier and browser tests
+        run: |
+          python3 -m venv "$RUNNER_TEMP/amr-tests"
+          "$RUNNER_TEMP/amr-tests/bin/python" -m pip install -r requirements-classifier.lock playwright==1.61.0
+          "$RUNNER_TEMP/amr-tests/bin/python" -m playwright install --with-deps chromium
+          echo "$RUNNER_TEMP/amr-tests/bin" >> "$GITHUB_PATH"
+          echo "CLASSIFIER_PYTHON=$RUNNER_TEMP/amr-tests/bin/python" >> "$GITHUB_ENV"
+      - name: Run Node and browser regression without skipped tests
+        env:
+          AMR_TEST_STRICT_SKIP: '1'
+        run: npm test

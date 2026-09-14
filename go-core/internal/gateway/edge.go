@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -133,6 +134,20 @@ func (g *Gateway) reportEdgeReview(edge *edgeContext, review Review) error {
 }
 
 func (g *Gateway) postEdge(payload []byte) error {
+	if g.runtime != nil && g.runtime.outbox != nil {
+		var envelope struct {
+			Kind     string          `json:"kind"`
+			Metadata json.RawMessage `json:"nativeMetadata"`
+		}
+		if json.Unmarshal(payload, &envelope) != nil {
+			return errors.New("invalid edge envelope")
+		}
+		if envelope.Kind == "native_complete" || len(envelope.Metadata) > 0 {
+			payload = append(append([]byte{}, payload[:len(payload)-1]...), []byte(fmt.Sprintf(",\"receiptAt\":%d}", time.Now().UnixMilli()))...)
+			return g.runtime.outbox.enqueue(payload)
+		}
+	}
+
 	for retry := 0; retry < 2; retry++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		req, _ := http.NewRequestWithContext(ctx, "POST", g.options.EdgeURL, bytes.NewReader(payload))

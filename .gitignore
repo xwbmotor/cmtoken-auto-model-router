@@ -27,3 +27,7 @@ reports/workspace-ux/
 
 # Temporary local debug directories
 amr-dbg-*/
+
+# State created when a custom config path is used for local development
+config/native-receipts/
+config/eval-jobs.json

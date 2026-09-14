@@ -44,7 +44,7 @@ export function createGoCoreEdge(env = process.env, native = {}) {
       res.writeHead(403); res.end(); return;
     }
     if (env.AMR_GO_NATIVE_FRONT === '1' && req.method === 'GET' && req.url === '/internal/v1/go-context') {
-      const context = native.context();
+      const context = await native.context();
       res.writeHead(context ? 200 : 503, { 'content-type': 'application/json' }); res.end(JSON.stringify(context)); return;
     }
     if (req.method !== 'POST' || req.url !== '/internal/v1/go-events') { res.writeHead(404); res.end(); return; }
@@ -63,9 +63,11 @@ export function createGoCoreEdge(env = process.env, native = {}) {
         if (prior && prior.digest !== digest) { res.writeHead(409); res.end(); return; }
         if (!prior) {
           // Validate the entire envelope before applying any cost or log effect.
-          const action = native.prepare(event, validateEvent);
+          const receiptEvent = structuredClone(event);
+          const checkpoint = native.checkpoint?.();
+          const action = await native.prepare(event, validateEvent);
           completing++;
-          const task = Promise.resolve().then(action).finally(() => { completing--; });
+          const task = Promise.resolve().then(() => native.receipts ? native.receipts.apply(receiptEvent, digest, action, () => native.flush(checkpoint)) : action()).finally(() => { completing--; });
           nativeDone.set(key, { digest, task });
           if (nativeDone.size > 4096) nativeDone.delete(nativeDone.keys().next().value);
         }

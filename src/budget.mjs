@@ -149,7 +149,7 @@ export class BudgetTracker {
           await this.writeSnapshot(snapshot);
         }
       } finally { this.writing = false; }
-    })().catch(() => {});
+    })().catch(() => { this.persistErrors = (this.persistErrors || 0) + 1; });
     return this.pendingWrite;
   }
 

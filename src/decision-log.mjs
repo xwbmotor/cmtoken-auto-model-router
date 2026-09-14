@@ -1,7 +1,8 @@
+import { open } from 'node:fs/promises';
 //决策日志：把每次路由决策追加写入 JSONL 文件，用于标注集采集与离线分析。
 //设计约束：绝不阻塞请求路径（fire-and-forget + 失败静默计数）；文件按大小轮转。
 import { appendFile, mkdir, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 
 const DEFAULTS = {
   enabled: false,
@@ -61,6 +62,7 @@ export class DecisionLog {
       //轮转 = 把当前文件改名；下一条日志会自动写到当天新文件
       await mkdir(dir, { recursive: true });
       await rename(this.currentFile, rotated);
+      if (this.durable && process.platform !== 'win32') { const handle = await open(dir, 'r'); try { await handle.sync(); } finally { await handle.close(); } }
       this.currentFile = null;
       this.currentBytes = 0;
       await this.prune(dir);
@@ -163,6 +165,7 @@ export class DecisionLog {
     if (!this.currentFile || this.fileFor() !== this.currentFile) await this.openExistingOrCreate();
     const line = JSON.stringify(record) + '\n';
     await appendFile(this.currentFile, line, 'utf8');
+    if (this.durable) { const file = await open(this.currentFile, 'r+'); try { await file.sync(); } finally { await file.close(); } if (process.platform !== 'win32') { const dir = await open(dirname(this.currentFile), 'r'); try { await dir.sync(); } finally { await dir.close(); } } }
     this.currentBytes += Buffer.byteLength(line);
     this.written += 1;
     if (this.currentBytes >= this.options.maxFileBytes) await this.rotate();

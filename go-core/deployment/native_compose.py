@@ -53,7 +53,8 @@ def build(source, version, upstream, edge_token, admin_token, small_token='', *,
     env.update(HOST='127.0.0.1', PORT='8789', AMR_GO_NATIVE_FRONT='1',
                AMR_GO_CHAT_URL='http://127.0.0.1:8791/v1/chat/completions',
                AMR_GO_ADMIN_URL='http://127.0.0.1:8791', AMR_GO_ADMIN_TOKEN=admin_token,
-               AMR_GO_EDGE_TOKEN=edge_token, AMR_GO_RUNTIME_CONFIG='/app/config/go-runtime.json')
+               AMR_GO_EDGE_TOKEN=edge_token, AMR_GO_RUNTIME_CONFIG='/app/config/go-runtime.json',
+               AMR_NATIVE_RECEIPTS_DIR='/app/data/native-receipts', AMR_EVAL_JOBS_PATH='/app/data/eval-jobs.json')
     node['healthcheck'] = {**node.get('healthcheck', {}), 'test': ['CMD', 'node', '-e',
         "fetch('http://127.0.0.1:8789/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]}
     classifier.update(image='cmt-amr-classifier:' + version, ports=ports)

@@ -42,3 +42,10 @@ data/doc-refresh/
 # Installation delivery artifacts
 data/distribution/
 data/offline-*/
+
+# Local runtime recovery state and verification output
+data/reliability/
+data/native-receipts/
+data/eval-jobs.json
+config/native-receipts/
+config/eval-jobs.json

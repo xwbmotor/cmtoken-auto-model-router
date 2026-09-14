@@ -190,6 +190,15 @@ func NewManaged(o ManagedOptions) (*Managed, error) {
 		l.Close()
 		return nil, e
 	}
+	if o.Gateway.NodeCostObservation {
+		m.state.outbox, e = openEdgeOutbox(o.LedgerPath+".outbox", o.Gateway.EdgeURL, o.Gateway.EdgeToken)
+		if e != nil {
+			g.Close()
+			audit.Close()
+			l.Close()
+			return nil, e
+		}
+	}
 	m.active = &generation{g: g, revision: snapshot.Revision}
 	m.all[m.active] = true
 	return m, nil
@@ -343,7 +352,7 @@ func (m *Managed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"nodeCostObservation": m.state.nodeCostObservation,
 			"activeRequests":      len(m.state.requests), "backgroundReviews": backgroundReviews,
 			"health": m.state.health.States(), "inflight": m.state.admission.Snapshot(), "sessions": m.state.admission.SessionCount(float64(time.Now().UnixMilli())),
-			"persistenceHealthy": !m.state.failed.Load(), "edgeErrors": m.state.edgeErrors.Load(), "edgeEnabled": gen.g.options.EdgeURL != ""})
+			"persistenceHealthy": !m.state.failed.Load(), "edgeErrors": m.state.edgeErrors.Load(), "edgeEnabled": gen.g.options.EdgeURL != "", "outbox": m.state.outboxSnapshot()})
 		return
 	}
 	if r.URL.Path == "/internal/v1/runtime" && r.Method == "GET" && r.URL.RawQuery == "" {
@@ -450,6 +459,11 @@ func (m *Managed) Drain(ctx context.Context) error {
 			result = err
 		}
 	}
+	if m.state.outbox != nil {
+		if err := m.state.outbox.drain(ctx); err != nil {
+			result = err
+		}
+	}
 	return result
 }
 
@@ -471,6 +485,9 @@ func (m *Managed) Close() {
 	m.mu.Unlock()
 	for gen := range generations {
 		gen.g.Close()
+	}
+	if m.state.outbox != nil {
+		m.state.outbox.close()
 	}
 	m.state.audit.Close()
 	m.state.ledger.Close()

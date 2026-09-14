@@ -7,7 +7,7 @@ export function setupGoCorePanel({ api }) {
   page.prepend(panel);
   const status = panel.querySelector('[data-core-status]'), versions = panel.querySelector('[data-core-revisions]');
   const reload = panel.querySelector('[data-core-reload]'), query = panel.querySelector('[data-core-refresh]');
-  let revision = null, busy = false, enabled = false;
+  let revision = null, busy = false, enabled = false, reconciliationBlocked = false;
   async function refresh() {
     if (busy) return;
     busy = true; reload.disabled = true; query.disabled = true;
@@ -15,6 +15,7 @@ export function setupGoCorePanel({ api }) {
       const state = await api('/admin/api/go-core');
       enabled = true; panel.hidden = false; revision = state.revision;
       const serving = state.servesTraffic === true;
+      reconciliationBlocked = state.nativeReceipts?.blocked === true;
       const title = serving ? 'Go 请求核心' : '实验 Go 核心';
       panel.setAttribute('aria-label', title);
       panel.querySelector('[data-core-title]').textContent = title;
@@ -24,13 +25,15 @@ export function setupGoCorePanel({ api }) {
         : '此操作只更新实验 Go 核心，不切换业务流量。当前页面的业务指标仍来自 Node；尚未保存的草稿不会下发。';
       status.textContent = state.synchronized ? 'Go 已加载当前保存的配置。' : '已保存配置与 Go 生效配置不同，尚未同步。';
       if (state.publicationPending) status.textContent += ' 上次发布仍待核对，再次加载会先恢复；完成前请勿重启 Go。';
+      if (state.outbox?.pending) status.textContent += ` 有 ${state.outbox.pending} 条结果等待回传。`;
+      if (reconciliationBlocked) status.textContent = state.nativeReceipts?.reason === 'capacity' ? '结果记录存储已达到容量限制，已暂停新请求。请先检查存储和保留记录。' : '结果记录需要核对，已暂停新请求。请按运维说明处理，避免重复结算。';
       reload.textContent = state.snapshotPublication ? '发布已保存配置到 Go' : '将已保存配置加载到 Go';
       versions.textContent = `管理服务保存：${state.savedConfigRevision}\nGo 当前配置：${state.configRevision}\nGo 运行版本：${state.revision}`;
     } catch (error) {
       revision = null;
       if (error.status === 404 && !enabled) panel.hidden = true;
       else { panel.hidden = false; status.textContent = `状态未确认：${error.message}`; }
-    } finally { busy = false; query.disabled = false; reload.disabled = !revision; }
+    } finally { busy = false; query.disabled = false; reload.disabled = !revision || reconciliationBlocked; }
   }
   query.onclick = refresh;
   reload.onclick = async () => {

@@ -19,7 +19,9 @@
         "AMR_GO_ADMIN_URL": "http://127.0.0.1:8791",
         "AMR_GO_ADMIN_TOKEN": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "AMR_GO_EDGE_TOKEN": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-        "AMR_GO_RUNTIME_CONFIG": "/app/config/go-runtime.json"
+        "AMR_GO_RUNTIME_CONFIG": "/app/config/go-runtime.json",
+        "AMR_NATIVE_RECEIPTS_DIR": "/app/data/native-receipts",
+        "AMR_EVAL_JOBS_PATH": "/app/data/eval-jobs.json"
       },
       "volumes": [
         {

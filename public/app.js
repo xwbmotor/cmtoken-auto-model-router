@@ -950,6 +950,7 @@ function pollEval(id) {
       cancelBtn.textContent = j.finishedAt ? '任务已结束' : j.cancelRequested ? '正在取消…' : '取消任务';
       const pct = j.total ? Math.round(j.done / j.total * 100) : 0;
       let html = '<div class="progress-wrap"><div class="progress-bar" style="width:' + pct + '%"></div></div><p>' + j.done + '/' + j.total + '（' + pct + '%）失败 ' + j.failed + '</p>';
+      if (j.status === 'interrupted') { clearInterval(evalTimer); html += '<p class="hint">服务重启使任务中断，以上为已保存结果。系统不会自动重新调用模型；需要继续评测时请重新发起任务。</p>'; $id('evalBody').innerHTML = html; return; }
       if (j.status === 'cancelled') { clearInterval(evalTimer); html += '<p style="color:#c33">任务已取消——以上为取消前已完成部分（' + j.done + '/' + j.total + '）。</p>'; $id('evalBody').innerHTML = html; return; }
       if (j.status === 'done') {
         clearInterval(evalTimer);
@@ -1061,7 +1062,7 @@ async function loadEvalTasks() {
     const focusedJob = list.contains(document.activeElement) ? document.activeElement.dataset.jobId : null;
     let restoreFocus;
     const types = { checkup: '快速体检', full: '稳定性巡检', interleaved: '交错评测' };
-    const states = { running: '运行中', queued: '等待中', done: '已完成', failed: '失败', cancelled: '已取消' };
+    const states = { running: '运行中', queued: '等待中', done: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' };
     list.replaceChildren();
     for (const job of data.jobs) {
       const item = document.createElement('div'); item.className = 'eval-task';

@@ -15,6 +15,8 @@ const binary = resolve(arg('--binary'));
 const semantic = arg('--semantic') || 'disabled';
 const nativeFront = process.argv.includes('--native-front'), nodeCostObservation = process.argv.includes('--node-cost-observation');
 const goShutdown = process.argv.includes('--go-shutdown');
+const deliveryRestart = process.argv.includes('--delivery-restart');
+if (deliveryRestart) assert.ok(nativeFront && nodeCostObservation && semantic === 'disabled', 'Delivery recovery requires native Node-cost mode without semantic fixtures');
 assert.ok(['disabled', 'shadow', 'active'].includes(semantic), '--semantic must be shadow or active');
 if (goShutdown) assert.ok(nativeFront && semantic === 'shadow' && process.platform !== 'win32', 'Go SIGTERM verification requires native shadow mode on POSIX');
 const dir = await mkdtemp(join(root, 'data/go-migration/edge-'));
@@ -26,6 +28,7 @@ let failures = 0;
 let classifierCalls = 0;
 let delayNextClassifier = false;
 const classifierEntered = Promise.withResolvers(), classifierRelease = Promise.withResolvers();
+const outageEntered = Promise.withResolvers(), outageRelease = Promise.withResolvers();
 const mock = createServer(async (req, res) => {
   if (req.url.endsWith('/models')) { res.setHeader('content-type', 'application/json'); res.end('{"data":[]}'); return; }
   let raw = ''; for await (const chunk of req) raw += chunk;
@@ -49,6 +52,7 @@ const mock = createServer(async (req, res) => {
   assert.equal(req.headers['x-amr-edge-token'], undefined, 'edge credential leaked upstream');
   const judge = raw.includes('模型回答质量评审') || raw.includes('请求分类核对员');
   seen.push({ judge, model: body.model, stream: body.stream === true, content: body.messages?.at(-1)?.content });
+  if (body.messages?.at(-1)?.content === 'delivery-outage') { outageEntered.resolve(); await outageRelease.promise; }
   const usage = { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 };
   res.setHeader('content-type', 'application/json');
   if (judge) {
@@ -66,7 +70,17 @@ const mock = createServer(async (req, res) => {
     res.end(`data: ${JSON.stringify({ choices: [], usage })}\n\ndata: [DONE]\n\n`);
   } else res.end(JSON.stringify({ model: body.model, choices: [{ message: { role: 'assistant', content: '这是业务回答' } }], usage }));
 });
-async function freePort() { const s = createServer(); await new Promise(r => s.listen(0, '127.0.0.1', r)); const p = s.address().port; await new Promise(r => s.close(r)); return p; }
+async function freePort() {
+  // Stay above Fetch's restricted service ports, including on Windows hosts
+  // whose ephemeral range has been customized below the usual dynamic range.
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const server = createServer(), port = 20000 + randomBytes(2).readUInt16BE() % 30000;
+    try { await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); }); }
+    catch (error) { if (error.code === 'EADDRINUSE') continue; throw error; }
+    await new Promise(resolve => server.close(resolve)); return port;
+  }
+  throw new Error('No free fixture port');
+}
 function start(command, args, env) {
   const child = spawn(command, args, { cwd: root, windowsHide: true, stdio: env.AMR_TEST_SHUTDOWN_IPC === '1' ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
   let output = ''; child.stdout.on('data', b => { output = (output + b).slice(-8000); }); child.stderr.on('data', b => { output = (output + b).slice(-8000); });
@@ -81,7 +95,7 @@ async function healthy(base, process) {
   throw new Error(`startup failed: ${process.output()}`);
 }
 try {
-  await new Promise(r => mock.listen(0, '127.0.0.1', r));
+  await new Promise(async r => mock.listen(await freePort(), '127.0.0.1', r));
   const upstream = `http://127.0.0.1:${mock.address().port}/v1`;
   const config = JSON.parse(await readFile(join(root, 'config/router.json'), 'utf8'));
   config.upstreamBaseUrl = upstream;
@@ -111,18 +125,21 @@ try {
   execFileSync(process.execPath, ['go-core/compat/export-runtime.mjs', '--config', configFile, '--out', snapshot], { cwd: root, windowsHide: true, stdio: 'pipe' });
   const nodePort = await freePort(), goPort = await freePort(), publicPort = await freePort();
   const nodeBase = `http://127.0.0.1:${nodePort}`, base = nativeFront ? `http://127.0.0.1:${publicPort}` : nodeBase, goBase = `http://127.0.0.1:${goPort}`;
-  const go = start(binary, ['--lab', ...(nodeCostObservation ? ['--node-cost-observation'] : []), ...(nativeFront ? ['--public-listen', `127.0.0.1:${publicPort}`, '--node-origin', nodeBase] : []), '--runtime', '--runtime-config', snapshot, '--auth-config', authFile, '--ledger', join(dir, 'go.wal'), '--listen', `127.0.0.1:${goPort}`, '--upstream', upstream + '/chat/completions',
-    ...(semantic === 'disabled' ? [] : ['--native-semantics', '--semantic-small', config.semanticRouter.httpJson.url])], {
+  const goArgs = ['--lab', ...(nodeCostObservation ? ['--node-cost-observation'] : []), ...(nativeFront ? ['--public-listen', `127.0.0.1:${publicPort}`, '--node-origin', nodeBase] : []), '--runtime', '--runtime-config', snapshot, '--auth-config', authFile, '--ledger', join(dir, 'go.wal'), '--listen', `127.0.0.1:${goPort}`, '--upstream', upstream + '/chat/completions',
+    ...(semantic === 'disabled' ? [] : ['--native-semantics', '--semantic-small', config.semanticRouter.httpJson.url])];
+  const goEnv = {
     AMR_GO_EDGE_URL: nodeBase + '/internal/v1/go-events', AMR_GO_EDGE_TOKEN: edgeToken,
     AMR_GO_SEMANTIC_BUCKET_SECRET: semanticSecret
-  });
+  };
+  let go = start(binary, goArgs, goEnv);
   await healthy(goBase, go);
-  const node = start(process.execPath, ['src/server.mjs'], { HOST: '127.0.0.1', PORT: String(nodePort), CONFIG_PATH: configFile,
+  const nodeEnv = { HOST: '127.0.0.1', PORT: String(nodePort), CONFIG_PATH: configFile,
     AMR_TEST_SHUTDOWN_IPC: nativeFront ? '1' : '0', AMR_GO_NATIVE_FRONT: nativeFront ? '1' : '0', AMR_GO_CHAT_URL: goBase + '/v1/chat/completions', AMR_GO_EDGE_TOKEN: edgeToken, AMR_GO_ADMIN_URL: goBase,
     AMR_GO_ADMIN_TOKEN: admin, AMR_GO_RUNTIME_CONFIG: snapshot, ROUTER_KEY_MODE: 'strict', ROUTER_ACCESS_KEY: access,
     UPSTREAM_BASE_URL: upstream, MAAS_BASE_URL: upstream, UPSTREAM_API_KEY: provider, MAAS_API_KEY: provider,
     SEMANTIC_BUCKET_SECRET: semanticSecret,
-    ADMIN_TOKEN: admin, METRICS_TOKEN: admin, AMR_COUNTERS_PATH: join(dir, 'counters.json'), JUDGE_SECRET_PATH: join(dir, 'judge-secret.json') });
+    ADMIN_TOKEN: admin, METRICS_TOKEN: admin, AMR_COUNTERS_PATH: join(dir, 'counters.json'), JUDGE_SECRET_PATH: join(dir, 'judge-secret.json') };
+  let node = start(process.execPath, ['src/server.mjs'], nodeEnv);
   await healthy(base, node);
   const callerSession = 'private-session-fixture';
   const headers = { authorization: `Bearer ${access}`, 'content-type': 'application/json', 'x-session-id': callerSession };
@@ -200,6 +217,48 @@ try {
   }
   const noAuth = await fetch(base + '/internal/v1/go-events', { method: 'POST', body: '{}' }); assert.equal(noAuth.status, nativeFront ? 404 : 403);
   const cors = await fetch(base + '/v1/chat/completions', { method: 'OPTIONS', headers: { origin: 'https://outside.example' } }); assert.equal(cors.status, 204);
+  let durableDeliveryRecovery = false;
+  if (deliveryRestart) {
+    const stop = async process => { const end = once(process.child, 'close'); process.child.kill('SIGKILL'); await end; };
+    const queue = async () => (await (await fetch(goBase + '/internal/v1/status', {headers:adminHeaders})).json()).outbox;
+    for(let i=0;i<100 && (await queue()).pending;i++) await sleep(50);
+    assert.equal((await queue()).pending,0);
+    const beforeCost = JSON.parse(await readFile(join(dir,'node-budget.json'),'utf8')).settles;
+    const startTime = Date.now();
+    const waiting = post({messages:[{role:'user',content:'delivery-outage'}]},'edge-outage');
+    await outageEntered.promise;
+    await stop(node);
+    outageRelease.resolve();
+    const delivered = await waiting; assert.equal(delivered.status,200); await delivered.text();
+    const clientDuration = Date.now()-startTime;
+    const spool = join(dir,'go.wal.outbox');
+    const queued = (await readdir(spool)).filter(x=>x.endsWith('.evt'));
+    assert.equal(queued.length,1);
+    const savedEvent = await readFile(join(spool,queued[0]));
+    assert.ok(!savedEvent.includes(Buffer.from('delivery-outage')));
+    await stop(go);
+    go=start(binary,goArgs,goEnv);await healthy(goBase,go);
+    node=start(process.execPath,['src/server.mjs'],nodeEnv);await healthy(nodeBase,node);
+    for(let i=0;i<100 && (await queue()).pending;i++) await sleep(50);
+    assert.equal((await queue()).pending,0);
+    let recovered = (await records('decisions-')).filter(r=>r.request?.requestId==='edge-outage');
+    assert.equal(recovered.length,1);
+    assert.ok(recovered[0].outcome.completionLatencyMs<=clientDuration+100,'queue delay contaminated business latency');
+    assert.equal(seen.filter(r=>!r.judge&&r.content==='delivery-outage').length,1,'recovery called the provider twice');
+    const cost = JSON.parse(await readFile(join(dir,'node-budget.json'),'utf8')).settles;
+    assert.equal(cost,beforeCost+1);
+    // Re-deliver an acknowledged event after both processes restart, simulating
+    // a surviving sender copy after its receiver committed but the ack was lost.
+    await stop(go);await stop(node);
+    await writeFile(join(spool,queued[0]),savedEvent,{mode:0o600});
+    go=start(binary,goArgs,goEnv);await healthy(goBase,go);
+    node=start(process.execPath,['src/server.mjs'],nodeEnv);await healthy(nodeBase,node);
+    for(let i=0;i<100 && (await queue()).pending;i++) await sleep(50);
+    assert.equal((await queue()).pending,0);
+    recovered=(await records('decisions-')).filter(r=>r.request?.requestId==='edge-outage');assert.equal(recovered.length,1);
+    assert.equal(JSON.parse(await readFile(join(dir,'node-budget.json'),'utf8')).settles,cost);
+    durableDeliveryRecovery=true;
+  }
   let gracefulNativeDrain = false, gracefulGoDrain = false;
   if (goShutdown) {
     delayNextClassifier = true;
@@ -242,13 +301,13 @@ try {
     for (const suffix of ['', '.events.jsonl']) assert.equal((await stat(join(dir, 'go.wal' + suffix))).size, 0);
     assert.equal(await readFile(join(dir, 'go.wal.node-observation'), 'utf8'), 'AMR_NODE_COST_OBSERVATION_V1\n');
   }
-  const result = { experiment: nativeFront ? 'go-native-front-node-events' : 'real-node-go-edge', nativeFront, nodeCostObservation, gracefulNativeDrain, gracefulGoDrain, passed: true, requests: requests.length + 1 + (nativeFront ? 1 : 0),
+  const result = { experiment: nativeFront ? 'go-native-front-node-events' : 'real-node-go-edge', nativeFront, nodeCostObservation, gracefulNativeDrain, gracefulGoDrain, durableDeliveryRecovery, passed: true, requests: requests.length + 1 + (nativeFront ? 1 : 0) + (deliveryRestart ? 1 : 0),
     semantic, classifierCalls, semanticReviewRecords: semanticRows.length,
     judgeQualityRecords: judges.filter(r => r.event === 'quality').length, cancellation: true, fallback: true, configPublication: true, at: new Date().toISOString() };
   await writeFile(resolve(arg('--out') || join(root, 'data/go-migration/edge-integration.json')), JSON.stringify(result, null, 2) + '\n');
   console.log(JSON.stringify(result));
 } finally {
-  classifierRelease.resolve();
+  classifierRelease.resolve(); outageRelease.resolve();
   for (const child of children.reverse()) if (child.exitCode === null && child.signalCode === null) { const done = once(child, 'close'); child.kill(); await done; }
   mock.closeAllConnections(); await new Promise(r => mock.close(r));
   assert.ok(resolve(dir).startsWith(join(root, 'data/go-migration') + sep));

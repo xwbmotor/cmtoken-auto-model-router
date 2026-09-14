@@ -87,6 +87,7 @@ func (p RuntimePolicy) limit() int64 {
 }
 
 type runtimeState struct {
+	outbox              *edgeOutbox
 	nodeCostObservation bool
 	rateLimiter         tenantRateLimiter
 	ledger              *ledger.Ledger
@@ -148,4 +149,12 @@ func (s *runtimeState) releaseCost(id string) error {
 		return nil
 	}
 	return s.ledger.Release(id)
+}
+
+func (r *runtimeState) outboxSnapshot() map[string]any {
+	if r.outbox == nil {
+		return map[string]any{"enabled": false}
+	}
+	pending, bytes, failures, blocked := r.outbox.status()
+	return map[string]any{"enabled": true, "pending": pending, "bytes": bytes, "deliveryFailures": failures, "blocked": blocked}
 }

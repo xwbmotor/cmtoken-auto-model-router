@@ -1,10 +1,10 @@
 name: Go core isolated deployment
 on:
   push:
-    branches: [codex/go-core-migration]
-    paths: ['go-core/**', 'src/**', 'config/**', '.github/workflows/go-core-deployment.yml']
+    branches: [master, codex/go-core-migration]
+    paths: ['go-core/**', 'src/**', 'config/**', 'Dockerfile*', 'docker-compose.prod.yml', '.github/workflows/go-core-deployment.yml']
   pull_request:
-    paths: ['go-core/**', '.github/workflows/go-core-deployment.yml']
+    paths: ['go-core/**', 'src/**', 'config/**', 'Dockerfile*', 'docker-compose.prod.yml', '.github/workflows/go-core-deployment.yml']
   workflow_dispatch:
 permissions:
   contents: read
