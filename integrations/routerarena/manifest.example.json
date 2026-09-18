@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "amr-smoke",
+  "split": "smoke",
+  "autoModel": "cmtoken-auto",
+  "policyRevision": "REPLACE_WITH_FROZEN_GO_POLICY_REVISION",
+  "routerArenaCommit": "cff9659dd6a3a07815f4842fcdadea5a597a1df1",
+  "maxRequests": 3,
+  "maxTokens": 2048,
+  "timeoutMs": 90000,
+  "models": [
+    {"id":"deepseekv4-flash","arenaId":"deepseekv4-flash","responseIds":["REPLACE_WITH_VERIFIED_RESPONSE_MODEL"],"identityVerified":false},
+    {"id":"qwen36-35b","arenaId":"qwen36-35b","responseIds":["REPLACE_WITH_VERIFIED_RESPONSE_MODEL"],"identityVerified":false},
+    {"id":"Qwen3.8-27B","arenaId":"Qwen3.8-27B","responseIds":["REPLACE_WITH_VERIFIED_RESPONSE_MODEL"],"identityVerified":false}
+  ]
+}

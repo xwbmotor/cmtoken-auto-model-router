@@ -44,6 +44,8 @@ sudo bash install.sh check --root /opt/amr
 
 路由质量取决于模型池、评分来源和真实业务数据。仓库提供离线比较与学习工具，但尚未证明学习策略的生产收益。[评测说明](docs/evaluation-integrity.md)解释了不同测试能支持什么结论。
 
+[RouterArena 接入](integrations/routerarena/README.md)提供公开评测所需的真实请求采集和文件导出。当前完成本地联调，尚未运行正式题集或取得榜单成绩。
+
 ## 接入示例
 
 以下请求会调用真实上游。`MAAS_KEY` 是调用方的 MaaS 凭证，地址替换为实际服务地址：

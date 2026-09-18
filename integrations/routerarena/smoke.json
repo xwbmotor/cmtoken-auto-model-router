@@ -1,0 +1,5 @@
+[
+  {"global index":"amr-local-1","prompt":"计算 17 + 25，只输出结果。"},
+  {"global index":"amr-local-2","prompt":"将这句话翻译成英文：请在周五之前提交报告。"},
+  {"global index":"amr-local-3","prompt":"写一个 Python 函数，返回列表中所有偶数的和。"}
+]
