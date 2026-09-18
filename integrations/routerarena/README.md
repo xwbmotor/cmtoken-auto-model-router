@@ -2,7 +2,7 @@
 
 此工具通过 Auto 的真实 `/v1/chat/completions` 入口采集选模与回答，导出 RouterArena 的预测文件。它不修改生产配置，不自行判分，也不自动上传结果。
 
-当前状态：已提供预检、真实入口采集、证据记录和预测文件导出。验证使用本地模拟服务和自编样例；没有运行正式题集，没有榜单成绩。中台模型身份、公开模型名称及计价口径仍需核对，示例配置故意保持未验证状态。
+当前状态：已提供预检、真实入口采集、证据记录和预测文件导出，并完成三条自编样例的真实联调；没有运行正式题集，没有榜单成绩。模型名称已由使用方确认，公开模型登记和榜单计价口径仍待落实，通用示例配置保持未验证状态。联调记录见 [2026-09-19 验证结果](smoke-2026-09-19.md)。
 
 本次对接固定到官方提交 `cff9659dd6a3a07815f4842fcdadea5a597a1df1`，并用其原始 `check_config_models` 和 `check_prediction_fields(check_generated_result=True)` 检查了模拟导出文件，均通过。这仅验证格式契约，不代表完整题集、模型身份、价格或参榜资格通过审核。
 
@@ -20,7 +20,7 @@ node scripts/routerarena.mjs --manifest integrations/routerarena/manifest.exampl
 
 | 字段 | 含义 |
 |---|---|
-| `policyRevision` | 冻结的 Go 策略 revision，与响应头 `X-Router-Policy-Revision` 完全一致；不是应用版本号 |
+| `policyRevision` | 管理接口 `/admin/api/go-core` 的 `configRevision`，与聊天响应头 `X-Router-Policy-Revision` 完全一致；保留字符串内的双引号。不要使用该管理接口的 `revision`，它是另一份运行快照的指纹，也不要填应用版本号 |
 | `routerArenaCommit` | 实际使用的 RouterArena 仓库完整提交 SHA；示例固定为本次核对的 `cff9659dd6a3a07815f4842fcdadea5a597a1df1` |
 | `models[].id` | Auto 中台模型 ID |
 | `models[].arenaId` | 经核实的 RouterArena 模型名；不能把不同权重或版本改成相似名称 |
