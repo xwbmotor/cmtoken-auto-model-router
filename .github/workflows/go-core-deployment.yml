@@ -41,3 +41,4 @@ jobs:
           path: |
             data/go-deployment/evidence/
             data/go-native-deployment/
+          retention-days: 14

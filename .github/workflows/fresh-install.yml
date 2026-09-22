@@ -50,8 +50,10 @@ jobs:
           name: amr-installation
           compression-level: 0
           path: data/distribution/*.tar.gz*
+          retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: fresh-install-evidence
           path: data/fresh-install-evidence/
+          retention-days: 14
