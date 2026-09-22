@@ -56,6 +56,22 @@ node scripts/routerarena.mjs --manifest data/arena-manifest.json --cases integra
 
 采集耗时是完整回答耗时，不能填成榜单的纯路由时延。usage 只覆盖最终回答，不保证涵盖失败尝试、分类和异步 Judge；提交前必须从日志对账这些费用，并按维护方认可方式披露。思考 Token 是否已包含于 `completion_tokens` 也须核实，不能重复累计。
 
+## 对账完整费用
+
+每次采集结束会生成 `cost-ledger.template.json`，包含所有已发起请求，包括失败或结果未知的请求。复制为独立文件后，依据调用日志及计费记录补齐。
+
+- `generation` 包含首次生成及所有失败、重试尝试，每次用独立 `id`；`classifier`、`review`、`probe`、`tool` 分别记录辅助费用。公共补测按事先确定的方法分摊，分摊依据写入引用，不重复记整笔费用。
+- 每条费用填写 `id`、`requestId`、`kind`、`amount`、`currency`、`basis`、`evidenceRef`。`basis` 区分账单结算 `billed`、usage乘单价 `usage_priced`、估算 `estimated` 和未知 `unknown`；未知金额必须为 `null`。
+- 每个请求各类费用的 `coverage` 填写 `status` 和 `evidenceRef`。核对全部对应调用后才标记 `complete`；未启用的辅助流程可填 `not_applicable` 并引用配置依据。未补齐的保持 `pending`。引用使用受控记录编号，不填写凭据或正文。
+
+```sh
+node scripts/routerarena-costs.mjs data/arena-run/evidence.jsonl data/arena-cost-ledger.json data/arena-cost-report.json
+```
+
+此命令只读取本地文件，不调用模型。相同ID的完全相同费用去重，冲突记录、跨币种混算及不适用类别下的调用会被拒绝。覆盖不足时总费用为 `null`，单列已知小计；完整返回请求的平均费用包含失败请求的开销，但不称为“每成功任务成本”。覆盖状态来自提供的对账依据，工具不能自动证明源日志完整。
+
+榜单美元计价与本报告独立，不能将人民币费用直接填为榜单cost。公开模型登记、版本对应及认可单价仍须落实，不以名称相似自动完成登记。
+
 ## 放入 RouterArena 评测
 
 官方入口：<https://github.com/RouteWorks/RouterArena>。先将该仓库固定到 manifest 中的提交，再完成模型名称和美元单价登记。新增中台模型或私有部署的接纳、版本对应关系与价格口径，需要由维护方确认。

@@ -3,6 +3,7 @@ import { readFile, writeFile, mkdir, open } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
+import { costTemplate } from './routerarena-costs.mjs';
 
 export const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const requireValue = (ok, message) => { if (!ok) throw new Error(message); };
@@ -120,6 +121,8 @@ export async function run({ manifest, dataset, out, execute = false, endpoint, k
     costScope: 'final-completion-usage-only; reconcile retries and classifier/review calls separately',
     latencyScope: 'end-to-end completion, not router-only latency' };
   await writeFile(join(out, 'summary.json'), JSON.stringify(summary, null, 2));
+  const evidenceRows = (await readFile(join(out, 'evidence.jsonl'), 'utf8')).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+  await writeFile(join(out, 'cost-ledger.template.json'), JSON.stringify(costTemplate(evidenceRows), null, 2));
   if (!failure) {
     const suffix = manifest.split === 'robustness' ? '-robustness' : '';
     await writeFile(join(out, `${manifest.name}${suffix}.json`), JSON.stringify(predictions, null, 2));

@@ -195,6 +195,9 @@ export class LatencyObservatory {
     const source = filters.source === 'probe' ? 'probe' : 'business';
     const now = this.now();
     const local = at => new Date(at + 8 * HOUR);
+    let latestBusinessAt = 0;
+    const modelIds = new Set(models.map(m => m.id));
+    for (const bucket of this.hours.values()) if (bucket.source === 'business' && modelIds.has(bucket.model) && bucket.stats.lastAt <= now) latestBusinessAt = Math.max(latestBusinessAt, bucket.stats.lastAt);
     const today = local(now).toISOString().slice(0, 10);
     const matches = bucket => bucket.source === source && ['stream', 'reasoning', 'inputBand', 'outputBand'].every(key => !filters[key] || filters[key] === 'all' || String(bucket[key]) === filters[key]);
     const rows = models.map(model => {
@@ -214,6 +217,7 @@ export class LatencyObservatory {
       return { model: model.id, name: model.name || model.id, recent5: view(recent5, metric), recent30: view(recent30, metric), today: view(day, metric), hours: hours.map((s, hour) => ({ hour, ...view(s, metric) })) };
     });
     return { at: new Date(now).toISOString(), timeZone: 'Asia/Shanghai', retentionDays: 14,
+      latestBusinessAt: latestBusinessAt ? new Date(latestBusinessAt).toISOString() : null,
       quantileMethod: 'histogram_upper_bound', windowResolutionMs: MINUTE, metric, source,
       storage: { ...this.storage, minuteBuckets: this.minutes.size, hourBuckets: this.hours.size, maxBucketsPerTier: this.maxBuckets }, rows, shadow: { ...this.shadow }, evidenceCoverage: this.evidenceCoverage() };
   }

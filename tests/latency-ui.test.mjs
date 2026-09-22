@@ -36,6 +36,18 @@ with sync_playwright() as pw:
     page.evaluate("document.getElementById('insights').hidden=false;document.dispatchEvent(new Event('workspace:navigate'))")
     expect(page.locator('.latency-model-card')).to_have_count(1)
     expect(page.locator('.latency-notice')).to_contain_text('影子评分未启用')
+    expect(page.locator('.latency-coverage')).to_contain_text('暂无真实业务记录')
+    expect(page.locator('.latency-coverage')).to_contain_text('同步状态待核对')
+    page.evaluate("window.reply.policy={version:'0.14.10',revision:'fixture-revision',synchronized:true};window.reply.latestBusinessAt='2026-09-08T08:00:00Z';window.reply.evidenceCoverage={requests:3,anyReady:2,allReady:1,models:{a:{ready:2,insufficient:1},b:{stale:2,no_data:1}}}")
+    page.get_by_role('button',name='刷新数据',exact=True).click()
+    expect(page.locator('.latency-coverage')).to_contain_text('配置版本 0.14.10 · 已同步')
+    expect(page.locator('.latency-coverage')).to_contain_text('主要缺口：计时过期 2 次')
+    page.get_by_text('查看各模型证据与配置指纹',exact=True).click()
+    expect(page.locator('.latency-coverage details')).to_contain_text('fixture-revision')
+    page.evaluate("window.reply.latestBusinessAt='2026-09-08T06:00:00Z';window.reply.policy.synchronized=false")
+    page.get_by_role('button',name='刷新数据',exact=True).click()
+    expect(page.locator('.latency-coverage')).to_contain_text('尚未同步')
+    expect(page.locator('.latency-coverage')).to_contain_text('最近30分钟没有新业务记录')
     expect(page.locator('.latency-operations')).to_contain_text('提前截断')
     expect(page.locator('.latency-operations')).to_contain_text('恢复失败')
     expect(page.locator('.latency-model-card img')).to_have_count(0)
@@ -57,6 +69,10 @@ with sync_playwright() as pw:
         page.set_viewport_size({'width':width,'height':900})
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'page overflows horizontally'
         assert page.locator('.latency-table-wrap').evaluate('(el)=>el.scrollWidth>el.clientWidth'), 'table should scroll internally'
+        if width == 1440:
+            evidence_dir=Path.cwd()/'data'/'weekly-improvements'
+            evidence_dir.mkdir(parents=True,exist_ok=True)
+            page.screenshot(path=str(evidence_dir/'latency-desktop.png'),full_page=True)
     page.evaluate('window.empty=true')
     page.get_by_role('button',name='刷新数据',exact=True).click()
     expect(page.locator('.latency-empty')).to_contain_text('暂无匹配样本')

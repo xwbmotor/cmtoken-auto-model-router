@@ -70,16 +70,28 @@ export function setupLatencyPanel({ api, notify = () => {} }) {
   function render() {
     metricNote.textContent = `${METRIC_NOTES[controls.metric.value]} 分位数只统计成功样本，使用直方图桶上界近似；P95 需至少 40 个有效样本。失败与取消另列。输入按 token 数分组（短 ≤1024、中 ≤8192、长 >8192）；输出按预算上限分组，并非实际输出长度。全部长度 / 模式可能混合不同工作负载。`;
     cards.replaceChildren(); table.replaceChildren();
-    if (!data) return;
+    if (!data) { coverage.replaceChildren(node('p', 'latency-note', '等待获取证据状态。')); return; }
     notice.textContent = `${data.mode === 'off' ? '影子评分未启用。' : '影子评分只记录候选变化，不改变实际选模。'}当前质量未重新评测，时延改善不代表质量提升。`;
     const rows = Array.isArray(data.rows) ? data.rows : [];
     const evidence = data.evidenceCoverage || {}, n = num(evidence.requests);
     const rate = count => n ? `${(num(count) / n * 100).toFixed(1)}%` : '暂无评估';
-    coverage.replaceChildren(node('h3', '', '时延决策证据覆盖率'),
+    const policy = data.policy || {}, lastBusiness = Date.parse(data.latestBusinessAt), observedAt = Date.parse(data.at);
+    const freshness = !Number.isFinite(lastBusiness) ? '暂无真实业务记录' : observedAt - lastBusiness > 30 * 60000 ? '最近30分钟没有新业务记录' : '最近30分钟有业务记录';
+    const sync = policy.synchronized === true ? '已同步' : policy.synchronized === false ? '尚未同步' : '同步状态待核对';
+    coverage.replaceChildren(node('h3', '', '当前证据状态'),
+      node('p', '', `配置版本 ${policy.version || '未知'} · ${sync} · ${freshness}`),
+      node('p', 'latency-note', `最近真实业务记录：${stamp(data.latestBusinessAt)}。独立于下方筛选，包含失败记录，不代表已有足够的成功计时。`),
       node('p', '', `最近 30 分钟已评估 Auto 请求 ${n} · 至少一个合格候选有可用证据 ${rate(evidence.anyReady)} · 全部合格候选有可用证据 ${rate(evidence.allReady)}`),
       node('p', 'latency-note', `按请求当时的同条件证据统计，独立于下方热力图筛选；不表示已切换模型或取得收益。本进程统计起点 ${stamp(evidence.startedAt)}，重启后重新积累，窗口按分钟近似。`));
     const labels = { ready: '可用', no_data: '无同条件计时', insufficient: '样本不足', stale: '计时过期', unreliable: '成功率不足' };
-    for (const [model, counts] of Object.entries(evidence.models || {})) coverage.append(node('p', '', `${model}：${Object.entries(counts).map(([key, value]) => `${labels[key] || key} ${value}`).join(' · ')}（候选评估次数）`));
+    const reasons = {};
+    for (const counts of Object.values(evidence.models || {})) for (const [key, value] of Object.entries(counts)) if (key !== 'ready') reasons[key] = (reasons[key] || 0) + num(value);
+    const leading = Object.entries(reasons).sort((a,b) => b[1]-a[1]);
+    coverage.append(node('p', '', !n ? '尚无候选证据评估，请等待 Auto 请求。' : leading.length ? `主要缺口：${leading.map(([k,v]) => `${labels[k] || k} ${v} 次`).join('；')}（候选评估次数，非请求数）。` : '当前已记录的候选评估未发现证据缺口；不代表质量或收益已经验证。'));
+    const evidenceDetails = node('details'); evidenceDetails.append(node('summary', '', '查看各模型证据与配置指纹'));
+    evidenceDetails.append(node('p','latency-note',`配置指纹：${policy.revision || '未知'}`));
+    for (const [model, counts] of Object.entries(evidence.models || {})) evidenceDetails.append(node('p', '', `${model}：${Object.entries(counts).map(([key, value]) => `${labels[key] || key} ${value}`).join(' · ')}（候选评估次数）`));
+    coverage.append(evidenceDetails);
     heatNote.textContent = `最近 ${num(data.retentionDays) || 14} 天按所选日期类型汇总至 0–23 时；不是今天的逐小时实况。时间均为 Asia/Shanghai。工作日按星期划分，不含节假日调休。`;
     for (const row of rows) {
       const card = node('article','latency-model-card'), s = row[windowSelect.value];

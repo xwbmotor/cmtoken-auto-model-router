@@ -1,4 +1,5 @@
 .latency-panel{min-width:0;max-width:100%;overflow:hidden}
+.latency-coverage{overflow-wrap:anywhere;font-size:13px;line-height:1.7}.latency-coverage summary{cursor:pointer}.latency-coverage summary:focus-visible{outline:2px solid #4969b4;outline-offset:3px}
 .latency-panel h3{font-size:15px;margin:22px 0 10px}
 .latency-notice{padding:12px 14px;border:1px solid #dbe4fb;background:#f1f5ff;border-radius:8px;color:#3e547d;font-size:12px;line-height:1.7;margin:16px 0}
 .latency-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px;margin:18px 0 10px}

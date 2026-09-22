@@ -4274,6 +4274,8 @@ function subCategoryOf(task, subTask) {
   if (req.method === 'GET' && url.pathname === '/admin/api/latency') {
     const budget = budgetTracker.snapshot();
     return json(res, 200, { ...latencyStore.dashboard(config.models, Object.fromEntries(url.searchParams)), mode: latencySettings().mode,
+      policy: { version: config.version, revision: getConfigRevision(config), core: goCoreEdge ? 'go' : 'node',
+        synchronized: goCoreEdge ? (Date.now() - goRuntimeSnapshot.checkedAt <= 5000 && !goRuntimeSnapshot.error ? goRuntimeSnapshot.configRevision === getConfigRevision(config) : null) : true },
       probe: { ...latencyProbes.snapshot(), actualCostYuan: budget.probeActualCostYuan || 0, estimatedCostYuan: budget.probeEstimatedCostYuan || 0 } });
   }
   if (req.method === 'GET' && url.pathname === '/admin/api/operations') {

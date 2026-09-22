@@ -7,7 +7,7 @@
 # 重建 classifier 时须同时重建依附其网络命名空间的 Node/Go。
 services:
   auto-model-router:
-    image: cmt-auto-model-router:0.14.9
+    image: cmt-auto-model-router:0.14.10
     container_name: auto-model-router
     restart: unless-stopped
     network_mode: service:classifier
@@ -60,7 +60,7 @@ services:
       retries: 3
 
   classifier:
-    image: cmt-amr-classifier:0.14.9  # 与本次发布源码一同构建，OCI revision 绑定发布提交
+    image: cmt-amr-classifier:0.14.10  # 与本次发布源码一同构建，OCI revision 绑定发布提交
     container_name: amr-classifier
     restart: unless-stopped
     hostname: classifier
@@ -73,7 +73,7 @@ services:
       options: { max-size: "20m", max-file: "2" }
 
   go-core:
-    image: cmt-amr-go:0.14.9
+    image: cmt-amr-go:0.14.10
     container_name: amr-go-core
     restart: unless-stopped
     network_mode: service:classifier

@@ -10,7 +10,7 @@ on:
         type: string
         required: true
 permissions:
-  contents: read
+  contents: write
 jobs:
   release:
     # Register the workflow on branch pushes; packaging remains explicit and tagged.
@@ -71,6 +71,20 @@ jobs:
             sha256sum "$archive" > "$archive.sha256"
           done
           docker image inspect "${images[@]}" > data/release-images/image-inspect.json
+      - name: Preserve sanitized evidence with the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          revision=$(git rev-parse HEAD)
+          asset="release-evidence-${RELEASE_TAG}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          node scripts/release-evidence.mjs "$RELEASE_TAG" "$revision" "$RUNNER_TEMP/$asset"
+          # Keep a new release private as a draft until the normal publishing step.
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --notes '正式发布验收摘要。部署结果另行记录。'
+          fi
+          # Unique run/attempt names preserve earlier evidence; no --clobber.
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/$asset"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

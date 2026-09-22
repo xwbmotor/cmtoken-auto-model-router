@@ -9,6 +9,13 @@ const NOW = Date.parse('2026-09-08T04:00:20Z'), MIN = 60000;
 const ctx = (overrides = {}) => ({ model: 'm', scope: 'tenant-upstream', inference: 'mode-v1', source: 'business',
   stream: true, reasoning: 'off', inputBand: 'short', outputBand: 'short', ...overrides });
 const sample = (overrides = {}) => ({ ...ctx(), at: NOW, ok: true, upstreamTtftMs: 100, ttftMs: 150, ...overrides });
+test('latest business record ignores probe filters and probe freshness', () => {
+  const o = new LatencyObservatory({ now: () => NOW });
+  assert.equal(o.dashboard([{id:'m'}]).latestBusinessAt, null);
+  o.record(sample({at:NOW-60000,ok:false}));o.record(sample({source:'probe'}));
+  assert.equal(o.dashboard([{id:'m'}],{source:'probe'}).latestBusinessAt,new Date(NOW-60000).toISOString());
+  assert.equal(o.dashboard([{id:'other'}]).latestBusinessAt,null);
+});
 function make(options = {}) { return new LatencyObservatory({ now: () => NOW, ...options }); }
 
 test('coverage counts requests separately from eligible candidate reasons and expires', () => {
