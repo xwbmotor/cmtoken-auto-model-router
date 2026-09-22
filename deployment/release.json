@@ -1,33 +1,33 @@
 {
-  "version": "0.14.9",
-  "revision": "e875a466813d0edd4ca7e9b9dac3b4fc1eb8fb4c",
+  "version": "0.14.10",
+  "revision": "2fc4ea1e6f991a0e94c5d09d019d2d9cbbdc213f",
   "architecture": "amd64",
-  "sourceRunId": 34859567360,
-  "sourceArchiveSha256": "c22d6b767828a3ee873afb184ea1741dc3a31b17f64e29fc27f360dc6111501d",
-  "formalValidation": "https://github.com/xwbmotor/cmtoken-auto-model-router/actions/runs/34859567360",
+  "sourceRunId": 35684311107,
+  "sourceArchiveSha256": "feb3737fc68c91f95b103394fec217b9ce8d37a3ee5ff7860ee77a6890c70e2a",
+  "formalValidation": "https://github.com/xwbmotor/cmtoken-auto-model-router/actions/runs/35684311107",
   "images": {
     "cmt-auto-model-router": {
-      "archive": "cmt-auto-model-router-0.14.9.tar.gz",
-      "sha256": "b82b4d805dfd1bf1b1e4af00daba740c46bce0bf3b9de6e94aeea0a4874722d1",
+      "archive": "cmt-auto-model-router-0.14.10.tar.gz",
+      "sha256": "11b7c08e55926bb2ce8c2339bf877a171313dbd0dbcf2174ccd5173e164ac090",
       "ids": [
-        "sha256:4073bb20b3643ed48413decbbf7126d5095a57c7e87c4f37553ea4504afa41d8",
-        "sha256:db8377f6633d90fa18cc0e920896abbb158b12788b1e156e7712ae6c4156dd53"
+        "sha256:2115acb7b96f61e3ae815b426b04d9109fc8c29cd561bcf2f32e093fa381e24a",
+        "sha256:2b66951664dd7a5b52e22c7c43eddb138bb39ece4a0af5dba286f30832956cd1"
       ]
     },
     "cmt-amr-classifier": {
-      "archive": "cmt-amr-classifier-0.14.9.tar.gz",
-      "sha256": "c1d8388e046d242ec5133a2a0c236f3683ebf844658f1bfcc5de2d02181e8e61",
+      "archive": "cmt-amr-classifier-0.14.10.tar.gz",
+      "sha256": "c36bc56ae6c91de10ce8b6a8a7c7ef5f3df5ed77f40d419d7772e0ecdbfe4ff6",
       "ids": [
-        "sha256:681fd1680872aaf295ec707811ce545491148565c1abf062bb6c67396918f033",
-        "sha256:fe0d683f7e1e7202f4ccf4cdf9d6b0297255c102b81dbfbdde9c7f49a0df93b0"
+        "sha256:9b6058ce24987d665b28121f2104e255141a1417ded243a606949caf37fe33f0",
+        "sha256:b6c13eff7fc90010f4298de1bf0208059db6a5524102d720035e2ef612e0a324"
       ]
     },
     "cmt-amr-go": {
-      "archive": "cmt-amr-go-0.14.9.tar.gz",
-      "sha256": "d3e5a1844064992acad07a6002e77a9524d8bb5ae646de4945a4e7f44f6a22a9",
+      "archive": "cmt-amr-go-0.14.10.tar.gz",
+      "sha256": "d6897b2ad98deb9ed59c4c500a217641158cb8f7ffcb11f8c4d7406ae53f7254",
       "ids": [
-        "sha256:438da10b1419426d63df5f91643ae127b95e8e886daf04a0fd96e9497c13ec9e",
-        "sha256:94d875cfc446e9ac56b208f0bf8d91e7fba8472e2f4028847f9a39e605a15842"
+        "sha256:a999d374a4da046991feb5faf648558ec9e437a340044229d40985ddf3ce4afb",
+        "sha256:fd8357ee85481200ef2da511bffa3822b34b9d8c58aa8ddeac2becdabb609083"
       ]
     }
   }
