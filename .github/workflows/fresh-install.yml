@@ -66,7 +66,7 @@ jobs:
             exit 0
           fi
           # 已存在的资产不覆盖(--clobber 仅对本次新建的文件),保持文档记录的 SHA256 有效
-          existing=$(gh release view "v$version" --json assets -q '.[].name')
+          existing=$(gh release view "v$version" --json assets -q '.assets[].name')
           shopt -s nullglob
           for f in data/distribution/*.tar.gz data/distribution/*.tar.gz.sha256; do
             base=$(basename "$f")
