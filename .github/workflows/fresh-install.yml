@@ -5,7 +5,7 @@ on:
     paths: ['deployment/**', '.github/workflows/fresh-install.yml']
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write  # 上传安装包到 Release assets
   actions: read
 jobs:
   fresh-install:
@@ -36,7 +36,16 @@ jobs:
               z.extractall('data/fresh-bundle/images')
           PY
           else
-            gh run download "$source_run" --name release-images --dir data/fresh-bundle/images
+            # 镜像 tar.gz 已由 release-validation workflow 挂到 Release assets(cmt-* 前缀,避开 amr-offline 安装包)
+            gh release download "v$version" --dir data/fresh-bundle/images --pattern "cmt-*.tar.gz" --clobber
+            python3 - <<'PY'
+          import hashlib, json, pathlib
+          release = json.loads(pathlib.Path('deployment/release.json').read_text())
+          for image in release['images'].values():
+              p = pathlib.Path('data/fresh-bundle/images')/image['archive']
+              with p.open('rb') as f:
+                  assert hashlib.file_digest(f, 'sha256').hexdigest() == image['sha256'], image['archive']
+          PY
           fi
       - name: Install with no host Python or Node, then verify JSON, SSE and restart
         run: sudo -E python3 deployment/offline/ci_shell.py
@@ -45,12 +54,28 @@ jobs:
           node --input-type=module -e "import {readFileSync} from 'node:fs'; import {validateConfig} from './src/config.mjs'; validateConfig(JSON.parse(readFileSync('config/router.json','utf8')));"
           version=$(python3 -c "import json;print(json.load(open('deployment/release.json'))['version'])")
           python3 deployment/offline/build_bundle.py --images data/fresh-bundle/images --out "data/distribution/amr-offline-$version"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: amr-installation
-          compression-level: 0
-          path: data/distribution/*.tar.gz*
-          retention-days: 7
+      - name: Publish the verified installation archive to the release
+        # 安装包挂到 Release(不计入 Actions 存储额度),替代原 amr-installation artifact;
+        # 部署侧可直接从 Release 下载
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 -c "import json;print(json.load(open('deployment/release.json'))['version'])")
+          if ! gh release view "v$version" >/dev/null 2>&1; then
+            echo "WARN: release v$version not found, skip publishing (verification still passed)"
+            exit 0
+          fi
+          # 已存在的资产不覆盖(--clobber 仅对本次新建的文件),保持文档记录的 SHA256 有效
+          existing=$(gh release view "v$version" --json assets -q '.[].name')
+          shopt -s nullglob
+          for f in data/distribution/*.tar.gz data/distribution/*.tar.gz.sha256; do
+            base=$(basename "$f")
+            if echo "$existing" | grep -qx "$base"; then
+              echo "skip existing asset: $base"
+            else
+              gh release upload "v$version" "$f"
+            fi
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

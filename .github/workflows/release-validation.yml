@@ -71,6 +71,17 @@ jobs:
             sha256sum "$archive" > "$archive.sha256"
           done
           docker image inspect "${images[@]}" > data/release-images/image-inspect.json
+      - name: Publish verified images as release assets
+        # 镜像归档挂到 Release(不计入 Actions 存储额度),替代原 release-images artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --notes '正式发布验收摘要。部署结果另行记录。'
+          fi
+          for f in data/release-images/*; do gh release upload "$RELEASE_TAG" "$f" --clobber; done
       - name: Preserve sanitized evidence with the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -91,9 +102,3 @@ jobs:
           name: release-validation-evidence
           path: reports/release-${{ inputs.tag }}-*.json
           retention-days: 14
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: release-images
-          compression-level: 0
-          path: data/release-images/
-          retention-days: 7
