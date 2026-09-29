@@ -76,12 +76,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_REVISION: ${{ github.workflow_sha }}
         run: |
           version=$(node -p 'require("./package.json").version')
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --notes '正式发布验收摘要。部署结果另行记录。'
           fi
-          for f in data/release-images/*; do gh release upload "$RELEASE_TAG" "$f" --clobber; done
+          # Publication policy follows the workflow revision, including when the
+          # validated application tag predates this helper. Keep the tag clean.
+          [[ "$WORKFLOW_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          git show "$WORKFLOW_REVISION:scripts/publish-release-assets.mjs" > "$RUNNER_TEMP/publish-release-assets.mjs"
+          node "$RUNNER_TEMP/publish-release-assets.mjs" "$RELEASE_TAG" data/release-images images
       - name: Preserve sanitized evidence with the release
         env:
           GH_TOKEN: ${{ github.token }}

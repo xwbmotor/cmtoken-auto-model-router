@@ -4,6 +4,11 @@ on:
     branches: [master]
     paths: ['deployment/**', '.github/workflows/fresh-install.yml']
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish verified installation files with immutable checksum checks
+        type: boolean
+        default: false
 permissions:
   contents: write  # 上传安装包到 Release assets
   actions: read
@@ -55,6 +60,7 @@ jobs:
           version=$(python3 -c "import json;print(json.load(open('deployment/release.json'))['version'])")
           python3 deployment/offline/build_bundle.py --images data/fresh-bundle/images --out "data/distribution/amr-offline-$version"
       - name: Publish the verified installation archive to the release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
         # 安装包挂到 Release(不计入 Actions 存储额度),替代原 amr-installation artifact;
         # 部署侧可直接从 Release 下载
         env:
@@ -62,20 +68,10 @@ jobs:
         run: |
           version=$(python3 -c "import json;print(json.load(open('deployment/release.json'))['version'])")
           if ! gh release view "v$version" >/dev/null 2>&1; then
-            echo "WARN: release v$version not found, skip publishing (verification still passed)"
-            exit 0
+            echo "Release v$version must exist before publishing"
+            exit 1
           fi
-          # 已存在的资产不覆盖(--clobber 仅对本次新建的文件),保持文档记录的 SHA256 有效
-          existing=$(gh release view "v$version" --json assets -q '.assets[].name')
-          shopt -s nullglob
-          for f in data/distribution/*.tar.gz data/distribution/*.tar.gz.sha256; do
-            base=$(basename "$f")
-            if echo "$existing" | grep -qx "$base"; then
-              echo "skip existing asset: $base"
-            else
-              gh release upload "v$version" "$f"
-            fi
-          done
+          node scripts/publish-release-assets.mjs "v$version" data/distribution installer
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

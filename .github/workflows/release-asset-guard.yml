@@ -1,0 +1,19 @@
+name: Release attachment guard
+on:
+  push:
+    branches: [master]
+    paths: ['scripts/publish-release-assets.mjs', 'tests/release-assets.test.mjs', '.github/workflows/release*.yml', '.github/workflows/fresh-install.yml']
+  pull_request:
+    paths: ['scripts/publish-release-assets.mjs', 'tests/release-assets.test.mjs', '.github/workflows/release*.yml', '.github/workflows/fresh-install.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - run: node --test tests/release-assets.test.mjs tests/release-evidence.test.mjs
