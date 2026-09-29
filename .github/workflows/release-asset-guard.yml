@@ -2,9 +2,9 @@ name: Release attachment guard
 on:
   push:
     branches: [master]
-    paths: ['scripts/publish-release-assets.mjs', 'tests/release-assets.test.mjs', '.github/workflows/release*.yml', '.github/workflows/fresh-install.yml']
+    paths: ['scripts/*evidence.mjs', 'scripts/publish-release-assets.mjs', 'tests/ci-evidence.test.mjs', 'tests/release-assets.test.mjs', '.github/workflows/*.yml']
   pull_request:
-    paths: ['scripts/publish-release-assets.mjs', 'tests/release-assets.test.mjs', '.github/workflows/release*.yml', '.github/workflows/fresh-install.yml']
+    paths: ['scripts/*evidence.mjs', 'scripts/publish-release-assets.mjs', 'tests/ci-evidence.test.mjs', 'tests/release-assets.test.mjs', '.github/workflows/*.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,4 +16,4 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: '24'
-      - run: node --test tests/release-assets.test.mjs tests/release-evidence.test.mjs
+      - run: node --test tests/release-assets.test.mjs tests/release-evidence.test.mjs tests/ci-evidence.test.mjs

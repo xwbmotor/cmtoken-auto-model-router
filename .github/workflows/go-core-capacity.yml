@@ -17,7 +17,7 @@ on:
         default: smoke
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   equal-quota:
@@ -202,12 +202,13 @@ jobs:
         if: always() && startsWith(inputs.profile, 'edge-observation-')
         run: |
           find data/go-migration -maxdepth 1 -type f \( -name 'capacity-edge-*.json' -o -name 'capacity-edge-*.md' -o -name 'amr-core-linux' \) -print0 | sort -z | xargs -0 -r sha256sum > data/go-migration/capacity-edge-sha256.txt
-      - name: Preserve raw evidence
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
-        with:
-          name: go-core-capacity-evidence
-          path: |
+      - name: Archive verification evidence
+        if: always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_LABEL: go-core-capacity-evidence
+          EVIDENCE_JOB_STATUS: ${{ job.status }}
+          EVIDENCE_PATHS: |
             data/go-migration/capacity-*.json
             data/go-migration/capacity-edge-*.md
             data/go-migration/capacity-isolation-*.md
@@ -217,5 +218,7 @@ jobs:
             data/go-migration/analysis*.txt
             data/go-migration/*-benchmark.log
             data/go-migration/capacity-profile*
-          if-no-files-found: error
-          retention-days: 14
+        run: node scripts/archive-ci-evidence.mjs
+      - name: Record PR evidence scope
+        if: always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+        run: echo "PR verification uses workflow logs; raw evidence is not published to Releases from PR jobs." >> "$GITHUB_STEP_SUMMARY"

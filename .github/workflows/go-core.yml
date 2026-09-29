@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   parity-and-transport:
@@ -96,17 +96,20 @@ jobs:
         # Includes real cookie-authenticated Node config save -> snapshot -> Go.
       - name: Verify management snapshot publication end to end
         run: node go-core/compat/compare-gateways.mjs --binary data/go-migration/amr-core --snapshot --seconds 1 --rounds 1 --concurrency 1 --chunk-ms 40 --out data/go-migration/publication-management.json
-      - name: Preserve verification evidence
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: go-core-migration-evidence
-          path: |
+      - name: Archive verification evidence
+        if: always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_LABEL: go-core-migration-evidence
+          EVIDENCE_JOB_STATUS: ${{ job.status }}
+          EVIDENCE_PATHS: |
             data/go-migration/*.json
             data/go-migration/*.jsonl
             data/go-migration/*.log
-          if-no-files-found: warn
-          retention-days: 14
+        run: node scripts/archive-ci-evidence.mjs
+      - name: Record PR evidence scope
+        if: always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+        run: echo "PR verification uses workflow logs; raw evidence is not published to Releases from PR jobs." >> "$GITHUB_STEP_SUMMARY"
 
   node-regression:
     runs-on: ubuntu-latest

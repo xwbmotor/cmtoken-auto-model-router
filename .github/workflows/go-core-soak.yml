@@ -5,7 +5,7 @@ on:
     paths: ['go-core/**', 'src/go-runtime/**', '.github/workflows/go-core-soak.yml']
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -32,9 +32,19 @@ jobs:
         run: |
           docker compose -f go-core/compose.soak.yml logs --no-color > data/go-soak/evidence/containers.log
           docker compose -f go-core/compose.soak.yml down
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
-        if: always()
-        with: {name: go-core-soak-smoke, path: data/go-soak/evidence/, retention-days: 14}
+      - name: Archive verification evidence
+        if: always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_LABEL: go-core-soak-smoke
+          EVIDENCE_JOB_STATUS: ${{ job.status }}
+          EVIDENCE_PATHS: |
+            data/go-soak/evidence/
+        run: node scripts/archive-ci-evidence.mjs
+      - name: Record PR evidence scope
+        if: always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+        run: echo "PR verification uses workflow logs; raw evidence is not published to Releases from PR jobs." >> "$GITHUB_STEP_SUMMARY"
+
   one-hour:
     needs: smoke
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[soak-hour]')
@@ -62,6 +72,15 @@ jobs:
         run: |
           docker compose -f go-core/compose.soak.yml logs --no-color > data/go-soak/evidence/containers.log
           docker compose -f go-core/compose.soak.yml down
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
-        if: always()
-        with: {name: go-core-soak-hour, path: data/go-soak/evidence/, retention-days: 14}
+      - name: Archive verification evidence
+        if: always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_LABEL: go-core-soak-hour
+          EVIDENCE_JOB_STATUS: ${{ job.status }}
+          EVIDENCE_PATHS: |
+            data/go-soak/evidence/
+        run: node scripts/archive-ci-evidence.mjs
+      - name: Record PR evidence scope
+        if: always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+        run: echo "PR verification uses workflow logs; raw evidence is not published to Releases from PR jobs." >> "$GITHUB_STEP_SUMMARY"

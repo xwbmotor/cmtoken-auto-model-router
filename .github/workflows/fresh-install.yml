@@ -72,9 +72,15 @@ jobs:
             exit 1
           fi
           node scripts/publish-release-assets.mjs "v$version" data/distribution installer
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: fresh-install-evidence
-          path: data/fresh-install-evidence/
-          retention-days: 14
+      - name: Archive verification evidence
+        if: always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_LABEL: fresh-install-evidence
+          EVIDENCE_JOB_STATUS: ${{ job.status }}
+          EVIDENCE_PATHS: |
+            data/fresh-install-evidence/
+        run: node scripts/archive-ci-evidence.mjs
+      - name: Record PR evidence scope
+        if: always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+        run: echo "PR verification uses workflow logs; raw evidence is not published to Releases from PR jobs." >> "$GITHUB_STEP_SUMMARY"

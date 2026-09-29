@@ -7,7 +7,7 @@ on:
     paths: ['go-core/**', 'src/**', 'config/**', 'Dockerfile*', 'docker-compose.prod.yml', '.github/workflows/go-core-deployment.yml']
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   container-smoke:
     runs-on: ubuntu-latest
@@ -34,11 +34,16 @@ jobs:
           docker compose -f go-core/compose.lab.yml ps -a > data/go-deployment/evidence/containers.txt
           docker compose -f go-core/compose.lab.yml logs --no-color > data/go-deployment/evidence/containers.log
           docker compose -f go-core/compose.lab.yml down
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: go-core-deployment-evidence
-          path: |
+      - name: Archive verification evidence
+        if: always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_LABEL: go-core-deployment-evidence
+          EVIDENCE_JOB_STATUS: ${{ job.status }}
+          EVIDENCE_PATHS: |
             data/go-deployment/evidence/
             data/go-native-deployment/
-          retention-days: 14
+        run: node scripts/archive-ci-evidence.mjs
+      - name: Record PR evidence scope
+        if: always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+        run: echo "PR verification uses workflow logs; raw evidence is not published to Releases from PR jobs." >> "$GITHUB_STEP_SUMMARY"

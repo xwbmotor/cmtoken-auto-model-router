@@ -101,9 +101,22 @@ jobs:
           fi
           # Unique run/attempt names preserve earlier evidence; no --clobber.
           gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/$asset"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: release-validation-evidence
-          path: reports/release-${{ inputs.tag }}-*.json
-          retention-days: 14
+      - name: Archive verification evidence
+        if: always() && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_LABEL: release-validation-evidence
+          EVIDENCE_JOB_STATUS: ${{ job.status }}
+          EVIDENCE_PATHS: |
+            reports/release-${{ inputs.tag }}-*.json
+          EVIDENCE_RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_REVISION: ${{ github.workflow_sha }}
+        run: |
+          [[ "$WORKFLOW_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          for tool in archive-ci-evidence.mjs publish-release-assets.mjs; do
+            git show "$WORKFLOW_REVISION:scripts/$tool" > "$RUNNER_TEMP/$tool"
+          done
+          node "$RUNNER_TEMP/archive-ci-evidence.mjs"
+      - name: Record PR evidence scope
+        if: always() && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+        run: echo "PR verification uses workflow logs; raw evidence is not published to Releases from PR jobs." >> "$GITHUB_STEP_SUMMARY"
