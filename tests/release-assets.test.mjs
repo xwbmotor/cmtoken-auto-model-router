@@ -1,8 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { publishAssets } from '../scripts/publish-release-assets.mjs';
+import { publishAssets, resolveRelease } from '../scripts/publish-release-assets.mjs';
 const file = name => ({ name, size: 123, digest: 'sha256:'+'a'.repeat(64) });
 const asset = f => ({ ...f, state: 'uploaded' });
+test('release creation waits for visibility without repeating the write',async()=>{
+ let reads=0,writes=0;const release={id:1};
+ const r=await resolveRelease(async()=>++reads>=4?[release]:[],async()=>{writes++;},async()=>{});
+ assert.equal(r.id,1);assert.equal(writes,1);
+});
+test('release creation reconciles races and rejects ambiguous or absent results',async()=>{
+ let reads=0,writes=0;
+ const r=await resolveRelease(async()=>++reads>=3?[{id:2}]:[],async()=>{writes++;throw Error('conflict');},async()=>{});
+ assert.equal(r.id,2);assert.equal(writes,1);
+ await assert.rejects(resolveRelease(async()=>[{id:1},{id:2}],null),/exactly one/);
+ let count=0;await assert.rejects(resolveRelease(async()=>[],async()=>{count++;},async()=>{}),/exactly one/);assert.equal(count,1);
+});
 function api(initial = []) {
  const state = { rows: initial, uploads: [] };
  return { state, list: async () => state.rows, digest: async a => a.digest, upload: async f => { state.uploads.push(f.name); state.rows.push(asset(f)); } };

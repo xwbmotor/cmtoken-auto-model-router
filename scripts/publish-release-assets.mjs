@@ -8,6 +8,19 @@ import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 const execute = promisify(execFile);
+export async function resolveRelease(find, create, pause = ms => new Promise(r => setTimeout(r, ms))) {
+  let rows = await find();
+  if (!rows.length && create) {
+    try { await create(); } catch { /* reconcile once, never blindly recreate */ }
+    for (const delay of [0, 200, 500, 1000, 2000, 4000]) {
+      if (delay) await pause(delay);
+      rows = await find();
+      if (rows.length) break;
+    }
+  }
+  if (rows.length !== 1) throw new Error('Expected exactly one existing release, including drafts');
+  return rows[0];
+}
 export async function sha256(path) {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(path)) hash.update(chunk);
@@ -58,15 +71,13 @@ export async function releaseApi(repo, tag, { create = false, commit } = {}) {
       all.push(...rows); if (rows.length < 100) return all;
     }
   };
-  let releases = (await paged(`repos/${repo}/releases`)).filter(r => r.tag_name === tag);
-  if (!releases.length && create) {
+  const find = async () => (await paged(`repos/${repo}/releases`)).filter(r => r.tag_name === tag);
+  const createOnce = create ? async () => {
     if (!/^[a-f0-9]{40}$/.test(commit || '')) throw new Error('Missing archive source commit');
     const flags = tag.startsWith('ci-evidence-') ? ['--prerelease','--latest=false'] : ['--verify-tag','--draft'];
-    try { await gh(['release','create',tag,'--repo',repo,'--target',commit,...flags,'--title',tag,'--notes',tag.startsWith('ci-evidence-') ? 'CI verification evidence only. Not an application release. Each attachment records its source commit and workflow run.' : 'Release verification evidence. Deployment status is recorded separately.']); } catch { /* a concurrent job may have created it */ }
-    releases = (await paged(`repos/${repo}/releases`)).filter(r => r.tag_name === tag);
-  }
-  if (releases.length !== 1) throw new Error('Expected exactly one existing release, including drafts');
-  const release = releases[0];
+    await gh(['release','create',tag,'--repo',repo,'--target',commit,...flags,'--title',tag,'--notes',tag.startsWith('ci-evidence-') ? 'CI verification evidence only. Not an application release. Each attachment records its source commit and workflow run.' : 'Release verification evidence. Deployment status is recorded separately.']);
+  } : null;
+  const release = await resolveRelease(find, createOnce);
   const list = () => paged(`repos/${repo}/releases/${release.id}/assets`);
   const digest = async asset => {
     if (asset.digest != null) {
