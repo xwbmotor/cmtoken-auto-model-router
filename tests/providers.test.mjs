@@ -214,10 +214,10 @@ test('decision log writes redacted entries, rotates and reads back', async () =>
     assert.equal(rows.length, 2);
     assert.equal(rows[0].outcome.model, 'qwen36-35b');
     assert.equal(rows[0].decision.suggestedModel, 'qwen36-35b');
-    // 脱敏：消息只保留长度和前160字符
+    // 脱敏：只保留长度，不记录正文片段。
     const message = rows[0].request.redactedBody.messages[0];
     assert.equal(message.chars, 500);
-    assert.equal(message.head.length, 160);
+    assert.equal(message.head, undefined);
     assert.ok(!JSON.stringify(rows).includes('A'.repeat(200)), '完整用户消息不得落盘');
     // maxFileBytes=1 触发轮转
     assert.ok(files.some((f) => f.includes('rotated')), '小阈值应触发轮转');

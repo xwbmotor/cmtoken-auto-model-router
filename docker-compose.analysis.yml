@@ -1,0 +1,40 @@
+# Separate from production forwarding. Supply an approved config without secrets.
+services:
+  analysis:
+    image: cmt-auto-model-router:0.14.11
+    command: ["node", "src/analysis-server.mjs"]
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 2
+    environment:
+      CONFIG_PATH: /app/config/router.json
+      ANALYSIS_ACCESS_KEY: ${ANALYSIS_ACCESS_KEY:?Set an independent analysis access key}
+      ANALYSIS_ALLOWED_MODEL_IDS: ${ANALYSIS_ALLOWED_MODEL_IDS:?Set approved model IDs}
+      ANALYSIS_HOST: 0.0.0.0
+      ANALYSIS_PORT: 8792
+      ANALYSIS_ALLOW_HISTORY: ${ANALYSIS_ALLOW_HISTORY:-false}
+      ANALYSIS_MAX_CONCURRENT: 8
+      ANALYSIS_RPM: 120
+      ANALYSIS_BURST: 30
+    ports: ["127.0.0.1:8792:8792"]
+    volumes:
+      - type: bind
+        source: ${ANALYSIS_CONFIG_PATH:?Set approved analysis config path}
+        target: /app/config/router.json
+        read_only: true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8792/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    networks: [analysis-only]
+networks:
+  analysis-only:
+    internal: true

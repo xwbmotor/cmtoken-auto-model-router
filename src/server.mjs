@@ -70,6 +70,11 @@ import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
 const host = process.env.HOST || '127.0.0.1';
 
 const port = Number(process.env.PORT || 8787);
+// The native front proxies public requests to this loopback listener. Loopback
+// therefore cannot be used as an exemption from management authentication.
+if (process.env.AMR_GO_NATIVE_FRONT === '1' && !String(process.env.ADMIN_TOKEN || '').trim()) {
+  throw new Error('Native Go front requires ADMIN_TOKEN');
+}
 const goCoreAdmin = createGoCoreAdmin();
 const nativePolicies = new Map();
 const nativeReceipts = process.env.AMR_GO_NATIVE_FRONT === '1' ? await NativeReceipts.open(resolve(projectRoot, process.env.AMR_NATIVE_RECEIPTS_DIR || (process.env.CONFIG_PATH ? join(process.env.CONFIG_PATH, '..', 'native-receipts') : './data/native-receipts'))) : null;
@@ -409,7 +414,7 @@ const ADMIN_SESSION_ABS_MS = 12 * 60 * 60 * 1000;
 const ADMIN_SESSION_COOKIE = 'amr_admin_session';
 function parseCookies(req) { const out = {}; const raw = req.headers.cookie; if (!raw) return out; for (const part of raw.split(';')) { const i = part.indexOf('='); if (i > 0) out[part.slice(0, i).trim()] = part.slice(i + 1).trim(); } return out; }
 function getAdminSession(req) { const sid = parseCookies(req)[ADMIN_SESSION_COOKIE]; if (!sid || !adminSessions.has(sid)) return null; const sess = adminSessions.get(sid); const now = Date.now(); if (now - sess.lastSeen > ADMIN_SESSION_IDLE_MS || now > sess.absExpires) { adminSessions.delete(sid); return null; } sess.lastSeen = now; return sess; }
-function authorizedAdmin(req) { if (!process.env.ADMIN_TOKEN) return true; if (safeEqual(req.headers.authorization, `Bearer ${process.env.ADMIN_TOKEN}`)) return true; return getAdminSession(req) != null; }
+function authorizedAdmin(req) { if (!String(process.env.ADMIN_TOKEN || '').trim()) return false; if (safeEqual(req.headers.authorization, `Bearer ${process.env.ADMIN_TOKEN}`)) return true; return getAdminSession(req) != null; }
 // 会话表定期清扫（防长期积累）
 setInterval(() => { const now = Date.now(); for (const [sid, sess] of adminSessions) { if (now - sess.lastSeen > ADMIN_SESSION_IDLE_MS || now > sess.absExpires) adminSessions.delete(sid); } }, 10 * 60 * 1000).unref();
 
@@ -3481,6 +3486,7 @@ const server = http.createServer(async (req, res) => {
 
   // ；其余 /admin/api/* 接受 Bearer 或会话 cookie
   if (req.method === 'POST' && url.pathname === '/admin/api/login') {
+    if (!String(process.env.ADMIN_TOKEN || '').trim()) return errorJson(res, 503, '管理接口未配置凭据', 'admin_unavailable');
     const verdict = adminAuthLimiter.check('admin-login:' + (req.socket.remoteAddress || 'unknown'));
     if (!verdict.allowed) return json(res, 429, { error: { message: '登录尝试过于频繁，请稍后再试', type: 'rate_limit_exceeded', code: 429 } }, { 'retry-after': String(Math.ceil(verdict.retryAfterMs / 1000)) });
     try { const body = await readJson(req); if (!safeEqual(`Bearer ${body.token}`, `Bearer ${process.env.ADMIN_TOKEN}`) && !(process.env.ADMIN_TOKEN && safeEqual(body.token, process.env.ADMIN_TOKEN))) return errorJson(res, 401, 'Admin Token 无效', 'authentication_error'); const sid = randomBytes(32).toString('hex'); const now = Date.now(); adminSessions.set(sid, { lastSeen: now, absExpires: now + ADMIN_SESSION_ABS_MS }); return json(res, 200, { ok: true, expiresInMs: ADMIN_SESSION_IDLE_MS }, { 'set-cookie': `${ADMIN_SESSION_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(ADMIN_SESSION_ABS_MS / 1000)}${(req.socket?.encrypted || req.headers['x-forwarded-proto'] === 'https') ? '; Secure' : ''}` }); } catch { return errorJson(res, 400, '请求体必须是 JSON', 'invalid_request_error'); }
@@ -4431,7 +4437,7 @@ function subCategoryOf(task, subTask) {
 
       const includeFullText = url.searchParams.get('fullText') === '1';
 
-      const decisions = await decisionLog.recent(count, { includeFullText: true }).catch(() => []);
+      const decisions = await decisionLog.recent(count, { includeFullText }).catch(() => []);
 
       const reviews = await semanticLog.recent(count * 2).catch(() => []);
 
@@ -4455,7 +4461,7 @@ function subCategoryOf(task, subTask) {
 
           text: (d.request?.redactedBody?.messages || []).map((m) => {
 
-            const full = includeFullText ? (m.content ?? m.head ?? '') : String(m.head ?? '').slice(0, 60);
+            const full = includeFullText ? (m.content ?? m.head ?? '') : '';
 
             return `[${m.role}] ${full}`;
 
@@ -4465,7 +4471,8 @@ function subCategoryOf(task, subTask) {
 
           // 让 Judge/标注侧能自检样本是否可用，避免拿截断文本评完整回答质量。
 
-          textTruncated: Boolean(includeFullText && (d.request?.redactedBody?.messages || []).some((m) => (m.content == null && m.head != null))),
+          textAvailable: Boolean(includeFullText && (d.request?.redactedBody?.messages || []).some((m) => typeof m.content === 'string' || typeof m.head === 'string')),
+          textTruncated: Boolean((d.request?.redactedBody?.messages || []).some((m) => m.content == null && (m.head != null || m.chars > 0))),
 
           l1: { task: d.decision?.analysis?.task, tier: d.decision?.analysis?.tier, confidence: d.decision?.analysis?.confidence },
 

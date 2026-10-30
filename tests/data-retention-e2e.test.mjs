@@ -167,6 +167,16 @@ test('e2e 数据留存全开：请求原文全量 + 非流式/流式回答原文
     // ⑤ 密钥永不落盘
     const raw = JSON.stringify(rows);
     assert.ok(!raw.includes('test-key'), '上游 key 不得出现在决策日志');
+    const headers = { authorization: 'Bearer adm' };
+    for (const path of ['/admin/api/decisions', '/admin/api/annotation-export']) {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`, { headers });
+      assert.equal(response.status, 200);
+      const hidden = await response.text();
+      assert.ok(!hidden.includes('梯度下降') && !hidden.includes('这是非流式业务回答'), '默认管理查询不泄露已采集的正文');
+      const full = await fetch(`http://127.0.0.1:${port}${path}?fullText=1`, { headers });
+      assert.equal(full.status, 200);
+      assert.ok((await full.text()).includes('梯度下降'), '显式授权导出仍能供标注与训练使用');
+    }
   } finally { await cleanupCase({ child, upstream, workDir }); }
 });
 
@@ -178,8 +188,8 @@ test('e2e 留存开关独立：redactMessages=true + logAnswerText=true → 请�
     const rows = await waitRows(workDir, (rs) => rs.length >= 1);
     const row = rows[0];
     const msg = row.request.redactedBody.messages[0];
-    assert.equal(typeof msg.content, 'undefined', 'redactMessages=true 时无 content 字段（head 截断）');
-    assert.ok(msg.head && msg.head.length <= 160, 'head 截断 160');
+    assert.equal(typeof msg.content, 'undefined', 'redactMessages=true 时无 content 字段');
+    assert.equal(msg.head, undefined, '脱敏日志不保存正文前缀');
     assert.equal(row.outcome.answerText, '这是非流式业务回答', 'logAnswerText 独立生效——回答照落');
   } finally { await cleanupCase({ child, upstream, workDir }); }
 });
@@ -194,5 +204,11 @@ test('e2e 留存关闭（默认）：无 answerText 字段、请求脱敏', asyn
     assert.equal(row.outcome.answerText, undefined, 'logAnswerText=false 时无 answerText');
     const msg = row.request.redactedBody.messages[0];
     assert.equal(typeof msg.content, 'undefined', '默认请求脱敏');
+    const response = await fetch(`http://127.0.0.1:${port}/admin/api/annotation-export?fullText=1`, { headers: { authorization: 'Bearer adm' } });
+    const exported = await response.json();
+    const annotation = exported.rows?.[0] ?? exported.data?.[0];
+    assert.ok(annotation, 'annotation row exists');
+    assert.equal(annotation.textAvailable, false, '只有元数据不能假装具有训练文本');
+    assert.equal(annotation.textTruncated, true, '缺正文必须显式标记');
   } finally { await cleanupCase({ child, upstream, workDir }); }
 });

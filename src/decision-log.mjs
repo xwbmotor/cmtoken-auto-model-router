@@ -9,10 +9,50 @@ const DEFAULTS = {
   dirPath: './data/decisions',
   maxFileBytes: 16 * 1024 * 1024,   //单文件 16MB
   maxFiles: 14,                     //最多保留 14 个轮转文件
-  redactMessages: true,             //默认脱敏：不落盘完整用户消息
+  redactMessages: true,             //默认仅存消息结构和长度，不落盘正文或正文片段
   logAnswerText: false,             //回答原文落盘开关（与 redactMessages 独立；数据留存期开）
   filePrefix: 'decisions'           //泛化事件流前缀（semantic-reviews 复用同一套轮转/串行写）
 };
+
+// Covers current and legacy request shapes (messages, body.messages,
+// redactedBody.messages) without discarding usage, routing features or labels.
+// Explicit full-text reads remain available to the authenticated export path.
+const TEXT_FIELDS = new Set(['content', 'head', 'prompt', 'text', 'completion', 'answer',
+  'reasoning_content', 'tool_calls', 'function_call', 'arguments', 'image_url', 'audio', 'file',
+  'overall_comment', 'comment', 'comments', 'rationale', 'explanation', 'issues']);
+const CREDENTIAL_FIELDS = new Set(['authorization', 'cookie', 'headers', 'apikey', 'api_key', 'password']);
+const FIXED_REASONS = new Set(['missing', 'parse_failed', 'circuit_open', 'budget', 'no_api_key',
+  'daily_calls_exhausted', 'daily_tokens_exhausted', 'insufficient_comparable_evidence',
+  'bounded_latency_advantage', 'within_switch_margin']);
+
+function withoutText(value, { requestText = false, answerText = false } = {}, path = []) {
+  if (Array.isArray(value)) return value.map(item => withoutText(item, { requestText, answerText }, path));
+  if (!value || typeof value !== 'object') return value;
+  const clean = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (CREDENTIAL_FIELDS.has(key.toLowerCase())) continue;
+    if (key === 'answerText' && !answerText) continue;
+    // Names alone are not a privacy classification: usage.prompt/completion
+    // are token counts, and boolean signals can share text-field names. Keep
+    // their typed scalar values while removing strings and content containers.
+    const structuredScalar = item === null || typeof item === 'boolean' || (typeof item === 'number' && Number.isFinite(item));
+    if (!requestText && TEXT_FIELDS.has(key) && !structuredScalar) continue;
+    if (!requestText && (key === 'reason' || key === 'reasons') && !structuredScalar &&
+      !path.includes('rejected') && !(typeof item === 'string' && FIXED_REASONS.has(item))) continue;
+    // Semantic signal labels contain classifier explanations, unlike the other
+    // rule-generated labels. Preserve the feature key/contribution only.
+    if (!requestText && key === 'label' && value.key === 'semantic_review') continue;
+    // Upstream / classifier exception strings may echo the submitted prompt or
+    // credentials. Keep the failure marker; structured status/type/scope remain.
+    if (key === 'error' && typeof item === 'string' && item) {
+      clean[key] = /^judge 上游 [1-5][0-9]{2}$/.test(item) ? item : 'details_redacted';
+      continue;
+    }
+    if (key === 'message' && typeof item === 'string') continue;
+    clean[key] = withoutText(item, { requestText, answerText }, [...path, key]);
+  }
+  return clean;
+}
 
 export class DecisionLog {
   constructor(options = {}) {
@@ -95,13 +135,13 @@ export class DecisionLog {
     }
     const messages = (body?.messages || []).map((message, index) => {
       const content = typeof message?.content === 'string' ? message.content : '[non-text]';
-      return { index, role: message?.role, chars: content.length, head: content.slice(0, 160) };
+      return { index, role: message?.role, chars: content.length };
     });
     return { model: body?.model, stream: Boolean(body?.stream), max_tokens: body?.max_tokens, messages };
   }
 
   entry(requestContext, decision, outcome) {
-    return {
+    return withoutText({
       at: new Date().toISOString(),
       v: 2,
       request: requestContext,
@@ -142,7 +182,7 @@ export class DecisionLog {
         configVersion: decision.configVersion
       },
       outcome
-    };
+    }, { requestText: !this.options.redactMessages, answerText: this.options.logAnswerText });
     //注意：request 里已按 redact 规则脱敏；outcome 由调用方在响应完成后补充（含 usage/actualCostYuan 飞轮字段）
   }
 
@@ -158,7 +198,8 @@ export class DecisionLog {
   //服务重启不再丢观察期数据。事件体由调用方组装（fire-and-forget，失败静默计数）。
   writeRaw(event) {
     if (!this.options.enabled) return;
-    this.writeChain = this.writeChain.then(() => this.append(event)).catch(() => { this.errors += 1; });
+    const record = withoutText(event, { requestText: !this.options.redactMessages, answerText: this.options.logAnswerText });
+    this.writeChain = this.writeChain.then(() => this.append(record)).catch(() => { this.errors += 1; });
     return this.writeChain;
   }
 
@@ -237,11 +278,8 @@ export class DecisionLog {
         } catch { /* 跳过坏行 */ }
       }
     }
-    if (!includeFullText) {
-      for (const row of rows) {
-        if (row.request?.messages) row.request.messages = row.request.messages.map((m) => ({ ...m, head: undefined }));
-      }
-    }
-    return rows;
+    // Full-text export authorizes prompt/answer samples, never historical
+    // credentials or free-form exception payloads.
+    return rows.map(row => withoutText(row, { requestText: includeFullText, answerText: includeFullText }));
   }
 }

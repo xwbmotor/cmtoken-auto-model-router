@@ -57,6 +57,8 @@ jobs:
           if grep -q 'image: cmt-amr-go:' docker-compose.prod.yml; then
             docker build --build-arg "GIT_REVISION=$revision" -t "cmt-amr-go:$version" go-core
           fi
+      - name: Verify isolated analysis without network or writable storage
+        run: node scripts/check-analysis-container.mjs
       - name: Run formal release checks
         run: npm run test:release
       - name: Package verified images

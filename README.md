@@ -24,7 +24,7 @@ sudo bash install.sh check --root /opt/amr
 
 ## 服务组成
 
-当前发布为 v0.14.9，新增结果耐久回传和评测任务恢复，见 [生产验收](docs/go-core-production-v0.14.9.md)。
+当前源码版本为 v0.14.11，新增[独立分析服务](docs/analysis-service.md)和日志、管理鉴权修复。[工程配合与数据飞轮清单](docs/security-analysis-integration.md)说明接入条件和需要保留的训练数据。部署验收与源码版本分开记录；既有[生产验收记录](docs/go-core-production-v0.14.9.md)保留供查阅。
 
 | 服务 | 负责什么 |
 |---|---|
