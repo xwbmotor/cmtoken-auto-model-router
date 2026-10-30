@@ -26,7 +26,9 @@ jobs:
       - name: Build and test isolated containers
         run: bash go-core/deployment/smoke.sh
       - name: Exercise native Compose cutover and rollback with synthetic services
-        run: sudo -E python3 go-core/deployment/native_smoke.py
+        # Some hosted sudo policies ignore -E. Pass only the two identity values
+        # required by the disposable-runner guard; keep the guard unchanged.
+        run: sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" GITHUB_SHA="$GITHUB_SHA" python3 go-core/deployment/native_smoke.py
       - name: Capture container state and logs
         if: always()
         run: |
