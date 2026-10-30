@@ -3,6 +3,12 @@ import assert from 'node:assert/strict';
 import { publishAssets, resolveRelease } from '../scripts/publish-release-assets.mjs';
 const file = name => ({ name, size: 123, digest: 'sha256:'+'a'.repeat(64) });
 const asset = f => ({ ...f, state: 'uploaded' });
+
+test('externally created release may become visible after the first list response', async () => {
+ let reads=0;
+ const release=await resolveRelease(async()=>++reads>=3?[{id:7}]:[],null,async()=>{});
+ assert.equal(release.id,7);
+});
 test('release creation waits for visibility without repeating the write',async()=>{
  let reads=0,writes=0;const release={id:1};
  const r=await resolveRelease(async()=>++reads>=4?[release]:[],async()=>{writes++;},async()=>{});

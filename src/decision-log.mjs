@@ -1,4 +1,5 @@
 import { open } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 //决策日志：把每次路由决策追加写入 JSONL 文件，用于标注集采集与离线分析。
 //设计约束：绝不阻塞请求路径（fire-and-forget + 失败静默计数）；文件按大小轮转。
 import { appendFile, mkdir, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
@@ -97,8 +98,12 @@ export class DecisionLog {
   async rotate() {
     const dir = resolve(this.projectRoot, this.options.dirPath);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    // Millisecond timestamps alone collide during fast rotations: POSIX rename
+    // then silently replaces the earlier file. Monotonic time orders rotations
+    // within the same millisecond; UUID also prevents collisions across restarts.
+    const unique = `${process.hrtime.bigint().toString().padStart(24, '0')}-${randomUUID()}`;
     //filePrefix 泛化后轮转名直接复用当前文件 basename（前缀各异，不再硬编码 decisions-）
-    const rotated = resolve(dir, this.currentFile.replace(/\.jsonl$/, `-${stamp}.rotated.jsonl`));
+    const rotated = resolve(dir, this.currentFile.replace(/\.jsonl$/, `-${stamp}-${unique}.rotated.jsonl`));
     try {
       //轮转 = 把当前文件改名；下一条日志会自动写到当天新文件
       await mkdir(dir, { recursive: true });

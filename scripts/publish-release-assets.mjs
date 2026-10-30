@@ -10,8 +10,8 @@ import { pathToFileURL } from 'node:url';
 const execute = promisify(execFile);
 export async function resolveRelease(find, create, pause = ms => new Promise(r => setTimeout(r, ms))) {
   let rows = await find();
-  if (!rows.length && create) {
-    try { await create(); } catch { /* reconcile once, never blindly recreate */ }
+  if (!rows.length) {
+    if (create) try { await create(); } catch { /* reconcile once, never blindly recreate */ }
     for (const delay of [0, 200, 500, 1000, 2000, 4000]) {
       if (delay) await pause(delay);
       rows = await find();

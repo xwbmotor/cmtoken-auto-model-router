@@ -54,6 +54,32 @@ const trainingDecision = {
   fallbackOrder: ['model-a', 'model-b'], configVersion: 'test', policyRevision: 'revision-a'
 };
 
+test('同一毫秒连续轮转及日志实例重启不覆盖历史，读取和保留顺序不变', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-30T12:00:00.123Z') });
+  const dir = await mkdtemp(join(tmpdir(), 'amr-dlog-rotation-'));
+  try {
+    const options = { enabled: true, dirPath: dir, maxFileBytes: 1, maxFiles: 20 };
+    const first = new DecisionLog(options);
+    for (let i = 0; i < 4; i++) {
+      await first.write({ requestId: `rotation-${i}` }, trainingDecision, { ok: true });
+    }
+    const restarted = new DecisionLog(options);
+    for (let i = 4; i < 8; i++) {
+      await restarted.write({ requestId: `rotation-${i}` }, trainingDecision, { ok: true });
+    }
+    const files = (await readdir(dir)).filter(name => name.endsWith('.rotated.jsonl'));
+    assert.equal(files.length, 8, '同毫秒八次轮转必须保存八个独立文件');
+    assert.ok(files.every(name => name.startsWith('decisions-2026-10-30-2026-10-30T12-00-00-123Z-')));
+    assert.equal(first.errors + restarted.errors, 0);
+    const expected = Array.from({ length: 8 }, (_, i) => `rotation-${7 - i}`);
+    assert.deepEqual((await restarted.recent(20)).map(row => row.request.requestId), expected);
+    restarted.options.maxFiles = 3;
+    await restarted.prune(dir);
+    assert.deepEqual((await restarted.recent(20)).map(row => row.request.requestId), expected.slice(0, 3),
+      '保留策略应删除最早轮转文件，不能按UUID随机顺序删除');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('默认日志在磁盘去掉正文、前缀、回答及自由错误信息，保留飞轮特征与结果', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'amr-dlog-private-'));
   try {

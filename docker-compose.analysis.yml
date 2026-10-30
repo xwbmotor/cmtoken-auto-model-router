@@ -1,7 +1,7 @@
 # Separate from production forwarding. Supply an approved config without secrets.
 services:
   analysis:
-    image: cmt-auto-model-router:0.14.11
+    image: cmt-auto-model-router:0.14.12
     command: ["node", "src/analysis-server.mjs"]
     user: "1000:1000"
     read_only: true
